@@ -5,7 +5,7 @@
 | 文档状态 | 草案 |
 | 日期 | 2026-10-18 |
 | 项目名 | **ModalPrism**，仓库 `MistLoom/ModalPrism`；资源系统名 **Strata** |
-| 实现 | Rust + LeafEX，数据面为 LanceDB Rust SDK，见第 12 节 |
+| 实现 | Rust + LEAF，数据面为 LanceDB Rust SDK，见第 12 节 |
 | 背景材料 | `collector-design-analysis.md`（六层模型与参考架构） |
 
 ---
@@ -1349,7 +1349,7 @@ config/
 4. **在途任务**：已派发的任务继续使用派发时的快照（任务携带 `generation`）；新任务使用新快照。
 5. **变更分级**：
    - 可热更新：信源增删改、适配器 spec、节奏、准入规则、限速参数、信源和适配器作用域的策略（含预设切换）；
-   - 需要重启组件：Strata 连接、控制存储后端、暂存区目录、Lance 表创建参数、访问器实现标识、浏览器内核二进制版本。这些值构成 LeafEX Expose 的实例集合与绑定期配置（12.6），变更后需要重新 bootstrap。
+   - 需要重启组件：Strata 连接、控制存储后端、暂存区目录、Lance 表创建参数、访问器实现标识、浏览器内核二进制版本。这些值构成 LEAF Expose 的实例集合与绑定期配置（12.6），变更后需要重新 bootstrap。
 
    需要重启的变更在切换时只记录并提示，不生效。系统作用域的策略（例如 `versions.snapshot_retain`、`commit.*`）在下一次维护或刷写周期生效。
 6. **副作用**：配置哈希变化时，相关信源的条件请求验证器失效；适配器配置哈希或浏览器内核版本变化时，按 `policy.reprocess.on_adapter_change` 触发重新加工。
@@ -1616,8 +1616,8 @@ sequenceDiagram
 
 | 层 | 选型 | 说明 |
 |---|---|---|
-| 语言 | Rust（edition 2024） | 与 LeafEX 工作区一致 [C1] |
-| 能力运行时 | LeafEX | 各模块实现为 Ability，经同一个 Gateway 调用，按声明投影到 CLI、HTTP、MCP、gRPC、LLM tools、Skill 和进程内 Fun [C1][C5] |
+| 语言 | Rust（edition 2024） | 与 LEAF 工作区一致 [C1] |
+| 能力运行时 | LEAF | 各模块实现为 Ability，经同一个 Gateway 调用，按声明投影到 CLI、HTTP、MCP、gRPC、LLM tools、Skill 和进程内 Fun [C1][C5] |
 | 数据面 | `lancedb` 0.40.0，`lance` 13.0.0 | LanceDB Rust SDK；`lancedb` 0.40.0 固定依赖 `lance` =13.0.0，Strata 直接依赖同一版本的 `lance` 以使用 Blob v2 的建列与写入接口 [A20][A21] |
 | 列式数据 | `arrow-array` / `arrow-schema` 58 | 与 `lancedb` 0.40.0 的依赖版本一致 [A20] |
 | 异步运行时 | tokio | `lancedb` 依赖 tokio；应用的循环、监听和定时也使用 tokio |
@@ -1626,15 +1626,15 @@ sequenceDiagram
 | 浏览器 | moli 二进制（CLI / `moli serve`），Chromium（CDP） | 以子进程或 CDP 连接接入，见 6.5 |
 | 共享字节 | `bytes::Bytes` | 进程内零拷贝传递部件与区间 |
 
-依赖版本在 `Cargo.lock` 中锁定；LeafEX 按 git 提交固定。
+依赖版本在 `Cargo.lock` 中锁定。LEAF 的 git 提交写在 `docs/specs/leaf-integration.md`。
 
 ### 12.2 工程布局
 
-工程是一个 Cargo workspace，沿用 LeafEX 的 `ability/` 与 `apps/` 布局 [C2][C4]。领域逻辑放在不依赖 LeafEX 的库 crate 中，Ability crate 只负责参数解析、调用库和返回结果。
+工程是独立仓库中的 Cargo workspace，目录沿用 LEAF 的 `ability/` 与 `apps/` 布局 [C2][C4]。领域库不依赖 LEAF。Ability crate 只依赖 `ability-sdk`，负责参数解析、调用领域库和返回结果。集成要求见 `docs/specs/leaf-integration.md`。
 
 ```text
 modalprism/
-├── crates/                         # 领域库，不依赖 LeafEX
+├── crates/                         # 领域库，不依赖 LEAF
 │   ├── strata-model/               # RID、FacetRef、SpanRef、ChangeSet、Query、AccessTask 等类型
 │   ├── strata-store/               # LanceDB 表、控制存储、暂存区、Committer 逻辑
 │   ├── strata-client/              # Strata / StrataReader / TaskQueue trait 的进程内实现
@@ -1658,7 +1658,7 @@ modalprism/
     └── modalprism-agent/               # 面向 Agent 的只读表面
 ```
 
-每个 Ability 目录遵循 LeafEX 的包布局：`ability.yml`、`build.rs`、`src/logic/`（业务）、`src/generated/`（codegen 产出），以及按协议的 `cli/`、`mcp/`、`tools/`、`grpc/`、`skill/` 目录下的 `info.yml` [C4]。
+每个 Ability 目录遵循 LEAF 的包布局：`ability.yml`、`build.rs`、`src/logic/`（业务）、`src/generated/`（codegen 产出），以及按协议的 `cli/`、`mcp/`、`tools/`、`grpc/`、`skill/` 目录下的 `info.yml` [C4]。
 
 ### 12.3 模块到 Ability 的映射
 
@@ -1695,7 +1695,8 @@ modalprism/
    按任务动态选择的访问器和适配器经 `ctx.call` 以实例 id 调用 [C1][C4]。Ability 只依赖对方的 client 契约，不依赖对方 Provider。
 5. **只读与写入分离**。Expose 以实例为单位决定加载与可见性，不裁剪方法 [C3]，因此读、写、控制面拆成不同的 Ability（`strata_read` / `strata_write` / `strata_queue`，`config_inspect` / `config`），对外表面只加载只读实例。
 6. **单写者**。`committer` 只在一个进程中加载，并持有控制存储中的 Committer 租约（5.7）。
-7. **循环由应用驱动**。LeafEX 手册未描述定时或后台任务机制。Planner 节拍、Runner 工作者、Committer 刷写和维护、健康评估、配置监听都是应用代码中的 tokio 任务，按节拍经 Gateway 调用对应方法（12.6）。
+7. **循环由组合根持有**。LEAF 不提供定时或后台任务。Planner 节拍、Runner 工作者、Committer 刷写和维护、健康评估、配置监听是组合根进程中的任务，按节拍经 Gateway 调用对应方法（12.6）。Ability 的 `on_lifecycle(Started)` 返回后，实例才进入 Ready。
+8. **本仓库 Ability 的链接**。`WorkspaceCatalog::discover` 与编译期注册表只覆盖 LEAF 仓库内的能力。本仓库的 Provider 由组合根 install 后再 load。`stateful: true` 的 Ability 在一个进程内只有一个实例。端口可见性、二进制传递和事件语义见 `docs/specs/leaf-integration.md`。
 
 `strata_read` 的声明示例：
 
@@ -1737,13 +1738,14 @@ methods:
 
 ### 12.4 字节数据的传递
 
-Gateway 的调用信封是 `instance + method + args`，`args` 是 JSON 值 [C1][C5]。二进制数据不经 Gateway 传递：
+Gateway 的调用信封是 `instance + method + args`。`args` 与返回值都是 JSON 值 [C1][C5]。该路径没有二进制参数，也没有流式返回值。二进制数据不经 Gateway 传递：
 
 1. **暂存区**。访问器把部件字节写入 Strata 的暂存区（`strata.staging.dir`），以 `sha256` 内容寻址；信封、适配器输入和变更集只携带 `PartRef { sha256, size }` 与 `SpanRef`。
 2. **读取**。Ability 通过 `crates/strata-client` 按引用读取，返回 `bytes::Bytes`，同一进程内不复制。
 3. **提交**。`PutFacet` 的二进制 body 为 `Body::Staged(PartRef)`；Committer 刷写时把被引用的部件写入 `blobs.data`，`policy.raw.store` 未要求保存的部件在任务结束后删除。
 4. **生命周期**。暂存文件在引用它的变更集可见之后才可删除，保证 outbox 重放时字节仍然存在；无引用文件按 `strata.staging.ttl` 清理。
 5. **文本**。md、text、html、struct 等文本 facet 内容作为 JSON 字段随 `apply` 传递；超过 `strata.inline_text_max` 时同样转入暂存区。
+6. **对外订阅**。已可见变更通过 `strata_read.changes` 按快照序号读取。数据面变更不进入 LEAF 的 EventBus。
 
 ### 12.5 LanceDB Rust SDK
 
@@ -1765,19 +1767,20 @@ Gateway 的调用信封是 `instance + method + args`，`args` 是 JSON 值 [C1]
 **`apps/modalprism-collector`**（采集运行时）：
 
 1. 读取 `config/system.yaml`，生成 Expose：`unknown: deny`，只启用配置中引用到的实现对应的实例，`abilities.<id>.config` 填入绑定期配置。
-2. `WorkspaceCatalog::discover()` 得到工作区清单，`AppBuilder::new().catalog(catalog).expose(expose).bootstrap().await?` 得到 `AppHandle { gateway, host, expose, catalog }` [C3][C5]。
+2. `AppBuilder::new().app("modalprism").catalog(WorkspaceCatalog::discover()).expose(expose).bootstrap().await` 得到 `AppHandle { gateway, host, expose, catalog }` [C3][C5]。`discover` 只含 LEAF 仓库内的能力。本仓库 Ability 的 install 与 load 见 `docs/specs/leaf-integration.md`。
 3. 启动 tokio 任务：Planner 节拍（每 30 秒 `planner.tick`）、每个队列按并发数运行 Runner 工作者（`strata_queue.lease` → `runner.run_task`）、Committer 循环（按 `policy.commit` 调用 `committer.flush`，空闲时 `committer.maintain`）、健康评估、配置目录监听（`config.load`）。
-4. 启动网络监听：出站网关的正向代理入口（`crates/egress`）和 push 接收端点（`crates/accessors`）。
-5. 打开 CLI Port 与 HTTP Port，作为运维入口。
+4. 启动网络监听：出站网关的正向代理入口（`crates/egress`）和 push 接收端点（`crates/accessors`）。push 不使用 HTTP Port 的 invoke 路由。
+5. 打开 CLI Port 与 HTTP Port，作为运维入口。端口实现没有 TLS 与鉴权。一个 Host 只有一个 `access_gate`，不能同时按多个协议过滤；每个端口只暴露已登记该协议的实例。
 
 ```rust
 let sys = config::load_system("config/system.yaml")?;
 let expose = AbilityExpose::from_value(&collector_expose(&sys))?;   // unknown: deny
 let app = AppBuilder::new()
+    .app("modalprism")
     .catalog(WorkspaceCatalog::discover())
     .expose(expose)
     .bootstrap()
-    .await?;
+    .await;
 
 // Planner 节拍：应用代码中的 tokio 任务，经 Gateway 调用
 let gw = app.gateway.clone();
@@ -1828,10 +1831,10 @@ abilities:
 
 ### 12.7 约束
 
-1. LeafEX 处于早期预览，API 与布局可能变化；`external/` 是实验性的仓外编写面 [C1]。工程按 LeafEX 工作区布局组织，并固定 LeafEX 的 git 提交。
-2. 遵循 LeafEX 的架构约束：Port 只依赖 Gateway；Ability 不按调用来自 MCP、CLI 或 LLM tools 分支；协议身份只出现在声明与 Port 中 [C2]。
+1. LEAF 处于早期预览，API 与布局可能变化；`external/` 是实验性的仓外编写面 [C1]。Ability crate 只依赖 `ability-sdk`。接入的 git 提交写在 `docs/specs/leaf-integration.md`。
+2. 遵循 LEAF 的架构约束：Port 只依赖 Gateway；Ability 不按调用来自 MCP、CLI 或 LLM tools 分支；协议身份只出现在声明与 Port 中 [C2]。
 3. Expose 只裁剪 Port → Gateway，`ctx.call` 不受 Expose 限制 [C2][C3]。对外表面的最小暴露依靠"只加载只读实例"实现。
-4. 业务逻辑放在 Ability 与库 crate 中，不修改 LeafEX 引擎；扩展通过新增 Ability 或 Port 完成 [C1]。
+4. 业务逻辑放在 Ability 与库 crate 中，不修改 LEAF 引擎；扩展通过新增 Ability 或 Port 完成 [C1]。
 
 ---
 
@@ -1849,11 +1852,8 @@ abilities:
 8. **中文全文检索**。`jieba/*` 分词器需要模型文件 [A13]，需要确认部署方式，以及与 `icu`、`ngram` 在召回和索引体积上的取舍。
 9. **配置约束语言**。本文以 JSON Schema 为主、CUE 为可选，是否统一采用 CUE 需要决定。
 10. **多租户与权限**。本文没有涉及多租户隔离和读写权限模型，如有需要，应在 Strata API 层增加命名空间级授权。
-11. **LeafEX 的工程接入方式**。LeafEX 手册描述的是在其工作区内编写 Ability 和应用，仓外编写面 `external/` 为实验性 [C1][C2]。ModalPrism 以独立仓库（`MistLoom/ModalPrism`）依赖 LeafEX，还是在 LeafEX 工作区布局内开发，需要与 LeafEX 的演进一起确定。
-12. **Gateway 的流式与二进制载荷**。手册未描述经 Gateway 返回流式结果或传递二进制参数的方式。本文以暂存区引用传递字节（12.4），以 `strata_read.changes` 轮询代替对外的 changefeed 推送；LeafEX 提供相应机制后再评估是否改用。
-13. **LeafEX 实例热装载**。README 说明实例可热装载 [C1]，手册未给出接口。本文的配置热加载（10.7）不依赖实例热装载，Expose 相关的变更按重启处理。
-14. **Port 的监听与鉴权**。HTTP、gRPC、MCP Port 的监听地址、TLS 和鉴权配置方式手册未说明，运维入口与 Agent 入口的访问控制需要确定。
-15. **push 接收端点**。push 访问器使用自有 HTTP 监听（12.6）。是否改由 LeafEX HTTP Port 承载 webhook（路由、来源 token 鉴权、原始请求体）取决于 HTTP Port 的能力，需要确认。
+11. **组合根对内核 crate 的直接依赖**。链接本仓库 Ability 时，现有 API 使用 `frame-core` 的 `AbilityExpose`、`AccessKind`、`InvokeRequest`，以及 `ability-core` 的 `AbilityHost` 与 `AbilityGrant`。架构约束禁止外部包依赖 `frame-core`、port 和 `ability-core`。该约束是否覆盖组合根，见 `docs/specs/leaf-integration.md`。决定之前，组合根不添加这些依赖。
+12. **端口访问控制**。HTTP、gRPC、MCP 端口接受调用方传入的监听地址，实现中没有 TLS 与鉴权。监听地址以外的访问控制需要规定。决定之前，不在端口上增加鉴权协议。
 
 ---
 
@@ -1895,12 +1895,12 @@ abilities:
 | B2 | 抓取使用说明（输出形态、就绪判定、布局与资源） | https://github.com/lexmount/moli/blob/main/skills/moli-webfetch/SKILL.md |
 | B3 | 抓取配方（网络追踪、会话、代理、私网阻断、Web Bot Auth） | https://github.com/lexmount/moli/blob/main/skills/moli-webfetch/references/fetch-recipes.md |
 
-## 附录 C　LeafEX 资料
+## 附录 C　LEAF 资料
 
 | 编号 | 主题 | 链接 |
 |---|---|---|
-| C1 | README：定位、功能、仓库结构、状态（早期预览、`external/` 实验性、多语言 Ability 规划） | https://github.com/MistLoom/LeafEX/blob/main/README.zh-CN.md |
-| C2 | 架构概览：Gateway、分层、约束 | https://github.com/MistLoom/LeafEX/blob/main/manual/architecture.zh-CN.md |
-| C3 | 清单、协议与 Expose：`WorkspaceCatalog`、`sources_by_protocol`、`AbilityExpose`、`AppBuilder` | https://github.com/MistLoom/LeafEX/blob/main/manual/catalog-and-expose.zh-CN.md |
-| C4 | 编写 Ability：包布局、Handler 与 Factory、`ability.yml`、跨能力调用、对外表面 | https://github.com/MistLoom/LeafEX/blob/main/manual/writing-abilities.zh-CN.md |
-| C5 | 快速开始：装配 Gateway、`AppHandle`、参考运行时 | https://github.com/MistLoom/LeafEX/blob/main/manual/getting-started.zh-CN.md |
+| C1 | README：定位、功能、仓库结构、状态（早期预览、`external/` 实验性、多语言 Ability 规划） | https://github.com/MistLoom/LEAF/blob/main/README.zh-CN.md |
+| C2 | 架构概览：Gateway、分层、约束 | https://github.com/MistLoom/LEAF/blob/main/manual/architecture.zh-CN.md |
+| C3 | 清单、协议与 Expose：`WorkspaceCatalog`、`sources_by_protocol`、`AbilityExpose`、`AppBuilder` | https://github.com/MistLoom/LEAF/blob/main/manual/catalog-and-expose.zh-CN.md |
+| C4 | 编写 Ability：包布局、Handler 与 Factory、`ability.yml`、跨能力调用、对外表面 | https://github.com/MistLoom/LEAF/blob/main/manual/writing-abilities.zh-CN.md |
+| C5 | 快速开始：装配 Gateway、`AppHandle`、参考运行时 | https://github.com/MistLoom/LEAF/blob/main/manual/getting-started.zh-CN.md |
