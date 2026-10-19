@@ -1,0 +1,23 @@
+[package]
+name = "strata-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "ModalPrism 领域契约：标识、变更集、查询、原始信封与访问任务"
+publish = false
+
+[dependencies]
+humantime-serde.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
