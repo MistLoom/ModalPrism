@@ -1,0 +1,22 @@
+[package]
+name = "accessors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "ModalPrism 访问器契约：信封、端口与请求"
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-model = { path = "../strata-model" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

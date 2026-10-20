@@ -54,7 +54,7 @@
 
 **目标**　访问产出原始信封，适配器只返回结构化输出，写入一律变成变更集。
 
-**范围**　`crates/accessors` 与 `crates/adapters` 中的契约、路由和纯计算适配器（识别、Feed、列表、正文、链接）。出站与付费以端口被调用，限速、熔断和预算的实现不在本阶段。
+**范围**　`crates/accessors` 与 `crates/adapters` 中的契约、路由和纯计算适配器（识别、Feed、列表、正文、链接）。出站与付费以端口被调用，限速、熔断和预算的实现不在本阶段。规则见 `docs/specs/access-adapters.md`。
 
 **交付**　Accessor、SearchAdapter、ContentAdapter、Detector 契约；路由 DAG；针对夹具信封的适配器测试。
 
