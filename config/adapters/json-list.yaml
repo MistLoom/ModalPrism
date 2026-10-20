@@ -1,0 +1,17 @@
+id: adapter/json-list
+kind: adapter
+name: JSON 列表
+implementation: builtin:json-list
+role: search
+consumes:
+  - {kind: raw, media_type: application/json}
+  - {kind: raw, media_type: text/plain}
+produces: [discovery]
+limits:
+  timeout: 30s
+  concurrency: 1
+  retry:
+    attempts: 0
+    backoff: exponential
+    base: 1s
+    max: 30s

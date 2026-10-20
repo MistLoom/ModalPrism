@@ -1,0 +1,15 @@
+id: accessor/search
+kind: accessor
+name: search
+implementation: builtin:search
+limits:
+  timeout: 45s
+  concurrency: 4
+  retry:
+    attempts: 2
+    backoff: exponential
+    base: 1s
+    max: 30s
+
+egress:
+  profile: direct

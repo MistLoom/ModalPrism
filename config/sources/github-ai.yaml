@@ -1,0 +1,18 @@
+id: source/github-ai
+kind: source
+name: "GitHub Blog · AI & ML"
+labels:
+  tier: T1
+  topic: "官方"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://github.blog/ai-and-ml/feed/
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 2h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

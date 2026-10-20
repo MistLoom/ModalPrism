@@ -1,0 +1,16 @@
+id: adapter/feed-items
+kind: adapter
+name: Feed 条目
+implementation: builtin:feed-items
+role: search
+consumes:
+  - {kind: raw, part_role: document}
+produces: [discovery]
+limits:
+  timeout: 30s
+  concurrency: 1
+  retry:
+    attempts: 0
+    backoff: exponential
+    base: 1s
+    max: 30s

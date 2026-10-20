@@ -1,0 +1,19 @@
+id: accessor/paid-api
+kind: accessor
+name: paid-api
+implementation: builtin:paid-api
+limits:
+  timeout: 60s
+  concurrency: 4
+  retry:
+    attempts: 2
+    backoff: exponential
+    base: 1s
+    max: 30s
+
+egress:
+  profile: direct
+
+paid:
+  service: operator
+  budget: operator

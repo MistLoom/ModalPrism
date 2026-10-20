@@ -1,0 +1,18 @@
+id: source/mistral
+kind: source
+name: "Mistral AI"
+labels:
+  tier: T1
+  topic: "官方"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://mistral.ai/news/rss
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 2h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

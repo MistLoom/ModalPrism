@@ -1,0 +1,15 @@
+id: accessor/push
+kind: accessor
+name: push
+implementation: builtin:push
+limits:
+  timeout: 30s
+  concurrency: 4
+  retry:
+    attempts: 2
+    backoff: exponential
+    base: 1s
+    max: 30s
+
+egress:
+  profile: direct

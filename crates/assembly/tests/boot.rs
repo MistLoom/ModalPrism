@@ -7,6 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
 use assembly::{Binds, Services};
 use config::builtin_presets;
 use serde_json::json;
@@ -426,6 +429,54 @@ async fn run_slow(
         .await
         .unwrap();
     (elapsed, stored.is_some(), hits.load(Ordering::SeqCst))
+}
+
+#[tokio::test]
+async fn push_stores_items_that_can_be_read_back() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    write(
+        config.path(),
+        "accessors/push.yaml",
+        "id: accessor/push\nkind: accessor\nname: Push\nimplementation: builtin:push\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: fixed\n    base: 1s\n    max: 1s\negress:\n  profile: direct\n",
+    );
+    write(
+        config.path(),
+        "adapters/json-list.yaml",
+        "id: adapter/json-list\nkind: adapter\nname: JSON\nimplementation: builtin:json-list\nrole: search\nconsumes:\n  - {kind: raw, media_type: application/json}\nproduces: [discovery]\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: fixed\n    base: 1s\n    max: 1s\n",
+    );
+    write(
+        config.path(),
+        "sources/inbound.yaml",
+        "id: source/inbound-items\nkind: source\nname: Inbound\naccess:\n  accessor: accessor/push\n  locator:\n    channel: items\n  spec:\n    token: local-inbound-token\npipeline:\n  - run: [adapter/json-list]\n    spec:\n      adapter/json-list:\n        items: /items\n        url: url\n        title: title\nschedule:\n  interval: 1h\nadmission: {}\n",
+    );
+    let services = Services::open(data.path(), config.path(), binds())
+        .await
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let background = Arc::clone(&services);
+    tokio::spawn(async move {
+        assembly::serve_push(background, listener).await;
+    });
+    let body = r#"{"items":[{"title":"推送标题","url":"https://example.com/pushed"}]}"#;
+    let request = format!(
+        "POST /items HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer local-inbound-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    let text = String::from_utf8_lossy(&response);
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    let resolved = services
+        .strata()
+        .resolve("url:https://example.com/pushed")
+        .await
+        .unwrap();
+    assert!(resolved.is_some(), "{text}");
 }
 
 #[tokio::test]

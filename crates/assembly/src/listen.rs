@@ -88,7 +88,7 @@ async fn handle_push(services: Arc<Services>, mut socket: TcpStream) -> std::io:
         body.extend_from_slice(&rest);
     }
     let snapshot = services.config().applied();
-    let Some((spec, policy)) = push_source(&snapshot, &channel) else {
+    let Some((source_id, spec, policy)) = push_source(&snapshot, &channel) else {
         write_response(&mut socket, 404, &json!({"message": "not-found"})).await?;
         return Ok(());
     };
@@ -108,7 +108,12 @@ async fn handle_push(services: Arc<Services>, mut socket: TcpStream) -> std::io:
         )
         .await
     {
-        Ok(_) => write_response(&mut socket, 200, &json!({})).await?,
+        Ok(envelopes) => match services.commit_inbound(&source_id, &envelopes).await {
+            Ok(()) => write_response(&mut socket, 200, &json!({})).await?,
+            Err(error) => {
+                write_response(&mut socket, 500, &json!({"message": error.to_string()})).await?;
+            }
+        },
         Err(error) => {
             let status = match error.message.as_str() {
                 "unauthorized" => 401,
@@ -138,8 +143,8 @@ fn channel_of(target: &str) -> Option<String> {
     Some(channel.to_string())
 }
 
-fn push_source(snapshot: &config::Snapshot, channel: &str) -> Option<(Value, Value)> {
-    for module in snapshot.modules.values() {
+fn push_source(snapshot: &config::Snapshot, channel: &str) -> Option<(String, Value, Value)> {
+    for (id, module) in &snapshot.modules {
         if module.get("kind").and_then(Value::as_str) != Some("source") {
             continue;
         }
@@ -164,7 +169,7 @@ fn push_source(snapshot: &config::Snapshot, channel: &str) -> Option<(Value, Val
             .cloned()
             .unwrap_or_else(|| Value::Object(Default::default()));
         let policy = config::overlay_system_policy(&snapshot.system, &module_policy);
-        return Some((spec, policy));
+        return Some((id.clone(), spec, policy));
     }
     None
 }

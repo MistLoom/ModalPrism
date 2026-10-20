@@ -51,11 +51,7 @@ fn one_plan(snapshot: &Snapshot, id: &str, module: &Value) -> Option<SourcePlan>
         None => None,
         Some(value) => Some(duration_at(Some(value), Duration::ZERO)?),
     };
-    let spec = module
-        .pointer("/access/spec")
-        .filter(|value| value.is_object())
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Default::default()));
+    let spec = access_spec(accessor_module, module);
     let bytes = serde_json::to_vec(module).ok()?;
     Some(SourcePlan {
         source_id,
@@ -87,6 +83,19 @@ fn one_plan(snapshot: &Snapshot, id: &str, module: &Value) -> Option<SourcePlan>
         yield_drop_ratio: YIELD_DROP_RATIO,
         failure_threshold: FAILURE_THRESHOLD,
     })
+}
+
+fn access_spec(accessor_module: &Value, source: &Value) -> Value {
+    let mut base = match accessor_module.get("spec") {
+        Some(Value::Object(map)) => map.clone(),
+        _ => Default::default(),
+    };
+    if let Some(Value::Object(overlay)) = source.pointer("/access/spec") {
+        for (key, value) in overlay {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(base)
 }
 
 fn locator_of(value: &Value) -> Option<Locator> {

@@ -40,11 +40,7 @@ impl Detector for CountDetector {
         self.inner.detect(view, declared).await
     }
 
-    async fn regions(
-        &self,
-        view: &ReadonlyView,
-        wanted: &[String],
-    ) -> Vec<adapters::RegionHit> {
+    async fn regions(&self, view: &ReadonlyView, wanted: &[String]) -> Vec<adapters::RegionHit> {
         self.inner.regions(view, wanted).await
     }
 }

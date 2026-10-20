@@ -181,6 +181,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "config",
  "quick-xml 0.37.5",
  "scraper",
  "serde",

@@ -1,0 +1,18 @@
+id: source/hugging-face
+kind: source
+name: "Hugging Face Blog"
+labels:
+  tier: T1
+  topic: "官方,开源"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://huggingface.co/blog/feed.xml
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 2h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

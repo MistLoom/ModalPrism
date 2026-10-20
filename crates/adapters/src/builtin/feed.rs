@@ -12,7 +12,7 @@ use crate::model::{
     FacetDraft, Follow, InputSelector, OutputDecl,
 };
 use crate::textutil::{
-    absolute_http, guid_identity, locator_text, parse_timestamp, strip_tags, url_identity,
+    absolute_http, guid_identity, locator_text, parse_published, strip_tags, url_identity,
 };
 use crate::traits::{ContentAdapter, SearchAdapter};
 
@@ -94,13 +94,16 @@ impl SearchAdapter for FeedItems {
     async fn discover(
         &self,
         input: &AdapterInput,
-        _spec: &Value,
+        spec: &Value,
     ) -> Result<DiscoverOutput, AdapterError> {
         let feed = parse_feed(&input.view.bytes)?;
         let base = locator_text(&input.locator);
         let mut items = Vec::new();
         for entry in &feed.entries {
-            let Some(discovery) = discovery_from(entry, base, input) else {
+            if !category_ok(&entry.categories, spec) {
+                continue;
+            }
+            let Some(discovery) = discovery_from(entry, base, input, spec) else {
                 continue;
             };
             items.push(discovery);
@@ -191,7 +194,12 @@ impl ContentAdapter for FeedFulltext {
     }
 }
 
-fn discovery_from(entry: &Entry, base: &str, input: &AdapterInput) -> Option<Discovery> {
+fn discovery_from(
+    entry: &Entry,
+    base: &str,
+    input: &AdapterInput,
+    spec: &Value,
+) -> Option<Discovery> {
     let href = entry.link.as_deref()?;
     let absolute = absolute_http(base, href)?;
     let mut identity = vec![url_identity(&absolute)?];
@@ -205,14 +213,22 @@ fn discovery_from(entry: &Entry, base: &str, input: &AdapterInput) -> Option<Dis
         .as_deref()
         .map(strip_tags)
         .filter(|text| !text.is_empty());
+    let offset = spec.get("publishedAtUtcOffset").and_then(Value::as_str);
     let hints = crate::model::DiscoveryHints {
         title: entry.title.clone(),
-        published_at: entry.published.as_deref().and_then(parse_timestamp),
+        published_at: entry
+            .published
+            .as_deref()
+            .and_then(|raw| parse_published(raw, offset, None)),
         author: entry.author.clone(),
-        summary,
+        summary: summary.clone(),
         rank: None,
         extra: Default::default(),
     };
+    let summary_is_body = spec
+        .get("summaryIsBody")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let (materialize, follow) = if let Some(content) = &entry.content {
         (
             vec![text_facet(
@@ -223,6 +239,18 @@ fn discovery_from(entry: &Entry, base: &str, input: &AdapterInput) -> Option<Dis
             )],
             Follow::No,
         )
+    } else if summary_is_body && summary.is_some() && !video_page(&absolute) {
+        (
+            vec![text_facet(
+                FacetKind::Text,
+                None,
+                summary.clone().unwrap_or_default(),
+                "text/plain",
+            )],
+            Follow::No,
+        )
+    } else if video_page(&absolute) {
+        (Vec::new(), Follow::No)
     } else {
         (
             Vec::new(),
@@ -241,6 +269,47 @@ fn discovery_from(entry: &Entry, base: &str, input: &AdapterInput) -> Option<Dis
         follow,
         materialize,
     })
+}
+
+fn category_ok(categories: &[String], spec: &Value) -> bool {
+    let deny = string_list(spec.get("denyCategories"));
+    let allow = string_list(spec.get("allowCategories"));
+    let matches = |wanted: &[String]| {
+        categories.iter().any(|item| {
+            wanted
+                .iter()
+                .any(|name| item.eq_ignore_ascii_case(name.trim()))
+        })
+    };
+    if matches(&deny) {
+        return false;
+    }
+    allow.is_empty() || matches(&allow)
+}
+
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn video_page(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let host = parsed
+        .host_str()
+        .unwrap_or("")
+        .trim_start_matches("www.")
+        .trim_start_matches("m.");
+    matches!(host, "youtube.com" | "youtu.be" | "vimeo.com")
 }
 
 fn text_facet(
@@ -271,6 +340,7 @@ struct Entry {
     author: Option<String>,
     summary: Option<String>,
     content: Option<String>,
+    categories: Vec<String>,
 }
 
 fn parse_feed(bytes: &[u8]) -> Result<FeedDoc, AdapterError> {
@@ -311,6 +381,10 @@ fn parse_feed(bytes: &[u8]) -> Result<FeedDoc, AdapterError> {
                 if name == "link" {
                     if let Some(entry) = current.as_mut() {
                         capture_link(entry, &event);
+                    }
+                } else if name == "category" {
+                    if let Some(entry) = current.as_mut() {
+                        capture_category(entry, &event);
                     }
                 }
             }
@@ -391,12 +465,31 @@ fn assign_text(
         "author" | "creator" | "name" => &mut entry.author,
         "description" | "summary" => &mut entry.summary,
         "encoded" | "content" => &mut entry.content,
+        "category" => {
+            entry.categories.push(text.to_string());
+            return Ok(());
+        }
         _ => return Ok(()),
     };
     if slot.is_none() {
         *slot = Some(text.to_string());
     }
     Ok(())
+}
+
+fn capture_category(entry: &mut Entry, event: &quick_xml::events::BytesStart<'_>) {
+    for attr in event.attributes().flatten() {
+        if local_name(attr.key.local_name().as_ref()) != "term" {
+            continue;
+        }
+        let Ok(value) = attr.unescape_value() else {
+            continue;
+        };
+        let text = value.trim();
+        if !text.is_empty() {
+            entry.categories.push(text.to_string());
+        }
+    }
 }
 
 fn capture_link(entry: &mut Entry, event: &quick_xml::events::BytesStart<'_>) {
@@ -449,6 +542,7 @@ fn is_field(name: &str) -> bool {
             | "summary"
             | "encoded"
             | "content"
+            | "category"
     )
 }
 
@@ -461,5 +555,6 @@ fn empty_entry() -> Entry {
         author: None,
         summary: None,
         content: None,
+        categories: Vec::new(),
     }
 }
