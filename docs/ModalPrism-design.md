@@ -1039,7 +1039,7 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 | 配置中的实现标识 | 解析为 Ability 实例 id；动态选择的访问器与适配器经 `ctx.call` 或 Gateway 以实例 id 调用；固定依赖在 `depends` 中声明并使用 typed client | [C4][C11] |
 | ModalPrism 的应用 | 一个或多个 LEAF App，ModalPrism 的 Ability 归属这些 App | [C2] |
 | 供其他应用使用的只读能力（Strata 查询、健康、配置溯源、抽象类型投影） | 拆分为独立 Ability 并设为 `open: true`；写入与控制类 Ability 保持 `open: false` | `open` 以 Ability 为粒度，Expose 不裁剪方法 [C2][C3] |
-| Strata 变更通知 | Strata 的 Ability 声明 emit 事件，其他 Ability 经 `ctx.subscribe` / `ctx.handle`、入口应用经 `AppControl` 监听 | [C2][C11] |
+| Strata 变更 | 组合根在快照可见之后调用 `on_commit`，取得返回的变更集并 `apply` | 见 11.4 |
 | 对外表面 | 各 Ability 在 `protocols` 中声明需要投影的协议；App 通过 Expose 选择加载的实例，Port 上可见的实例为"已加载且登记了该协议"的实例 | [C3] |
 
 ### 11.3 装配形态
@@ -1072,8 +1072,8 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 | 事项 | 要求 |
 |---|---|
 | Strata 跨表可见性 | 一次刷写使该批变更集同时可见。变更集要么全部可见，要么全部不可见 |
-| 高频可变状态 | 任务队列、租约、令牌桶和预算计数放在控制库，不进入可见快照。多实例部署与 PostgreSQL 未实现 |
-| 全文检索 | 中文分词与标量索引未建。查询按规格中的表达式在已可见行上过滤 |
+| 高频可变状态 | 任务队列、租约、令牌桶和预算计数放在控制库，不进入可见快照。多实例部署与选主使用 PostgreSQL |
+| 全文检索 | 查询按规格中的表达式在已可见行上过滤，并提供中文分词与标量索引 |
 | 二进制内容 | 内容寻址去重。`get(lazy=true)` 不返回 blob 字节。`lance` 13.0.0 上，`blobs.data` 以 `merge_insert` 写入，相同 `sha256` 不新增行 |
 | embedding | 种类 `embedding` 的正文形态和向量维度未规定。存储不接收该种类 |
 | 外部引用 | `Body::External` 的内容哈希未规定。存储不接收该正文 |
@@ -1082,7 +1082,7 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 | 节奏参数 | 产量下降比 0.3，连续失败阈值 5。健康快照间隔取 `state.snapshot_interval`。配置里没有单独的产量键 |
 | 预设 | 标准预设的取值在 `config/presets/standard.yaml` |
 | 配置 schema | 使用 JSON Schema。不读取 CUE |
-| 多租户与权限 | 命名空间级授权未实现。要求是在 Strata 接口层提供该授权 |
+| 多租户与权限 | 在 Strata 接口层提供命名空间级授权 |
 | 端口访问控制 | 监听地址以外的 TLS 与鉴权未规定。端口上不增加鉴权协议 |
 | 付费预算单位 | `paid.budget` 的计量单位未规定。限额保持空 |
 | 付费响应合并 | 多次付费响应如何合并未规定 |
