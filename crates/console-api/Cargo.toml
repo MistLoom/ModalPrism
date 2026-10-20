@@ -10,13 +10,9 @@ publish = false
 [dependencies]
 assembly = { path = "../assembly" }
 axum = { version = "0.8", features = ["json"] }
-config = { path = "../config" }
-egress = { path = "../egress" }
+console = { path = "../console" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-strata-client = { path = "../strata-client" }
-strata-model = { path = "../strata-model" }
-thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 

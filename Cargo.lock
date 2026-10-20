@@ -14,7 +14,7 @@ dependencies = [
 [[package]]
 name = "ability-core"
 version = "0.1.0"
-source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
 dependencies = [
  "ability-support",
  "async-trait",
@@ -47,7 +47,7 @@ dependencies = [
 [[package]]
 name = "ability-support"
 version = "0.1.0"
-source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
 dependencies = [
  "ability-support-macros",
  "async-trait",
@@ -62,7 +62,7 @@ dependencies = [
 [[package]]
 name = "ability-support-macros"
 version = "0.1.0"
-source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1551,22 +1551,43 @@ dependencies = [
 ]
 
 [[package]]
-name = "console-api"
+name = "console"
 version = "0.1.0"
 dependencies = [
  "assembly",
- "axum",
  "config",
  "egress",
  "serde",
  "serde_json",
  "strata-client",
  "strata-model",
+ "tokio",
+]
+
+[[package]]
+name = "console-api"
+version = "0.1.0"
+dependencies = [
+ "assembly",
+ "axum",
+ "config",
+ "console",
+ "serde",
+ "serde_json",
  "tempfile",
- "thiserror 2.0.21",
  "tokio",
  "tower",
  "tower-http",
+]
+
+[[package]]
+name = "console_ability"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "console",
+ "serde_json",
 ]
 
 [[package]]
@@ -3073,7 +3094,7 @@ dependencies = [
 [[package]]
 name = "frame-core"
 version = "0.1.0"
-source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
 dependencies = [
  "ability-support",
  "async-trait",
@@ -3084,7 +3105,7 @@ dependencies = [
 [[package]]
 name = "frame-port-http"
 version = "0.1.0"
-source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
 dependencies = [
  "async-trait",
  "axum",
@@ -3099,7 +3120,7 @@ dependencies = [
 [[package]]
 name = "frame-port-mcp"
 version = "0.1.0"
-source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
 dependencies = [
  "async-trait",
  "frame-core",
@@ -5661,6 +5682,7 @@ dependencies = [
  "config",
  "config_inspect",
  "console-api",
+ "console_ability",
  "frame-core",
  "frame-port-http",
  "health",

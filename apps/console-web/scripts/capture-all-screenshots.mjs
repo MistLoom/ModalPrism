@@ -9,7 +9,27 @@ const routes = ["overview", "sources", "records", "governance", "config"];
 
 await mkdir(outDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+const context = await browser.newContext({
+  viewport: { width: 1440, height: 900 },
+  deviceScaleFactor: 1,
+});
+const mockIndex = path.resolve(import.meta.dirname, "../mock-design/index.html");
+const mockUrl = `file://${mockIndex}`;
+const mockRoutes = [
+  ["overview", "overview"],
+  ["sources", "sources"],
+  ["records", "strata"],
+  ["governance", "governance"],
+  ["config", "config"],
+];
+for (const [name, route] of mockRoutes) {
+  const page = await context.newPage();
+  await page.goto(mockUrl, { waitUntil: "networkidle" });
+  await page.locator(`.nav .nav-item[data-route="${route}"]`).click();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(outDir, `mock-${name}-dark.png`) });
+  await page.close();
+}
 
 for (const theme of ["light", "dark"]) {
   for (const hash of routes) {
@@ -74,6 +94,14 @@ for (const theme of ["light", "dark"]) {
     await hist.screenshot({ path: path.join(outDir, `history-mode-${theme}.png`) });
   }
   await hist.close();
+
+  const src = await context.newPage();
+  await src.goto(`${base}/console?theme=${theme}#sources`, { waitUntil: "networkidle" });
+  await src.waitForSelector("[data-act='detail']", { timeout: 120000 });
+  await src.locator("[data-act='detail']").first().click();
+  await src.waitForSelector("#drawer .drawer-title", { timeout: 60000 });
+  await src.screenshot({ path: path.join(outDir, `source-drawer-${theme}.png`) });
+  await src.close();
 }
 
 await browser.close();

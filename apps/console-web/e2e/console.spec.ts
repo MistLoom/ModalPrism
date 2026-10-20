@@ -48,7 +48,7 @@ test("console routes and trailing slash", async ({ page }) => {
   const r1 = await page.goto(`${base}/console/`);
   expect(r1?.status()).toBeLessThan(400);
   await page.goto(`${base}/console/#overview`);
-  await expect(page.locator(".page-title")).toContainText("总览");
+  await expect(page.locator(".page-title")).toContainText("系统正在沉积");
 });
 
 test("source toggle, config edit rollback, trigger collection", async ({ page }) => {
@@ -86,7 +86,13 @@ test("source toggle, config edit rollback, trigger collection", async ({ page })
   const row = page.locator(".rec-row").first();
   if (await row.count()) {
     await row.click();
-    await page.waitForSelector(".drawer-head .drawer-title", { timeout: 15000 });
-    await expect(page.locator(".drawer-body")).not.toContainText("加载中");
+    await page.waitForSelector("#drawer .drawer-head .drawer-title", { timeout: 15000 });
+    await expect(page.locator("#drawer .drawer-body")).not.toContainText("加载中");
+    const title = page.locator("#drawer .drawer-title");
+    await expect(title).not.toHaveText("加载中…");
+    const link = page.locator("#drawer .drawer-body a[href]");
+    if (await link.count()) {
+      await expect(link.first()).toHaveAttribute("href", /.+/);
+    }
   }
 });

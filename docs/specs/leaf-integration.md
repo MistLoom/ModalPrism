@@ -1,6 +1,6 @@
 # LEAF 集成要求
 
-对照 LEAF 提交 `3dcd9c9d29a342ee9cb11411d96cbaf506269e46`。
+对照 LEAF 提交 `ffabb6128ae6e006c6c3cee3a706532501f26219`。
 
 本文只记录该提交中已经存在的行为，以及 ModalPrism 必须满足的要求。
 

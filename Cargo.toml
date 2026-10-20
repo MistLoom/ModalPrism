@@ -12,7 +12,9 @@ members = [
     "crates/planner",
     "crates/accessors-builtin",
     "crates/assembly",
+    "crates/console",
     "crates/console-api",
+    "ability/console",  # package name console_ability
     "crates/types",
     "ability/strata_read",
     "ability/strata_write",
@@ -74,11 +76,11 @@ url = "2"
 psl = "2"
 flate2 = "1"
 base64 = "0.22"
-ability-support = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-frame-core = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-ability-core = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-frame-port-http = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-frame-port-mcp = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
+ability-support = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+frame-core = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+ability-core = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+frame-port-http = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+frame-port-mcp = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [workspace.lints.rust]

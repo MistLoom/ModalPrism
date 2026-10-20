@@ -1,7 +1,5 @@
 //! Web 控制台 REST API。仅面向环回部署。
 
-pub mod config_path;
-mod copy;
 mod error;
 mod handlers;
 mod security;
@@ -13,7 +11,7 @@ use axum::Router;
 use axum::middleware::from_fn;
 use axum::routing::{get, patch, post};
 
-pub use config_path::normalize_rel_path;
+pub use console::config_path::normalize_rel_path;
 pub use error::ApiError;
 
 #[derive(Clone)]

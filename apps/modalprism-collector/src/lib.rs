@@ -215,6 +215,11 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
             false,
         ),
         (
+            "console",
+            console_ability::provider(Arc::clone(&services)),
+            false,
+        ),
+        (
             "accessor_http",
             accessor_http::provider(Arc::clone(&services)),
             false,

@@ -1,0 +1,17 @@
+[package]
+name = "console_ability"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Web 控制台 Ability"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+assembly = { path = "../../crates/assembly" }
+console = { path = "../../crates/console" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

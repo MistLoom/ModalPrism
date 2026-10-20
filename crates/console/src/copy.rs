@@ -34,6 +34,25 @@ pub fn health_chip_class(status: &str, enabled: bool, skip_reason: Option<&str>)
     }
 }
 
+pub fn accessor_label(accessor: &str) -> String {
+    let lower = accessor.to_lowercase();
+    if lower.contains("rss") {
+        "订阅源".into()
+    } else if lower.contains("push") {
+        "推送".into()
+    } else if lower.contains("paid") {
+        "付费接口".into()
+    } else if lower.contains("api") {
+        "接口".into()
+    } else if lower.contains("http") || lower.contains("file") {
+        "网页".into()
+    } else if accessor.is_empty() {
+        "—".into()
+    } else {
+        "采集".into()
+    }
+}
+
 pub fn skip_reason_label(skip: Option<&str>) -> Option<String> {
     match skip {
         Some("budget") => Some("付费额度已用尽".into()),

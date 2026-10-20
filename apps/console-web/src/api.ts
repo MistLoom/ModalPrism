@@ -29,6 +29,8 @@ export const api = {
       viewNote?: string;
       historicalMode?: boolean;
     }>("/sources"),
+  source: (id: string) =>
+    request<Record<string, unknown>>(`/sources/${encodeURIComponent(id.replace(/^source\//, ""))}`),
   trigger: (id: string) =>
     request(`/sources/${encodeURIComponent(id)}/trigger`, {
       method: "POST",

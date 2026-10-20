@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0D0C">
+<meta name="description" content="ModalPrism 沉积观测台 — 多信源数据采集系统的可回放控制台。">
+<title>ModalPrism · 沉积观测台</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#viewRoot">跳到主内容</a>
+
+<div class="shell">
+  <aside class="sidebar" id="sidebar" aria-label="主导航">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 3.5 28 26H4L16 3.5Z" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M16 3.5v22.5M10 14.8h12M7 21h18" fill="none" stroke="currentColor" stroke-width=".8" opacity=".55"/>
+        <path d="M16 3.5 22 26" stroke="#E2552F" stroke-width="1.2" fill="none"/>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-name">ModalPrism</span>
+        <span class="brand-sub">沉积观测台</span>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="视图">
+      <div class="nav-group">
+        <span class="nav-label">观测 · OBSERVE</span>
+        <button class="nav-item" data-route="overview" type="button">
+          <span class="nav-icon" data-icon="overview"></span>
+          <span>总览</span>
+          <span class="nav-count" id="navTaskCount">128</span>
+        </button>
+        <button class="nav-item" data-route="sources" type="button">
+          <span class="nav-icon" data-icon="sources"></span>
+          <span>信源</span>
+        </button>
+        <button class="nav-item" data-route="strata" type="button">
+          <span class="nav-icon" data-icon="strata"></span>
+          <span>Strata</span>
+        </button>
+      </div>
+      <div class="nav-group">
+        <span class="nav-label">系统 · SYSTEM</span>
+        <button class="nav-item" data-route="governance" type="button">
+          <span class="nav-icon" data-icon="governance"></span>
+          <span>治理</span>
+          <span class="nav-alert" id="navGovAlert" title="熔断或半开的出站域数量">3</span>
+        </button>
+        <button class="nav-item" data-route="config" type="button">
+          <span class="nav-icon" data-icon="config"></span>
+          <span>配置</span>
+          <span class="nav-pending" id="configPendingDot" title="待校验变更" hidden></span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="strata-glyph" aria-hidden="true">
+        <span style="--i:0"></span><span style="--i:1"></span><span style="--i:2"></span><span style="--i:3"></span><span style="--i:4"></span>
+      </div>
+      <div class="foot-row"><span>配置代际</span><strong id="footGeneration">G-37</strong></div>
+      <div class="foot-row"><span>快照游标</span><strong id="footSnapshot">#1842</strong></div>
+      <div class="foot-row"><span>环回入口</span><span class="mono">127.0.0.1:7420</span></div>
+      <p class="foot-note">只读观察者 · 写操作以变更集提交</p>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="crumb">
+        <span class="crumb-root">观测台</span>
+        <span class="crumb-sep" aria-hidden="true">/</span>
+        <span id="crumbCurrent">总览</span>
+      </div>
+      <button class="search-trigger" id="paletteTrigger" type="button" aria-haspopup="dialog">
+        <span class="search-icon" data-icon="search"></span>
+        <span class="search-text">搜索资源、信源、提交…</span>
+        <kbd>Ctrl K</kbd>
+      </button>
+      <div class="topbar-meta">
+        <span class="live-state" id="liveState">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span id="liveLabel">实时</span>
+        </span>
+        <time class="clock" id="clock">14:32:08</time>
+        <button class="gen-chip" id="genChip" type="button" data-route="config" title="查看配置代际">G-37</button>
+      </div>
+    </header>
+
+    <div id="historyBanner" class="history-banner" hidden></div>
+    <main id="viewRoot" class="view" tabindex="-1"></main>
+  </div>
+</div>
+
+<footer class="snapshot-bar" aria-label="快照游标">
+  <div class="snap-left">
+    <span class="snap-label">SNAPSHOT</span>
+    <strong class="snap-id" id="snapId">#1842</strong>
+    <span class="snap-time" id="snapTime">2026-10-21 14:32</span>
+    <span class="snap-mode" id="snapMode">实时</span>
+  </div>
+  <div class="snap-track-wrap">
+    <button class="snap-step" id="snapPrev" type="button" aria-label="上一个快照">
+      <span data-icon="chevron-left"></span>
+    </button>
+    <div class="snap-track" id="snapTrack" role="group" aria-label="选择快照"></div>
+    <button class="snap-step" id="snapNext" type="button" aria-label="下一个快照">
+      <span data-icon="chevron-right"></span>
+    </button>
+  </div>
+  <div class="snap-right">
+    <button class="btn btn-quiet btn-sm" id="snapLive" type="button" hidden>回到实时</button>
+    <span class="snap-hint mono">读取按快照进行</span>
+  </div>
+</footer>
+
+<div class="drawer-layer" id="drawerLayer" hidden>
+  <div class="drawer-scrim" data-close-drawer></div>
+  <section class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1"></section>
+</div>
+
+<div class="palette-layer" id="paletteLayer" hidden>
+  <div class="palette-scrim" data-close-palette></div>
+  <section class="palette" role="dialog" aria-modal="true" aria-label="命令面板">
+    <div class="palette-input-row">
+      <span class="palette-icon" data-icon="command"></span>
+      <input id="paletteInput" class="palette-input" type="text" placeholder="输入命令、信源或 RID…" autocomplete="off" spellcheck="false" aria-label="命令面板搜索" aria-controls="paletteResults" aria-expanded="true">
+      <kbd>ESC</kbd>
+    </div>
+    <div class="palette-results" id="paletteResults" role="listbox" aria-label="命令结果"></div>
+    <div class="palette-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+      <span><kbd>↵</kbd> 执行</span>
+      <span>历史快照下仅可导航</span>
+    </div>
+  </section>
+</div>
+
+<div class="confirm-layer" id="confirmLayer" hidden>
+  <div class="confirm-scrim" data-close-confirm></div>
+  <section class="confirm" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmBody">
+    <h2 id="confirmTitle">重置熔断？</h2>
+    <p id="confirmBody"></p>
+    <div class="confirm-actions">
+      <button class="btn btn-quiet" data-close-confirm type="button">取消</button>
+      <button class="btn btn-primary" id="confirmAccept" type="button">确认重置</button>
+    </div>
+  </section>
+</div>
+
+<div class="toasts" id="toastRegion" role="status" aria-live="polite"></div>
+
+<noscript><p class="noscript">此控制台需要 JavaScript 才能渲染观测数据。</p></noscript>
+
+<script src="app.js" defer></script>
+</body>
+</html>

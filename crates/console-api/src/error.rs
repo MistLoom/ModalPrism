@@ -31,7 +31,7 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal",
-            message: message.into(),
+            message: sanitize_internal_message(message.into()),
         }
     }
 
@@ -60,3 +60,10 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+fn sanitize_internal_message(message: String) -> String {
+    if message.contains("spec 无效") || message.contains("spec") {
+        return "无法读取该记录，请稍后重试。".into();
+    }
+    message
+}
