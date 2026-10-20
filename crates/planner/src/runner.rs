@@ -10,7 +10,9 @@ use crate::cadence::{CadenceInput, signal_of};
 use crate::error::PlannerError;
 use crate::health::{Health, Thresholds, consecutive, counts_toward_health};
 use crate::persist::Persist;
-use crate::planner::{Db, Planner, SourcePlan, SourceRow, day_of, millis, stamp, yield_sum};
+use crate::planner::{
+    Db, Planner, SourcePlan, SourceRow, day_of, millis, new_row, stamp, yield_sum,
+};
 use crate::queue::Queue;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -473,11 +475,5 @@ pub(crate) fn next_interval_for(plan: &SourcePlan, yield_7d: u64, signal: Durati
 }
 
 pub(crate) fn fresh_row(plan: &SourcePlan) -> SourceRow {
-    SourceRow {
-        next_at: None,
-        interval_ms: millis(plan.interval),
-        generation: plan.generation,
-        last_yield_at: None,
-        last_recompute: None,
-    }
+    new_row(millis(plan.interval), plan.generation)
 }

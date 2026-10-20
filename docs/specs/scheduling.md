@@ -140,7 +140,9 @@ interval  = clamp(max(adaptive, signal, floor_eff), floor_eff, ceiling)
 
 优先级：`manual` 与 `replay` 为 30，`follow`、`detail`、`render_upgrade` 为 20，`schedule` 为 10。
 
-每个队列本次新入队数不超过 `容量 - 未过期租约数`。租约时长是信源 `timeout` 的 1.5 倍。入队时把 `next_at` 设为 `now + 租约时长`。`tick` 随即 `lease` 并返回领到的任务。未完成的同一 `(source, locator)` 不会有第二行；定位符键是 `Locator` 的 JSON。该行处于 `queued` 且 `retry_at` 为空或不晚于现在，或租约已到期时，`tick` 重新领取原任务。`retry_at` 仍在未来或租约未到期时不领取。
+每个队列本次新入队数不超过 `容量 - 未过期租约数`。租约时长是信源 `timeout` 的 1.5 倍。入队时把 `next_at` 设为 `now + 租约时长`。`tick` 随即 `lease` 并返回领到的任务。未完成的同一 `(source, locator)` 不会有第二行；定位符键是 `Locator` 的 JSON。该行处于 `queued` 且 `retry_at` 为空或不晚于现在，或租约已到期时，`tick` 重新领取原任务。`retry_at` 仍在未来或租约未到期时不领取。重新领取不增加付费预算计数。
+
+写出 `paid` 的信源进入付费队列。`paid.budget.requests` 是每个 `paid.budget.window` 内允许派出的新计划任务数，计量单位是请求次数。窗口起点是 Unix 毫秒向下对齐到 `window`。派出时 `budgetUsed` 加一。次数达到上限后，本窗口余下的扫描跳过该信源，`skipReason` 为 `budget`，`next_at` 写到下一窗口起点。进入下一窗口后 `budgetUsed` 归零，`skipReason` 清空。`budget` 不写入健康失败。
 
 `run` 用 accepted 游标。游标是对象且 `configHash` 与当前信源配置哈希不同时，交给处理函数的游标为 null。处理函数成功后，Runner 把数据操作、游标 `setState`、完成回执 `setState` 和 `ack` 放进同一个变更集再 `apply`。游标对象写入当前 `configHash`。任一环节失败时不调用 `apply`，游标保持原值。
 

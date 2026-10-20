@@ -118,6 +118,11 @@ impl Timestamp {
             .map_err(|_| ModelError::InvalidTimestamp)
     }
 
+    pub fn unix_millis(self) -> Result<i64, ModelError> {
+        let millis = self.0.unix_timestamp_nanos().div_euclid(1_000_000);
+        i64::try_from(millis).map_err(|_| ModelError::InvalidTimestamp)
+    }
+
     pub fn from_unix_millis(millis: i64) -> Result<Self, ModelError> {
         let seconds = millis.div_euclid(1000);
         let nanos = u32::try_from(millis.rem_euclid(1000) * 1_000_000)

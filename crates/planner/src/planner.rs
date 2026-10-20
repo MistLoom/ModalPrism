@@ -25,6 +25,8 @@ pub struct SourcePlan {
     pub config_hash: String,
     pub timeout: Duration,
     pub paid: bool,
+    pub budget_requests: Option<u64>,
+    pub budget_window: Duration,
     pub adaptive: bool,
     pub interval: Duration,
     pub floor: Duration,
@@ -42,6 +44,8 @@ pub struct SourceStatus {
     pub interval_ms: u64,
     pub health_status: String,
     pub alert: bool,
+    pub skip_reason: Option<String>,
+    pub budget_used: u64,
 }
 
 pub struct Capacities {
@@ -77,6 +81,12 @@ pub(crate) struct SourceRow {
     pub generation: u64,
     pub last_yield_at: Option<String>,
     pub last_recompute: Option<String>,
+    #[serde(default)]
+    pub paid_window_start: i64,
+    #[serde(default)]
+    pub paid_used: u64,
+    #[serde(default)]
+    pub skip_reason: Option<String>,
 }
 
 pub struct Planner<Q, P> {
@@ -145,10 +155,12 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
                     continue;
                 };
                 task
-            } else {
+            } else if charge_budget(&mut db, plan, now)? {
                 let task = make_task(plan, now)?;
                 self.queue.enqueue(std::slice::from_ref(&task)).await?;
                 self.queue.lease_id(&task.task_id, lease_for, now).await?
+            } else {
+                continue;
             };
             used[slot] += 1;
             if let Some(row) = db.sources.get_mut(plan.source_id.as_str()) {
@@ -192,6 +204,8 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
                 .map(|item| item.status.clone())
                 .unwrap_or_else(|| "ok".into()),
             alert: health.is_some_and(|item| item.alert),
+            skip_reason: row.and_then(|row| row.skip_reason.clone()),
+            budget_used: row.map(|row| row.paid_used).unwrap_or(0),
         })
     }
 
@@ -204,13 +218,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         let row = db
             .sources
             .entry(source.to_string())
-            .or_insert_with(|| SourceRow {
-                next_at: None,
-                interval_ms: 0,
-                generation: 0,
-                last_yield_at: None,
-                last_recompute: None,
-            });
+            .or_insert_with(|| new_row(0, 0));
         row.next_at = Some(stamp(now)?);
         save_db(&self.persist, &db).await
     }
@@ -307,6 +315,54 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
     }
 }
 
+/// 新的计划任务消耗一次窗口内的付费请求。次数用尽则记 `budget`，并把下次时间推到下一窗口。
+fn charge_budget(db: &mut Db, plan: &SourcePlan, now: Timestamp) -> Result<bool, PlannerError> {
+    let Some(limit) = plan.budget_requests else {
+        return Ok(true);
+    };
+    let window_ms = i64::try_from(plan.budget_window.as_millis()).unwrap_or(0);
+    if window_ms <= 0 {
+        return Err(PlannerError::new("预算窗口为空"));
+    }
+    let now_ms = now
+        .unix_millis()
+        .map_err(|source| PlannerError::with_source("预算窗口", source))?;
+    let start = now_ms.div_euclid(window_ms) * window_ms;
+    let row = db
+        .sources
+        .get_mut(plan.source_id.as_str())
+        .ok_or_else(|| PlannerError::new("信源缺少节奏"))?;
+    if row.paid_window_start != start {
+        row.paid_window_start = start;
+        row.paid_used = 0;
+        row.skip_reason = None;
+    }
+    if row.paid_used >= limit {
+        row.skip_reason = Some("budget".into());
+        let end = start.saturating_add(window_ms);
+        let until = Timestamp::from_unix_millis(end)
+            .map_err(|source| PlannerError::with_source("预算窗口", source))?;
+        row.next_at = Some(stamp(until)?);
+        return Ok(false);
+    }
+    row.paid_used = row.paid_used.saturating_add(1);
+    row.skip_reason = None;
+    Ok(true)
+}
+
+pub(crate) fn new_row(interval_ms: u64, generation: u64) -> SourceRow {
+    SourceRow {
+        next_at: None,
+        interval_ms,
+        generation,
+        last_yield_at: None,
+        last_recompute: None,
+        paid_window_start: 0,
+        paid_used: 0,
+        skip_reason: None,
+    }
+}
+
 fn dispatch_key(db: &Db, plan: &SourcePlan) -> (i32, String) {
     let at = db
         .sources
@@ -354,13 +410,10 @@ fn make_task(plan: &SourcePlan, now: Timestamp) -> Result<AccessTask, PlannerErr
 fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
     let id = plan.source_id.as_str().to_string();
     let yield_7d = yield_sum(&db.yields, &id, today, 0, 7);
-    let row = db.sources.entry(id).or_insert_with(|| SourceRow {
-        next_at: None,
-        interval_ms: millis(plan.interval),
-        generation: plan.generation,
-        last_yield_at: None,
-        last_recompute: None,
-    });
+    let row = db
+        .sources
+        .entry(id)
+        .or_insert_with(|| new_row(millis(plan.interval), plan.generation));
     let subject = format!("source/{}", plan.source_id);
     if let Some(health) = db.health.get_mut(&subject) {
         if health.status == "misconfigured" && row.generation != plan.generation {

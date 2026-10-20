@@ -21,6 +21,10 @@ pipeline:
         summary: digest
         publishedAtPath: post_time
         publishedAtUnit: epoch_s
+paid:
+  budget:
+    requests: 12
+    window: 1d
 schedule:
   interval: 2h
 admission: {}

@@ -44,7 +44,6 @@
 - Web Bot Auth 签名与会话轮换
 - 对象存储
 - 合并付费响应的归属
-- `paid.budget` 的计量单位
 - 浏览器内核的未实测项，见 `docs/specs/builtin-accessors.md`
 - 结构化 facet 的物化列
 - Skill 入口（该 LEAF 提交没有对应 Port）

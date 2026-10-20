@@ -85,7 +85,7 @@ id 是 `paid-api`。定位符是非空的 `apiEndpoint`，不要求为 `http` UR
 
 每个信封的 `transport.receipt_id` 是付费响应的回执。一次调用一个信封。不把响应拆成多个信源。
 
-预算错误原样返回。
+请求次数上限写在信源 `paid.budget`，由调度按窗口计数。预算错误原样返回。
 
 ## search
 

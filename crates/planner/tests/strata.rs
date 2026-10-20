@@ -34,6 +34,8 @@ fn plan() -> SourcePlan {
         config_hash: "hash-a".into(),
         timeout: Duration::from_secs(30),
         paid: false,
+        budget_requests: None,
+        budget_window: Duration::ZERO,
         adaptive: false,
         interval: Duration::from_secs(30 * 60),
         floor: Duration::from_secs(15 * 60),

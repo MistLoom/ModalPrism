@@ -130,6 +130,7 @@ fn check_source(
         diags.push(of(id, "信源缺少 admission"));
     }
     check_robots(id, module.get("policy"), system_policy, diags);
+    check_source_budget(id, module, diags);
     if lookup(module, "policy.raw.store").and_then(Value::as_str) == Some("sampled")
         && lookup(module, "policy.raw.sample_rate").is_none()
     {
@@ -219,8 +220,30 @@ fn check_accessor(id: &str, module: &Value, diags: &mut Vec<Diagnostic>) {
         .get("implementation")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if implementation.starts_with("builtin:paid") && module.get("paid").is_none() {
-        diags.push(of(id, "付费访问器缺少 paid"));
+    if implementation.starts_with("builtin:paid")
+        && module
+            .pointer("/paid/service")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        diags.push(of(id, "付费访问器缺少 paid.service"));
+    }
+}
+
+fn check_source_budget(id: &str, module: &Value, diags: &mut Vec<Diagnostic>) {
+    let paid_accessor =
+        module.pointer("/access/accessor").and_then(Value::as_str) == Some("accessor/paid-api");
+    if !paid_accessor && module.get("paid").is_none() {
+        return;
+    }
+    let requests = module
+        .pointer("/paid/budget/requests")
+        .and_then(Value::as_u64);
+    let window = module
+        .pointer("/paid/budget/window")
+        .and_then(Value::as_str);
+    if requests.is_none() || window.is_none() {
+        diags.push(of(id, "付费信源缺少 paid.budget"));
     }
 }
 

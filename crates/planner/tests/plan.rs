@@ -29,6 +29,8 @@ fn plan() -> SourcePlan {
         config_hash: "hash-a".into(),
         timeout: Duration::from_secs(30),
         paid: false,
+        budget_requests: None,
+        budget_window: Duration::ZERO,
         adaptive: false,
         interval: Duration::from_secs(30 * 60),
         floor: Duration::from_secs(15 * 60),
@@ -471,4 +473,94 @@ async fn follow_task_is_leased_after_the_source_is_scheduled() {
         .await
         .unwrap();
     assert!(again.is_empty());
+}
+
+fn paid_plan() -> SourcePlan {
+    let mut plan = plan();
+    plan.queue = QueueName::Paid;
+    plan.paid = true;
+    plan.budget_requests = Some(2);
+    plan.budget_window = Duration::from_secs(60 * 60);
+    plan
+}
+
+async fn finish(planner: &Planner<MemoryQueue, MemoryPersist>, task: AccessTask, at: Timestamp) {
+    let handler = Script {
+        hits: AtomicUsize::new(0),
+        error: None,
+        seen_cursor: std::sync::Mutex::new(None),
+    };
+    planner
+        .run(&paid_plan(), task, &handler, &(), at, at)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn paid_budget_counts_skips_and_resets_with_the_window() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let plan = paid_plan();
+    let start = now();
+    let mut first = planner
+        .tick(std::slice::from_ref(&plan), &caps(), start)
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    finish(&planner, first.remove(0), start).await;
+    assert_eq!(
+        planner
+            .source_status("source/blog")
+            .await
+            .unwrap()
+            .budget_used,
+        1
+    );
+    planner.make_due("source/blog", start).await.unwrap();
+    let mut second = planner
+        .tick(std::slice::from_ref(&plan), &caps(), start)
+        .await
+        .unwrap();
+    assert_eq!(second.len(), 1);
+    finish(&planner, second.remove(0), start).await;
+    assert_eq!(
+        planner
+            .source_status("source/blog")
+            .await
+            .unwrap()
+            .budget_used,
+        2
+    );
+    planner.make_due("source/blog", start).await.unwrap();
+    let blocked = planner
+        .tick(std::slice::from_ref(&plan), &caps(), start)
+        .await
+        .unwrap();
+    assert!(blocked.is_empty());
+    let exhausted = planner.source_status("source/blog").await.unwrap();
+    assert_eq!(exhausted.skip_reason.as_deref(), Some("budget"));
+    assert_eq!(exhausted.budget_used, 2);
+    let mid = start.checked_add(Duration::from_secs(30 * 60)).unwrap();
+    let still = planner
+        .tick(std::slice::from_ref(&plan), &caps(), mid)
+        .await
+        .unwrap();
+    assert!(still.is_empty());
+    assert_eq!(
+        planner
+            .source_status("source/blog")
+            .await
+            .unwrap()
+            .skip_reason
+            .as_deref(),
+        Some("budget")
+    );
+    let rolled = start.checked_add(Duration::from_secs(60 * 60)).unwrap();
+    let resumed = planner
+        .tick(std::slice::from_ref(&plan), &caps(), rolled)
+        .await
+        .unwrap();
+    assert_eq!(resumed.len(), 1);
+    let restored = planner.source_status("source/blog").await.unwrap();
+    assert!(restored.skip_reason.is_none());
+    assert_eq!(restored.budget_used, 1);
 }
