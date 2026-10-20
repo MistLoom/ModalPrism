@@ -1,0 +1,16 @@
+framework_version: "1"
+id: accessor_api
+open: true
+protocols: [fun]
+depends: []
+stateful: false
+description: API 访问
+methods:
+  - id: validate
+    description: 校验访问规格
+    input:
+      type: object
+  - id: access
+    description: 执行一次访问
+    input:
+      type: object

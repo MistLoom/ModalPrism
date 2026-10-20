@@ -1,0 +1,5 @@
+id: system
+kind: system
+name: ModalPrism
+policy:
+  preset: standard

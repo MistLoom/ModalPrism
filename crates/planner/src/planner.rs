@@ -36,7 +36,14 @@ pub struct SourcePlan {
     pub failure_threshold: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceStatus {
+    pub next_at: Option<String>,
+    pub interval_ms: u64,
+    pub health_status: String,
+    pub alert: bool,
+}
+
 pub struct Capacities {
     pub free: usize,
     pub paid: usize,
@@ -146,6 +153,41 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         }
         save_db(&self.persist, &db).await?;
         Ok(tasks)
+    }
+
+    pub async fn source_status(&self, source: &str) -> Result<SourceStatus, PlannerError> {
+        let _guard = self.lock.lock().await;
+        let db = load_db(&self.persist).await?;
+        let row = db.sources.get(source);
+        let health = db.health.get(&format!("source/{source}"));
+        Ok(SourceStatus {
+            next_at: row.and_then(|row| row.next_at.clone()),
+            interval_ms: row.map(|row| row.interval_ms).unwrap_or(0),
+            health_status: health
+                .map(|item| item.status.clone())
+                .unwrap_or_else(|| "ok".into()),
+            alert: health.is_some_and(|item| item.alert),
+        })
+    }
+
+    pub async fn make_due(&self, source: &str, now: Timestamp) -> Result<(), PlannerError> {
+        if source.is_empty() {
+            return Err(PlannerError::new("信源为空"));
+        }
+        let _guard = self.lock.lock().await;
+        let mut db = load_db(&self.persist).await?;
+        let row = db
+            .sources
+            .entry(source.to_string())
+            .or_insert_with(|| SourceRow {
+                next_at: None,
+                interval_ms: 0,
+                generation: 0,
+                last_yield_at: None,
+                last_recompute: None,
+            });
+        row.next_at = Some(stamp(now)?);
+        save_db(&self.persist, &db).await
     }
 
     pub async fn shutdown(&self, now: Timestamp) -> Result<Vec<AccessTask>, PlannerError> {

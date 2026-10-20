@@ -1,0 +1,16 @@
+[package]
+name = "strata_queue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "控制库任务队列"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+assembly = { path = "../../crates/assembly" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

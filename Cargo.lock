@@ -3,6 +3,145 @@
 version = 4
 
 [[package]]
+name = "ability-config"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-core"
+version = "0.1.0"
+source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+dependencies = [
+ "ability-support",
+ "async-trait",
+ "frame-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "ability-egress"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-planner"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-support"
+version = "0.1.0"
+source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+dependencies = [
+ "ability-support-macros",
+ "async-trait",
+ "encoding_rs 0.8.42",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "ability-support-macros"
+version = "0.1.0"
+source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "accessor_api"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "accessor_browser"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "accessor_file"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "accessor_http"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "accessor_paid_api"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "accessor_push"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "accessor_rss"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "accessor_search"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
 name = "accessors"
 version = "0.1.0"
 dependencies = [
@@ -402,6 +541,30 @@ dependencies = [
  "num-traits",
  "regex",
  "regex-syntax",
+]
+
+[[package]]
+name = "assembly"
+version = "0.1.0"
+dependencies = [
+ "accessors",
+ "accessors-builtin",
+ "adapters",
+ "async-trait",
+ "bytes",
+ "config",
+ "egress",
+ "paid",
+ "planner",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -904,10 +1067,13 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "bytes",
+ "form_urlencoded",
  "futures-util",
  "http",
  "http-body",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "itoa",
  "matchit",
  "memchr",
@@ -915,10 +1081,15 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -937,6 +1108,7 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -1320,6 +1492,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "committer"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,6 +1537,15 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "config_inspect"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
 ]
 
 [[package]]
@@ -2860,6 +3050,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "frame-core"
+version = "0.1.0"
+source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+dependencies = [
+ "ability-support",
+ "async-trait",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "frame-port-http"
+version = "0.1.0"
+source = "git+https://github.com/MistLoom/LEAF?rev=3dcd9c9d29a342ee9cb11411d96cbaf506269e46#3dcd9c9d29a342ee9cb11411d96cbaf506269e46"
+dependencies = [
+ "async-trait",
+ "axum",
+ "frame-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
 name = "frostem"
 version = "1.20260821.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3413,6 +3629,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "health"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
 name = "heapify"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3618,6 +3843,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -5355,6 +5581,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "modalprism-collector"
+version = "0.1.0"
+dependencies = [
+ "ability-config",
+ "ability-core",
+ "ability-egress",
+ "ability-planner",
+ "ability-support",
+ "accessor_api",
+ "accessor_browser",
+ "accessor_file",
+ "accessor_http",
+ "accessor_paid_api",
+ "accessor_push",
+ "accessor_rss",
+ "accessor_search",
+ "assembly",
+ "async-trait",
+ "committer",
+ "config",
+ "config_inspect",
+ "frame-core",
+ "frame-port-http",
+ "health",
+ "paid_gateway",
+ "runner",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "strata_queue",
+ "strata_read",
+ "strata_write",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "moka"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6177,6 +6440,15 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "ulid",
+]
+
+[[package]]
+name = "paid_gateway"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
 ]
 
 [[package]]
@@ -7218,6 +7490,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.4.2",
  "web-sys",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -7366,6 +7639,15 @@ dependencies = [
  "heapless",
  "num-traits",
  "smallvec",
+]
+
+[[package]]
+name = "runner"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
 ]
 
 [[package]]
@@ -7775,6 +8057,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap 2.14.2",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -8246,6 +8541,33 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "ulid",
+]
+
+[[package]]
+name = "strata_queue"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "strata_read"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
+]
+
+[[package]]
+name = "strata_write"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde_json",
 ]
 
 [[package]]
@@ -8750,6 +9072,7 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
  "url",
 ]
 
@@ -9206,6 +9529,15 @@ name = "webpki-root-certs"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

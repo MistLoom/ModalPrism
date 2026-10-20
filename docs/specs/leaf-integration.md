@@ -9,10 +9,10 @@
 | 包 | 允许的依赖 | 禁止的依赖 |
 |---|---|---|
 | 领域库（`crates/`） | 本仓库 crate 与第三方库 | `ability-sdk`、`ability-support`、`frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
-| Ability crate（`ability/`） | `ability-sdk` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
-| 组合根（`apps/modalprism-collector`、`apps/modalprism-agent`） | `frame-compose`、`frame-core`、`ability-core` | Ability 的实现逻辑 |
+| Ability crate（`ability/`） | `ability-support` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
+| 组合根（`apps/modalprism-collector`、`apps/modalprism-agent`） | `frame-core`、`ability-core`、`frame-port-http` | Ability 的实现逻辑 |
 
-`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。领域库与 Ability crate 不依赖这两个 crate。
+`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-sdk` 在 LEAF workspace 的 exclude 列表中，Cargo 不能把它当作该仓库的 git 依赖。Ability crate 依赖同一提交的 `ability-support`。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。运维 HTTP 端口再依赖 `frame-port-http`。领域库与 Ability crate 不依赖 `frame-core` 与 `ability-core`。
 
 Ability 实现 `Ability` / `AbilityProvider`，通过 `manifest`、`create`、`invoke`、`on_lifecycle` 接入。跨 Ability 调用只使用对方的 client 契约或 `AbilityCtx::call`。
 

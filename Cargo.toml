@@ -11,6 +11,27 @@ members = [
     "crates/paid",
     "crates/planner",
     "crates/accessors-builtin",
+    "crates/assembly",
+    "ability/strata_read",
+    "ability/strata_write",
+    "ability/strata_queue",
+    "ability/committer",
+    "ability/planner",
+    "ability/runner",
+    "ability/health",
+    "ability/config",
+    "ability/config_inspect",
+    "ability/egress",
+    "ability/paid_gateway",
+    "ability/accessor_http",
+    "ability/accessor_rss",
+    "ability/accessor_api",
+    "ability/accessor_paid_api",
+    "ability/accessor_search",
+    "ability/accessor_push",
+    "ability/accessor_file",
+    "ability/accessor_browser",
+    "apps/modalprism-collector",
 ]
 
 [workspace.package]
@@ -48,6 +69,11 @@ url = "2"
 psl = "2"
 flate2 = "1"
 base64 = "0.22"
+ability-support = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
+frame-core = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
+ability-core = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
+frame-port-http = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
