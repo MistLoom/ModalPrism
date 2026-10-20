@@ -108,10 +108,23 @@ fn is_token(raw: &str) -> bool {
 pub struct Timestamp(OffsetDateTime);
 
 impl Timestamp {
+    pub fn now() -> Self {
+        Self(OffsetDateTime::now_utc())
+    }
+
     pub fn parse(raw: &str) -> Result<Self, ModelError> {
         OffsetDateTime::parse(raw, &Rfc3339)
             .map(Self)
             .map_err(|_| ModelError::InvalidTimestamp)
+    }
+
+    pub fn checked_add(self, duration: std::time::Duration) -> Result<Self, ModelError> {
+        let duration =
+            time::Duration::try_from(duration).map_err(|_| ModelError::InvalidTimestamp)?;
+        self.0
+            .checked_add(duration)
+            .map(Self)
+            .ok_or(ModelError::InvalidTimestamp)
     }
 
     pub fn to_rfc3339(self) -> Result<String, ModelError> {

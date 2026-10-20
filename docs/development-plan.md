@@ -21,7 +21,7 @@
 
 **目标**　资源系统成为唯一数据面：只追加、单写者、按快照可见。
 
-**范围**　`crates/strata-store` 与 `crates/strata-client`。SQLite 控制存储、Lance 表、暂存区、Committer，以及进程内的 query、apply、queue。PostgreSQL 作为控制存储的另一种后端，接口在本阶段定下；多实例租约与共享暂存区仍受设计第 13 节的部署约束。
+**范围**　`crates/strata-store` 与 `crates/strata-client`。SQLite 控制存储、Lance 表、暂存区、Committer，以及进程内的 query、apply、queue。PostgreSQL 作为控制存储的另一种后端，接口在本阶段定下；多实例租约与共享暂存区仍受设计第 13 节的部署约束。查询范围、恢复和未接收的正文见 `docs/specs/strata-storage.md`。
 
 **交付**　本地目录上的初始化路径；`apply` 的 accepted 结果；刷写后的快照读取。
 
@@ -110,7 +110,7 @@
 - 再次启动不破坏已发布的快照。
 - 配置校验失败时不替换当前快照。
 - 进程退出时释放任务租约。
-- 本阶段开始前，规格中的所有者决定已经落地；未决定前不引入该决定所涉及的依赖。
+- 组合根直接依赖 `frame-core` 与 `ability-core` 链接 Ability。端口访问控制未规定前，不在端口上增加鉴权协议。
 
 ## 阶段 8　抽象类型与只读表面
 

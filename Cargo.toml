@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/strata-model"]
+members = ["crates/strata-model", "crates/strata-store", "crates/strata-client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,6 +16,16 @@ thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 ulid = "1"
 humantime-serde = "1"
+arrow-array = "58"
+arrow-buffer = "58"
+arrow-schema = "58"
+bytes = "1"
+futures = "0.3"
+lance = "=13.0.0"
+lancedb = { version = "=0.40.0", features = ["remote"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
