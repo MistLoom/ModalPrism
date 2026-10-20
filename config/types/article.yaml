@@ -1,0 +1,10 @@
+id: type/article
+kind: type
+name: Article
+description: 文章投影
+schema: schemas/article.json
+spec:
+  selector:
+    hasFacets:
+      - kind: struct
+        variant: article

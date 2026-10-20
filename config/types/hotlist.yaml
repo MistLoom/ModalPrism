@@ -1,0 +1,11 @@
+id: type/hotlist
+kind: type
+name: HotList
+description: 热榜快照
+schema: schemas/hotlist.json
+spec:
+  keepSnapshots: 288
+  selector:
+    hasFacets:
+      - kind: struct
+        variant: hotlist.snapshot

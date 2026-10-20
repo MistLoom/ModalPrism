@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rid", "list", "snapshot", "entries", "delta"],
+  "properties": {
+    "rid": { "type": "string" },
+    "list": { "type": ["string", "null"] },
+    "snapshot": true,
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dst", "rank", "attrs"],
+        "properties": {
+          "dst": { "type": "string" },
+          "rank": { "type": ["integer", "null"] },
+          "attrs": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "delta": { "type": ["object", "null"] }
+  }
+}

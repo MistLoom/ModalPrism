@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rid", "struct", "readable", "cover"],
+  "properties": {
+    "rid": { "type": "string" },
+    "struct": true,
+    "readable": { "type": ["string", "null"] },
+    "cover": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["sha256", "size"],
+      "properties": {
+        "sha256": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

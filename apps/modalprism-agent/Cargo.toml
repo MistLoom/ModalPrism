@@ -1,0 +1,28 @@
+[package]
+name = "modalprism-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "面向 Agent 的只读 MCP 表面"
+publish = false
+
+[dependencies]
+ability-core.workspace = true
+ability-support.workspace = true
+async-trait.workspace = true
+frame-core.workspace = true
+frame-port-mcp.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+type_article = { path = "../../ability/type_article" }
+type_hotlist = { path = "../../ability/type_hotlist" }
+types = { path = "../../crates/types" }
+
+[dev-dependencies]
+config = { path = "../../crates/config" }
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

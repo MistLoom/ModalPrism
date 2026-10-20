@@ -1,0 +1,24 @@
+[package]
+name = "types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Article 与 HotList 的只读投影，以及只读进程的数据入口"
+publish = false
+
+[dependencies]
+config = { path = "../config" }
+serde.workspace = true
+serde_json.workspace = true
+strata-client = { path = "../strata-client" }
+strata-model = { path = "../strata-model" }
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+framework_version: "1"
+id: type_hotlist
+open: true
+protocols: [fun, mcp, tools]
+depends: []
+stateful: false
+description: 热榜快照投影与变更集
+methods:
+  - id: project
+    description: 投影一期热榜
+    input:
+      type: object
+  - id: on_commit
+    description: 返回名次差与保留份数的变更集
+    input:
+      type: object
