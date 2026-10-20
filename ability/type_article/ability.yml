@@ -1,0 +1,16 @@
+framework_version: "1"
+id: type_article
+open: true
+protocols: [fun, mcp, tools]
+depends: []
+stateful: false
+description: 文章投影
+methods:
+  - id: project
+    description: 投影一篇文章
+    input:
+      type: object
+  - id: on_commit
+    description: 文章不产出变更集
+    input:
+      type: object
