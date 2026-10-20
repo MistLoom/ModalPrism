@@ -58,7 +58,7 @@ modalprism-collector [--data DIR] [--config DIR] [--http ADDR] [--proxy ADDR] [-
 
 定位符是 `channel` 的信源不进入 `tick`。推送由 push 监听调用 `PushAccessor::ingest`。
 
-`runner.run_task` 在进程内调用访问器和 `adapters` 的内置注册表。访问器拿到的策略是 `overlay_system_policy(applied.system, 信源 policy)`。出站策略和付费 `unknown_receipt` 按同一次 `applied` 组装：robots 的模式、crawl delay、豁免类别来自信源，豁免名单、缓存时间、不可达策略、私网和身份来自系统，`unknown_receipt` 来自访问器。pipeline 为空时，每个 `document` 部件写成 `raw` facet，正文是 `Body::Staged`。pipeline 非空时采用 `adapters::run` 返回的操作。`follows` 不入队。信源已不在快照中时 `nack`，消息是 `config`。
+`runner.run_task` 在进程内调用访问器和 `adapters` 的内置注册表。访问器拿到的策略是 `overlay_system_policy(applied.system, 信源 policy)`。出站策略和付费 `unknown_receipt` 按同一次 `applied` 组装：robots 的模式、crawl delay、豁免类别来自信源，豁免名单、缓存时间、不可达策略、私网和身份来自系统，`unknown_receipt` 来自访问器。同一次访问的 HTTP 传输超时是该任务的截止时间，取访问器 `limits.timeout`，缺省 30 秒。进行中的请求在截止时间被中断。时限长于 30 秒时，请求保持到该时限。租约时长是同一个 `limits.timeout` 的 1.5 倍。pipeline 为空时，每个 `document` 部件写成 `raw` facet，正文是 `Body::Staged`。pipeline 非空时采用 `adapters::run` 返回的操作。`follows` 不入队。信源已不在快照中时 `nack`，消息是 `config`。
 
 完成回执的 `logicalKey` 是付费网关为该 `receipt_id` 保存的逻辑键，`service` 是该次回执上的服务名。
 
