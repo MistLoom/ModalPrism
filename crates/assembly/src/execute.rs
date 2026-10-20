@@ -111,8 +111,13 @@ pub async fn fetch(
         }),
         cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
-    let envelopes = crate::transport::EGRESS_POLICY
-        .scope(egress_policy, accessor.access(request, &context))
+    let deadline = request.deadline;
+    let envelopes = crate::transport::REQUEST_DEADLINE
+        .scope(
+            deadline,
+            crate::transport::EGRESS_POLICY
+                .scope(egress_policy, accessor.access(request, &context)),
+        )
         .await
         .map_err(from_access)?;
     let pipeline = module
