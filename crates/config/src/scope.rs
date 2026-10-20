@@ -1,5 +1,7 @@
 //! 策略键的作用域。
 
+use serde_json::{Map, Value};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DocKind {
     System,
@@ -62,6 +64,51 @@ const PATHS: &[(&str, Scope)] = &[
     ("health.yield_drop_ratio", Scope::Source),
     ("health.failure_threshold", Scope::Source),
 ];
+
+/// 把系统作用域策略键覆盖到模块策略上，供访问器读取有效策略。
+pub fn overlay_system_policy(system: &Value, module_policy: &Value) -> Value {
+    let mut policy = match module_policy {
+        Value::Object(map) => Value::Object(map.clone()),
+        _ => Value::Object(Map::new()),
+    };
+    if let Some(system_policy) = system.get("policy") {
+        copy_system(&mut policy, system_policy, "");
+    }
+    policy
+}
+
+fn copy_system(dst: &mut Value, src: &Value, path: &str) {
+    let Some(map) = src.as_object() else {
+        return;
+    };
+    for (key, value) in map {
+        if key == "preset" || key == "locks" {
+            continue;
+        }
+        let child = if path.is_empty() {
+            key.clone()
+        } else {
+            format!("{path}.{key}")
+        };
+        if value.is_object() && scope_of(&child).is_none() {
+            let entry = dst
+                .as_object_mut()
+                .expect("策略是对象")
+                .entry(key.clone())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if !entry.is_object() {
+                *entry = Value::Object(Map::new());
+            }
+            copy_system(entry, value, &child);
+            continue;
+        }
+        if scope_of(&child) == Some(Scope::System) {
+            dst.as_object_mut()
+                .expect("策略是对象")
+                .insert(key.clone(), value.clone());
+        }
+    }
+}
 
 pub fn scope_of(path: &str) -> Option<Scope> {
     let mut found = None;
