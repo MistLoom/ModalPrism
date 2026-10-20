@@ -17,6 +17,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+strata-store = { path = "../strata-store" }
 tempfile.workspace = true
 tokio.workspace = true
 

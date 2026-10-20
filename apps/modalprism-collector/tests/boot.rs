@@ -1,5 +1,6 @@
 //! 组合根能拉起存储、配置代数，并只在运维端口放行只读调度面。
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -8,9 +9,12 @@ use ability_support::{InstanceId, MethodId};
 use assembly::Binds;
 use config::builtin_presets;
 use frame_core::{Gateway, InvokeRequest};
-use modalprism_collector::boot;
+use modalprism_collector::{apply_hotlist, boot};
 use serde_json::json;
-use strata_model::{AccessTask, Locator, QueueName, SourceId, TaskId, TaskReason, Timestamp};
+use strata_model::{
+    AccessTask, ApplyOpts, Body, ChangeSet, FacetKind, FacetSelector, LineageInput, Locator, Op,
+    Producer, Query, QueryFrom, QueueName, Rid, SourceId, Target, TaskId, TaskReason, Timestamp,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -153,4 +157,157 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
             .unwrap(),
         0
     );
+}
+
+#[tokio::test]
+async fn visible_flush_commits_the_hotlist_changeset() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    write(
+        config.path(),
+        "types/hotlist.yaml",
+        "id: type/hotlist\nkind: type\nname: HotList\nspec:\n  keepSnapshots: 2\n",
+    );
+    let running = boot(data.path(), config.path(), binds_zero())
+        .await
+        .unwrap();
+    let strata = running.services().strata();
+    store(
+        &strata,
+        vec![ensure("ext:list:board", "list"), ensure("ext:item:a", "a")],
+    )
+    .await;
+    strata.flush().await.unwrap();
+    let list = strata.resolve("ext:list:board").await.unwrap().unwrap();
+    let item = strata.resolve("ext:item:a").await.unwrap().unwrap();
+    store(&strata, snapshot("ext:snap:1", "s1", &list, &item, 1)).await;
+    strata.flush().await.unwrap();
+    let first = strata
+        .resolve("ext:snap:1")
+        .await
+        .unwrap()
+        .unwrap()
+        .to_string();
+    let page = strata.query(hotlist_selector()).await.unwrap();
+    let stamp = page.rows.iter().find(|row| row["rid"] == first).unwrap()["createdAt"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_past(&stamp).await;
+    store(&strata, snapshot("ext:snap:2", "s2", &list, &item, 2)).await;
+    strata.flush().await.unwrap();
+    assert!(apply_hotlist(running.services()).await.unwrap());
+    let listed = running
+        .host()
+        .invoke(InvokeRequest::new(
+            InstanceId::new("strata_read").unwrap(),
+            MethodId::new("query").unwrap(),
+            json!({
+                "query": {
+                    "from": "resources",
+                    "hasFacets": [{ "kind": "struct", "variant": "hotlist.delta" }]
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+    assert!(!listed.data["rows"].as_array().unwrap().is_empty());
+}
+
+fn binds_zero() -> Binds {
+    Binds {
+        http: "127.0.0.1:0".parse().unwrap(),
+        proxy: "127.0.0.1:0".parse().unwrap(),
+        push: "127.0.0.1:0".parse().unwrap(),
+    }
+}
+
+async fn wait_past(stamp: &str) {
+    let parsed = Timestamp::parse(stamp).unwrap();
+    for _ in 0..100 {
+        if Timestamp::now() > parsed {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("时间没有前进");
+}
+
+async fn store(strata: &strata_client::Strata, ops: Vec<Op>) {
+    strata
+        .apply(
+            ChangeSet {
+                producer: Producer {
+                    module: "test".into(),
+                    version: "1".into(),
+                    config_generation: 1,
+                },
+                idempotency_key: None,
+                ack: None,
+                ops,
+            },
+            ApplyOpts::default(),
+        )
+        .await
+        .unwrap();
+}
+
+fn ensure(identity: &str, alias: &str) -> Op {
+    Op::Ensure {
+        identity: identity.into(),
+        ns: None,
+        labels: BTreeMap::new(),
+        r#as: alias.into(),
+    }
+}
+
+fn snapshot(identity: &str, alias: &str, list: &Rid, item: &Rid, rank: i64) -> Vec<Op> {
+    vec![
+        ensure(identity, alias),
+        Op::PutFacet {
+            target: Target::Alias(alias.into()),
+            kind: FacetKind::Struct,
+            variant: Some("hotlist.snapshot".into()),
+            body: Body::Struct {
+                value: json!({ "id": identity }),
+            },
+            media_type: Some("application/json".into()),
+            lineage: LineageInput {
+                inputs: Vec::new(),
+                params_hash: "params".into(),
+            },
+        },
+        Op::Link {
+            src: Target::Alias(alias.into()),
+            rel: "part_of".into(),
+            dst: Target::Rid(list.clone()),
+            attrs: None,
+        },
+        Op::Link {
+            src: Target::Alias(alias.into()),
+            rel: "entry".into(),
+            dst: Target::Rid(item.clone()),
+            attrs: Some(json!({ "rank": rank })),
+        },
+    ]
+}
+
+fn hotlist_selector() -> Query {
+    Query {
+        from: QueryFrom::Resources,
+        r#where: None,
+        has_facets: vec![FacetSelector {
+            kind: FacetKind::Struct,
+            variant: Some("hotlist.snapshot".into()),
+            fields: Vec::new(),
+        }],
+        select: Vec::new(),
+        expand: Vec::new(),
+        search: None,
+        as_of: None,
+        order_by: Vec::new(),
+        limit: None,
+        cursor: None,
+    }
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 use ability_support::{InstanceId, MethodId};
 use config::builtin_presets;
 use frame_core::{Gateway, InvokeRequest};
-use modalprism_agent::{boot, parse_args};
+use modalprism_agent::{boot, mcp_gateway, parse_args};
 use serde_json::json;
 
 fn write(dir: &Path, rel: &str, body: &str) {
@@ -142,4 +142,53 @@ async fn boot_exposes_only_the_read_surface() {
     else {
         panic!("health.evaluate 不在只读表面");
     };
+}
+
+#[tokio::test]
+async fn mcp_catalog_names_are_instance_method() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let running = boot(data.path(), config.path()).await.unwrap();
+    let tools = mcp_gateway(running.gateway());
+    let catalog = tools.catalog();
+    assert!(
+        catalog
+            .iter()
+            .any(|entry| entry.instance.as_str() == "strata_read.kinds")
+    );
+    assert!(
+        catalog
+            .iter()
+            .any(|entry| entry.instance.as_str() == "health.status")
+    );
+    let mut names: Vec<_> = catalog
+        .iter()
+        .map(|entry| entry.instance.as_str().to_string())
+        .collect();
+    let count = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), count);
+    assert!(names.iter().all(|name| name.contains('.')));
+
+    let health = tools
+        .invoke(InvokeRequest::new(
+            InstanceId::new("health.status").unwrap(),
+            MethodId::new("status").unwrap(),
+            json!({ "source": "demo" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(health.data["status"], "ok");
+
+    let kinds = tools
+        .invoke(InvokeRequest::new(
+            InstanceId::new("strata_read.kinds").unwrap(),
+            MethodId::new("kinds").unwrap(),
+            json!({ "rid": "r_01ARZ3NDEKTSV4RRFFQ69G5FAV" }),
+        ))
+        .await
+        .unwrap();
+    assert!(kinds.data.as_array().is_some());
 }

@@ -50,6 +50,8 @@ modalprism-collector [--data DIR] [--config DIR] [--http ADDR] [--proxy ADDR] [-
 | `policy.commit.flush_interval`，缺省 30 秒 | `committer.flush` |
 | 60 秒 | `health.evaluate` |
 
+`committer.flush` 得到可见快照序号后，采集进程调用 `HotList::on_commit`，把返回的变更集 `apply`，再 `flush`。类型实现不调用 `apply`。
+
 `planner.tick`、`runner.run_task`、`flush_interval`、push 监听和健康快照都读 `applied`。`health.evaluate` 每 60 秒调用一次。传给 `Planner::snapshot` 的间隔是 `policy.state.snapshot_interval`，缺省 15 分钟。进行中的任务把变更集的 `config_generation` 写成任务上的 `generation`。
 
 `planner.tick` 的并发容量是固定值：`free` 4、`paid` 1、`render` 2、`push` 4。健康计算使用的产量下降比是 0.3，连续失败阈值是 5。配置里没有这两类键。

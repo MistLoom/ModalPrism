@@ -5646,6 +5646,7 @@ dependencies = [
  "strata_write",
  "tempfile",
  "tokio",
+ "types",
 ]
 
 [[package]]
@@ -9307,6 +9308,7 @@ dependencies = [
  "serde_json",
  "strata-client",
  "strata-model",
+ "strata-store",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

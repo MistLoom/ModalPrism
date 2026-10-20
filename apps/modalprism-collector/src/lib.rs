@@ -307,7 +307,12 @@ fn spawn_loops(
             if stop_flush.load(Ordering::Relaxed) {
                 break;
             }
-            let _ = invoke(&host_flush, "committer", "flush", json!({})).await;
+            let Ok(value) = invoke(&host_flush, "committer", "flush", json!({})).await else {
+                continue;
+            };
+            if value.get("snapshot").is_some_and(|item| !item.is_null()) {
+                let _ = apply_hotlist(&services_flush).await;
+            }
         }
     });
     let stop_health = stop;
@@ -322,6 +327,26 @@ fn spawn_loops(
         }
     });
     vec![tick, flush, health]
+}
+
+pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {
+    let applied = services.config().applied();
+    let Some(changeset) =
+        types::HotList::changeset(services.strata().as_ref(), applied.as_ref()).await?
+    else {
+        return Ok(false);
+    };
+    services
+        .strata()
+        .apply(changeset, strata_model::ApplyOpts::default())
+        .await
+        .map_err(|error| types::Error::new(error.to_string()))?;
+    services
+        .strata()
+        .flush()
+        .await
+        .map_err(|error| types::Error::new(error.to_string()))?;
+    Ok(true)
 }
 
 async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>) {
