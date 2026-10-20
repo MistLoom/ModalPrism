@@ -59,7 +59,7 @@
 
 ## 刷写与可见性
 
-库内不启动刷写循环。调用方执行 `flush` 和 `recover`。`WaitFor::Visible` 在 `apply` 的事务提交后执行一次 `flush`。
+库内不启动刷写循环。调用方执行 `flush` 和 `recover`。`WaitFor::Visible` 在 `apply` 的事务提交后执行一次 `flush`。等待超时不取消这次刷写，错误携带已接受的提交号。刷写本身失败时，`apply` 返回已接受的结果，状态是 `Accepted`。没有已接收变更集时，`flush` 仍按 `staging_ttl` 删除过期且无引用的暂存文件。
 
 一批已接收变更集：
 
@@ -115,7 +115,7 @@ facet 的内容哈希与该种类最新可见版本相同时不追加行。比�
 
 其他键返回错误，不按未命中处理。带 `search` 的查询返回错误。
 
-时间字段按时间点比较，其他字段按 JSON 值比较。不能比较时返回错误。
+`createdAt`、`updatedAt`、`publishedAt` 的 `eq` 与 `gte` 都按时间点比较。两种 RFC 3339 写法表示同一时刻时，`eq` 成立。其他字段按 JSON 值比较。不能比较时返回错误。
 
 `hasFacets` 和 `expand` 只用于 `from=resources`。选择器带 `variant` 时种类和变体都要匹配。`expand.depth` 缺省为 1，`0` 不展开。
 
