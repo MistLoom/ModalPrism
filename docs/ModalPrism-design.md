@@ -1618,7 +1618,7 @@ sequenceDiagram
 |---|---|---|
 | 语言 | Rust（edition 2024） | 与 LEAF 工作区一致 [C1] |
 | 能力运行时 | LEAF | 各模块实现为 Ability，经同一个 Gateway 调用，按声明投影到 CLI、HTTP、MCP、gRPC、LLM tools、Skill 和进程内 Fun [C1][C5] |
-| 数据面 | `lancedb` 0.40.0，`lance` 13.0.0 | LanceDB Rust SDK；`lancedb` 0.40.0 固定依赖 `lance` =13.0.0，Strata 直接依赖同一版本的 `lance` 以使用 Blob v2 的建列与写入接口 [A20][A21] |
+| 数据面 | `lancedb` 0.40.0（打开 `remote` feature），`lance` 13.0.0 | LanceDB Rust SDK；`lancedb` 0.40.0 固定依赖 `lance` =13.0.0，未打开 `remote` feature 时不能编译。Strata 直接依赖同一版本的 `lance` 以使用 Blob v2 的建列与写入接口 [A20][A21] |
 | 列式数据 | `arrow-array` / `arrow-schema` 58 | 与 `lancedb` 0.40.0 的依赖版本一致 [A20] |
 | 异步运行时 | tokio | `lancedb` 依赖 tokio；应用的循环、监听和定时也使用 tokio |
 | 控制存储 | sqlx（SQLite / PostgreSQL） | 对应 5.7 的两种后端 |
@@ -1696,7 +1696,7 @@ modalprism/
 5. **只读与写入分离**。Expose 以实例为单位决定加载与可见性，不裁剪方法 [C3]，因此读、写、控制面拆成不同的 Ability（`strata_read` / `strata_write` / `strata_queue`，`config_inspect` / `config`），对外表面只加载只读实例。
 6. **单写者**。`committer` 只在一个进程中加载，并持有控制存储中的 Committer 租约（5.7）。
 7. **循环由组合根持有**。LEAF 不提供定时或后台任务。Planner 节拍、Runner 工作者、Committer 刷写和维护、健康评估、配置监听是组合根进程中的任务，按节拍经 Gateway 调用对应方法（12.6）。Ability 的 `on_lifecycle(Started)` 返回后，实例才进入 Ready。
-8. **本仓库 Ability 的链接**。`WorkspaceCatalog::discover` 与编译期注册表只覆盖 LEAF 仓库内的能力。本仓库的 Provider 由组合根 install 后再 load。`stateful: true` 的 Ability 在一个进程内只有一个实例。端口可见性、二进制传递和事件语义见 `docs/specs/leaf-integration.md`。
+8. **本仓库 Ability 的链接**。`WorkspaceCatalog::discover` 与编译期注册表只覆盖 LEAF 仓库内的能力。本仓库的 Provider 由组合根 install 后再 load。组合根直接依赖 `frame-core` 与 `ability-core`。`stateful: true` 的 Ability 在一个进程内只有一个实例。端口可见性、二进制传递和事件语义见 `docs/specs/leaf-integration.md`。
 
 `strata_read` 的声明示例：
 
@@ -1831,7 +1831,7 @@ abilities:
 
 ### 12.7 约束
 
-1. LEAF 处于早期预览，API 与布局可能变化；`external/` 是实验性的仓外编写面 [C1]。Ability crate 只依赖 `ability-sdk`。接入的 git 提交写在 `docs/specs/leaf-integration.md`。
+1. LEAF 处于早期预览，API 与布局可能变化；`external/` 是实验性的仓外编写面 [C1]。Ability crate 只依赖 `ability-sdk`。组合根直接依赖 `frame-core` 与 `ability-core` 链接本仓库 Ability。接入的 git 提交写在 `docs/specs/leaf-integration.md`。
 2. 遵循 LEAF 的架构约束：Port 只依赖 Gateway；Ability 不按调用来自 MCP、CLI 或 LLM tools 分支；协议身份只出现在声明与 Port 中 [C2]。
 3. Expose 只裁剪 Port → Gateway，`ctx.call` 不受 Expose 限制 [C2][C3]。对外表面的最小暴露依靠"只加载只读实例"实现。
 4. 业务逻辑放在 Ability 与库 crate 中，不修改 LEAF 引擎；扩展通过新增 Ability 或 Port 完成 [C1]。
@@ -1842,7 +1842,7 @@ abilities:
 
 以下事项需要确认或进一步评估。
 
-1. **Blob v2 与 merge_insert**。`blobs` 表以 `merge_insert` 实现"不存在才插入"，Blob v2 列在 merge_insert 写入路径上的行为（内联、sidecar、独立文件的落盘）需要用 `lance` 13.0.0 实测确认。
+1. **Blob v2 与 merge_insert**。`lance` 13.0.0 上，`blobs.data` 可以通过 `merge_insert`（`when_not_matched_insert_all`，连接键 `sha256`）写入。相同 `sha256` 不新增行。内联阈值 16 字节、独立文件阈值 64 字节时，8 字节载荷写在 `blobs.lance/data/*.lance` 内；32 字节与 96 字节载荷各对应一个同目录下的 `*.blob` 文件。这两个 `*.blob` 文件的名字不区分 sidecar 与独立文件。
 2. **快照方案的压测**。需要验证：按快照版本 `checkout` 多表的打开开销；不同刷写间隔下的版本数量与对象存储列举成本；崩溃后 `restore` 加重放的恢复时间；`optimize()` 与刷写交替时的可见延迟。
 3. **多实例部署**。单机默认 SQLite；多实例需要 PostgreSQL，并需确认 Committer 选主的租约时长和故障切换期间的可见延迟。暂存区（12.4）是本地目录，多实例时需要共享存储，或按实例暂存并由所在实例提交。
 4. **moli 的能力覆盖**。需要在目标信源样本上验证：CDP 网络域逐个获取接口响应体（`capture.network=all-bodies`）的覆盖度；`moli serve` 长时间运行的稳定性和回收阈值；经正向代理时子请求的行为；与 Chromium 回退的切换比例。moli 发布频繁，版本固定和升级节奏需要约定。
@@ -1852,8 +1852,9 @@ abilities:
 8. **中文全文检索**。`jieba/*` 分词器需要模型文件 [A13]，需要确认部署方式，以及与 `icu`、`ngram` 在召回和索引体积上的取舍。
 9. **配置约束语言**。本文以 JSON Schema 为主、CUE 为可选，是否统一采用 CUE 需要决定。
 10. **多租户与权限**。本文没有涉及多租户隔离和读写权限模型，如有需要，应在 Strata API 层增加命名空间级授权。
-11. **组合根对内核 crate 的直接依赖**。链接本仓库 Ability 时，现有 API 使用 `frame-core` 的 `AbilityExpose`、`AccessKind`、`InvokeRequest`，以及 `ability-core` 的 `AbilityHost` 与 `AbilityGrant`。架构约束禁止外部包依赖 `frame-core`、port 和 `ability-core`。该约束是否覆盖组合根，见 `docs/specs/leaf-integration.md`。决定之前，组合根不添加这些依赖。
-12. **端口访问控制**。HTTP、gRPC、MCP 端口接受调用方传入的监听地址，实现中没有 TLS 与鉴权。监听地址以外的访问控制需要规定。决定之前，不在端口上增加鉴权协议。
+11. **端口访问控制**。HTTP、gRPC、MCP 端口接受调用方传入的监听地址，实现中没有 TLS 与鉴权。监听地址以外的访问控制需要规定。决定之前，不在端口上增加鉴权协议。
+12. **embedding 正文**。种类 `embedding` 的正文形态和向量维度没有规定。存储不接收该种类，不建 `embeddings_*` 表。
+13. **外部引用**。`Body::External` 的内容哈希没有规定。存储不接收该正文。
 
 ---
 

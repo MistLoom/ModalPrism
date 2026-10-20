@@ -2,7 +2,7 @@
 
 对照 LEAF 提交 `3dcd9c9d29a342ee9cb11411d96cbaf506269e46`。
 
-本文只记录该提交中已经存在的行为，以及 ModalPrism 必须满足的要求。组合根如何依赖内核，见文末未决项。
+本文只记录该提交中已经存在的行为，以及 ModalPrism 必须满足的要求。
 
 ## 依赖边界
 
@@ -10,9 +10,9 @@
 |---|---|---|
 | 领域库（`crates/`） | 本仓库 crate 与第三方库 | `ability-sdk`、`ability-support`、`frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
 | Ability crate（`ability/`） | `ability-sdk` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
-| 组合根（`apps/modalprism-collector`、`apps/modalprism-agent`） | 见文末未决项 | Ability 的实现逻辑 |
+| 组合根（`apps/modalprism-collector`、`apps/modalprism-agent`） | `frame-compose`、`frame-core`、`ability-core` | Ability 的实现逻辑 |
 
-`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。
+`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。领域库与 Ability crate 不依赖这两个 crate。
 
 Ability 实现 `Ability` / `AbilityProvider`，通过 `manifest`、`create`、`invoke`、`on_lifecycle` 接入。跨 Ability 调用只使用对方的 client 契约或 `AbilityCtx::call`。
 
@@ -39,7 +39,7 @@ LEAF 的发现范围是固定的。
 7. Host 的 `access_gate` 只有一个 `Option<AccessKind>`，且位于 Host 内部共享状态上。一个 Host 不能同时按多个协议过滤。`frame/port-http` 自身不按协议声明过滤目录。
 8. 组合根在打开每个端口之前，限制该端口可见的实例集合，使该端口只暴露已登记对应协议的实例。不用单个 `access_gate` 代表全部端口。
 
-`external/showcase` 是 LEAF 仓库内的仓外接入示例，它直接依赖 `frame-compose`、`frame-core` 与 `frame-port-fun`。这与架构约束第 7 条的字面范围是否覆盖组合根，见文末未决项。
+`external/showcase` 是 LEAF 仓库内的仓外接入示例，它直接依赖 `frame-compose`、`frame-core` 与 `frame-port-fun`。ModalPrism 的组合根同样直接依赖 `frame-core` 与 `ability-core` 完成本仓库 Ability 的 install 与 load。
 
 远程进程使用另一条路径：客端只依赖 `ability-sdk` 的 `serve` / `serve_stdio`，帧格式在 `ability_support::remote`，一行一帧 JSON。宿主侧 `ProcProvider` 与 `connect` 位于 `ability-core`。`request_frame` 的超时是 10 秒，覆盖调用与生命周期应答。ModalPrism 的采集进程与 Ability 同进程链接，不把数据面放在这条远程路径上。
 
@@ -120,5 +120,4 @@ LEAF 的范围是能力层运行时，应用主循环由使用方持有。生命
 
 ## 未决项
 
-1. **组合根能否直接依赖 `frame-core` 与 `ability-core`。** 完成链接需要这两处的类型：`AbilityExpose`、`AccessKind`、`InvokeRequest` 在 `frame-core`；`AbilityHost::install`、`AbilityGrant`、`ProcProvider` 在 `ability-core`。`AppHandle.host` 的类型是 `AbilityHost`，`AppBuilder::expose` 的参数类型是 `AbilityExpose`。`external/showcase` 直接依赖了 `frame-core`。架构约束第 7 条禁止外部包依赖 `frame-core`、port 和 `ability-core`。约束若只适用于 Ability crate，组合根可以依赖 `frame-compose` 以及上述类型所在的 crate。约束若适用于组合根，则现有 API 无法在不修改 LEAF 的情况下完成链接。决定之前，领域库和 Ability crate 不依赖这些 crate，组合根也不添加该依赖。
-2. **端口访问控制。** LEAF 端口没有 TLS 与鉴权。监听地址以外的访问控制（是否只绑定本机、是否在端口前增加鉴权）需要所有者规定。决定之前，不在端口上增加自定的鉴权协议。
+1. **端口访问控制。** LEAF 端口没有 TLS 与鉴权。监听地址以外的访问控制（是否只绑定本机、是否在端口前增加鉴权）需要所有者规定。决定之前，不在端口上增加自定的鉴权协议。
