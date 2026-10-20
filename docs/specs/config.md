@@ -70,7 +70,7 @@ YAML 使用 1.2 核心模式。显式标签、重复键、一个文件中的多�
 - `access.accessor` 指向已有访问器。`pipeline` 的 `run` 与 `run_if_accepts` 指向已有适配器。
 - `role: search` 的 `produces` 各项为 `discovery`。`role: content` 的各项为带 `kind` 的对象。
 - `robots.mode` 为 `ignore` 时信源必须有 `robots_reason`，且不写 `exempt_as`。写出 `exempt_as` 时，mode 必须是 `obey-with-exemptions`，类别属于系统策略的 `robots.exemptions`，并且必须有 `robots_reason`。`obey` 不写 `exempt_as`。
-- `implementation` 以 `builtin:paid` 开头，或写出了 `paid` 时，`paid.service` 与 `paid.budget` 为非空字符串。
+- `implementation` 以 `builtin:paid` 开头时，`paid.service` 为非空字符串。使用 `accessor/paid-api` 的信源，以及写出 `paid` 的信源，必须有 `paid.budget`：`requests` 为不小于 1 的整数，`window` 为时长。`requests` 是该窗口内允许的付费请求次数。
 - `spec` 的键不与基础字段或 `policy` 的顶层键同名。`spec` 中的 `$schema` 指向 `schemas/` 下的文件时，用该 schema 校验 `spec` 的其余内容。
 - `adaptive: true` 时 `floor`、`ceiling`、`expectedPeriod` 必填；否则 `interval` 必填。
 

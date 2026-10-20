@@ -21,11 +21,11 @@
 
 列表 spec 可以写 `detail`。`maxFetches` 为 0 到 50，`fields` 取 `publishedAt`、`title`、`summary`。请求的字段在列表里缺失，且摘要没有作为正文时，产出 `Follow::Yes`，`needs` 列出缺失字段，访问器是 `accessor/http`。`maxFetches` 大于 0 时这些跟进入队，每轮不超过该上限。已经写入 `struct:page` 且所需字段非空的资源不占名额。跟进任务不改写信源的下次时间和游标。详情页由 `adapter/page-fields` 读取，结果写入 `struct:page`。
 
-付费请求的 `headers` 写在信源 `access.spec`，格式与 HTTP 访问器相同，原样进入 `PaidCall`。密钥用 `${env:NAME}` 写在头或正文里。`enabled: false` 的模块保留 `${env:NAME}` 字面量，加载不因变量缺失失败。启用后变量缺失则整次加载失败。`paid.budget` 的计量单位未规定，装配不把它换成次数或金额。付费访问器上的 `paid.service` 与 `paid.budget` 只满足非空要求。
+付费请求的 `headers` 写在信源 `access.spec`，格式与 HTTP 访问器相同，原样进入 `PaidCall`。密钥用 `${env:NAME}` 写在头或正文里。`enabled: false` 的模块保留 `${env:NAME}` 字面量，加载不因变量缺失失败。启用后变量缺失则整次加载失败。
 
-信源模块没有 `paid` 字段，因此使用 `accessor/paid-api` 的信源进入免费队列。付费队列只在信源写出 `paid` 时选用；当前模块字段表不接受该键。
+`paid.budget` 是每个时间窗口内允许的付费请求次数。`requests` 为正整数，`window` 为时长。例如 `requests: 48` 与 `window: 1d` 表示每天 48 次。窗口按 UTC 把 Unix 毫秒向下对齐到 `window`。调度派出一条新的计划任务时计数加一。次数达到 `requests` 后，本窗口余下的时间跳过该信源，`planner.next` 的 `skipReason` 为 `budget`，`next_at` 写到下一窗口起点。进入下一窗口后计数归零，`skipReason` 清空，到期任务继续派出。重新领取同一条未完成任务不计数。
 
-`policy.robots.mode` 可以写在单个信源上。`ignore` 必须同时写 `robots_reason`，并且不写 `exempt_as`。
+付费访问器写出 `paid.service`。使用 `accessor/paid-api` 的信源写出 `paid.budget`，并进入付费队列。
 
 脚本里的列表用 `accessor/bundle-list`。它先读页面，抽不出条目时再取页面里的脚本地址。`extract` 按顺序尝试 `quoted-fields` 与 `route-record`，命中的第一份脚本停止。抽出的 JSON 交给 `adapter/json-list`。
 
@@ -54,7 +54,7 @@
 | `source/import-ai` | Import AI | `https://importai.substack.com/feed` | 3h |
 | `source/latent-space` | Latent Space | `https://www.latent.space/feed` | 3h |
 
-`source/the-decoder` 的 `policy.robots.mode` 为 `ignore`。该站点的 robots 禁止全部订阅路径，`robots_reason` 写明采集对象就是这条订阅地址。
+`source/the-decoder` 的 `enabled` 为 false。该站点的 robots 规则不允许抓取 `https://the-decoder.com/feed/`，因此默认关闭。启用时把 `enabled` 改为 true，并在 `policy.preset` 上选用忽略 robots 的策略预设。
 
 `source/inbound-items` 监听推送通道 `items`。令牌写在该信源的 `access.spec.token`，缺省值只用于环回监听。正文是 JSON：`items` 数组，元素含 `title`、`url`，可选 `publishedAt` 与 `summary`。
 
@@ -62,4 +62,4 @@
 
 `source/mimo-blog` 读取 `https://mimo.xiaomi.com/`。访问器是 `accessor/bundle-list`。先按 `sectionTitle:"Blog"` 到下一个 `sectionTitle:` 抽取 `title`、`link`、`desc`；没有结果时再读 `routePath` 以 `/blog/` 开头、`lang` 为 `en` 的记录，跳过 `/blog/`、`/blog/index`、`/blog/blog1`。脚本最多 8 个，每个不超过 1048576 字节。抽出的条目交给 `adapter/json-list`。缺标题或缺发布时间时跟进详情页，每轮最多 30 次。详情选择器是 `time.hero-date` 的 `datetime`、`h1.hero-title` 和 `p.hero-subtitle`。间隔 2 小时。首次导入保留 30 条、365 天以内的条目。
 
-`source/status-search` 与 `source/wechat-account` 的 `enabled` 为 false。前者请求 `https://api.socialdata.tools/twitter/search`，查询参数为 `query` 与 `type`，条目取 `tweets`，标题和摘要取 `full_text`，地址由 `user.screen_name` 与 `id_str` 组成。`summaryIsBody` 为真，摘要写入 `text` facet。请求头是 `Authorization: Bearer ${env:SOCIALDATA_API_KEY}`。启用时设置该环境变量，把 `query` 里的 `from:example` 换成目标账号，再把 `enabled` 改为 true。后者向 `https://www.dajiala.com/fbmain/monitor/v3/post_history` 发送 POST，正文是 `{"ghid":"gh_example","key":"${env:DAJIALA_KEY}","verifycode":""}`。条目取 `data`，时间字段 `post_time` 的单位是 `epoch_s`。启用时设置 `DAJIALA_KEY`，把 `ghid` 换成目标账号，再把 `enabled` 改为 true。密钥留在环境里，不写入配置文件。
+`source/status-search` 与 `source/wechat-account` 的 `enabled` 为 false，并进入付费队列。前者 `paid.budget` 为每天 48 次，请求 `https://api.socialdata.tools/twitter/search`，查询参数为 `query` 与 `type`，条目取 `tweets`，标题和摘要取 `full_text`，地址由 `user.screen_name` 与 `id_str` 组成。`summaryIsBody` 为真，摘要写入 `text` facet。请求头是 `Authorization: Bearer ${env:SOCIALDATA_API_KEY}`。启用时设置该环境变量，把 `query` 里的 `from:example` 换成目标账号，再把 `enabled` 改为 true。后者 `paid.budget` 为每天 12 次，向 `https://www.dajiala.com/fbmain/monitor/v3/post_history` 发送 POST，正文是 `{"ghid":"gh_example","key":"${env:DAJIALA_KEY}","verifycode":""}`。条目取 `data`，时间字段 `post_time` 的单位是 `epoch_s`。启用时设置 `DAJIALA_KEY`，把 `ghid` 换成目标账号，再把 `enabled` 改为 true。密钥留在环境里，不写入配置文件。

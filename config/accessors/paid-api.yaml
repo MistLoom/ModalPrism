@@ -16,4 +16,3 @@ egress:
 
 paid:
   service: operator
-  budget: operator

@@ -710,6 +710,8 @@ async fn planner_next(services: &Services, args: &Value) -> Result<Value, Error>
         "intervalMs": status.interval_ms,
         "healthStatus": status.health_status,
         "alert": status.alert,
+        "skipReason": status.skip_reason,
+        "budgetUsed": status.budget_used,
     }))
 }
 

@@ -64,7 +64,7 @@ modalprism-collector [--data DIR] [--config DIR] [--http ADDR] [--proxy ADDR] [-
 
 访问器请求了会话名时，类别 `config`，消息 `session`。不轮换会话。
 
-付费 endpoint 是 `http` 或 `https` 时经出站网关发送。其他 endpoint 的类别是 `permanent`，消息是 `scheme`。一次调用一个信封。`paid.budget` 的计量单位未规定，装配不把它换成次数或金额，付费网关的限额保持空。
+付费 endpoint 是 `http` 或 `https` 时经出站网关发送。其他 endpoint 的类别是 `permanent`，消息是 `scheme`。一次调用一个信封。信源 `paid.budget.requests` 是一个 `window` 内允许的付费请求次数。Planner 在派出新的计划任务时按这个次数限流。次数用尽时本窗口跳过该信源，`planner.next` 的 `skipReason` 为 `budget`，`budgetUsed` 是本窗口已派出的次数。窗口滚动后计数归零并恢复派出。
 
 `MODALPRISM_MOLI` 是 moli 可执行文件路径，缺省在 `PATH` 中查找 `moli`。浏览器子请求的代理 URL 是本次进程绑定的正向代理。`docs/specs/builtin-accessors.md` 的未实测项仍然有效。
 
@@ -140,5 +140,4 @@ LEAF 的 CLI Port 会解析自己的子命令。本进程的参数由上面的�
 - Web Bot Auth 签名与会话轮换
 - 对象存储
 - 合并付费响应的归属
-- `paid.budget` 的计量单位
 - 浏览器内核的未实测项，见 `docs/specs/builtin-accessors.md`

@@ -53,6 +53,7 @@ fn one_plan(snapshot: &Snapshot, id: &str, module: &Value) -> Option<SourcePlan>
     };
     let spec = access_spec(accessor_module, module);
     let bytes = serde_json::to_vec(module).ok()?;
+    let budget = budget_of(module);
     Some(SourcePlan {
         source_id,
         locator,
@@ -63,6 +64,8 @@ fn one_plan(snapshot: &Snapshot, id: &str, module: &Value) -> Option<SourcePlan>
         config_hash: content_hash(&bytes),
         timeout,
         paid: module.get("paid").is_some(),
+        budget_requests: budget.map(|(requests, _)| requests),
+        budget_window: budget.map(|(_, window)| window).unwrap_or(Duration::ZERO),
         adaptive: schedule
             .get("adaptive")
             .and_then(Value::as_bool)
@@ -122,6 +125,15 @@ fn locator_of(value: &Value) -> Option<Locator> {
     None
 }
 
+fn budget_of(module: &Value) -> Option<(u64, Duration)> {
+    let requests = module.pointer("/paid/budget/requests")?.as_u64()?;
+    let window = parse_duration(module.pointer("/paid/budget/window")?.as_str()?)?;
+    if requests == 0 || window.is_zero() {
+        return None;
+    }
+    Some((requests, window))
+}
+
 fn queue_of(implementation: &str, module: &Value) -> strata_model::QueueName {
     if implementation == "builtin:browser" {
         strata_model::QueueName::Render
@@ -177,4 +189,52 @@ pub fn flush_interval(snapshot: &Snapshot) -> Duration {
         Duration::from_secs(30),
     )
     .unwrap_or(Duration::from_secs(30))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn paid_declaration_enters_the_paid_queue() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "accessor/paid-api".into(),
+            json!({
+                "kind": "accessor",
+                "implementation": "builtin:paid-api",
+                "limits": {"timeout": "60s"}
+            }),
+        );
+        modules.insert(
+            "source/status-search".into(),
+            json!({
+                "kind": "source",
+                "enabled": false,
+                "access": {
+                    "accessor": "accessor/paid-api",
+                    "locator": {"endpoint": "https://example.com/search"}
+                },
+                "paid": {"budget": {"requests": 48, "window": "1d"}},
+                "schedule": {"interval": "30m"}
+            }),
+        );
+        let snapshot = config::Snapshot {
+            generation: 1,
+            system: json!({}),
+            modules,
+            origins: BTreeMap::new(),
+        };
+        let plans = plans_of(&snapshot);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].queue, strata_model::QueueName::Paid);
+        assert!(plans[0].paid);
+        assert!(!plans[0].enabled);
+        assert_eq!(plans[0].budget_requests, Some(48));
+        assert_eq!(plans[0].budget_window, Duration::from_secs(86_400));
+    }
 }

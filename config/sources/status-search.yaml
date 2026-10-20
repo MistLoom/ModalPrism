@@ -28,6 +28,10 @@ pipeline:
         externalIdPath: id_str
         decodeEntities: true
         summaryIsBody: true
+paid:
+  budget:
+    requests: 48
+    window: 1d
 schedule:
   interval: 30m
 admission: {}

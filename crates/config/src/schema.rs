@@ -271,10 +271,17 @@ fn module_schema() -> Value {
             "paid": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["service", "budget"],
                 "properties": {
                     "service": {"type": "string", "minLength": 1},
-                    "budget": {"type": "string", "minLength": 1}
+                    "budget": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["requests", "window"],
+                        "properties": {
+                            "requests": {"type": "integer", "minimum": 1},
+                            "window": duration()
+                        }
+                    }
                 }
             },
             "role": {"enum": ["search", "content"]},
