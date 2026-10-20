@@ -118,6 +118,17 @@ impl Timestamp {
             .map_err(|_| ModelError::InvalidTimestamp)
     }
 
+    pub fn from_unix_millis(millis: i64) -> Result<Self, ModelError> {
+        let seconds = millis.div_euclid(1000);
+        let nanos = u32::try_from(millis.rem_euclid(1000) * 1_000_000)
+            .map_err(|_| ModelError::InvalidTimestamp)?;
+        let time = OffsetDateTime::from_unix_timestamp(seconds)
+            .map_err(|_| ModelError::InvalidTimestamp)?;
+        time.replace_nanosecond(nanos)
+            .map(Self)
+            .map_err(|_| ModelError::InvalidTimestamp)
+    }
+
     pub fn checked_add(self, duration: std::time::Duration) -> Result<Self, ModelError> {
         let duration =
             time::Duration::try_from(duration).map_err(|_| ModelError::InvalidTimestamp)?;

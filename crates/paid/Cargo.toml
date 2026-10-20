@@ -1,0 +1,26 @@
+[package]
+name = "paid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "付费网关：占位回执、预算与幂等"
+publish = false
+
+[dependencies]
+accessors = { path = "../accessors" }
+async-trait.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+strata-model = { path = "../strata-model" }
+thiserror.workspace = true
+tokio.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

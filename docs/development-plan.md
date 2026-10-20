@@ -69,7 +69,7 @@
 
 **目标**　任务派发、节奏、出站和付费在控制存储上形成闭环。
 
-**范围**　`crates/egress`、`crates/paid`、`crates/planner`。出站网关（库调用与正向代理）、付费网关、Cadence、Health、Planner、Runner。
+**范围**　`crates/egress`、`crates/paid`、`crates/planner`。出站网关（库调用与正向代理）、付费网关、Cadence、Health、Planner、Runner。规则见 `docs/specs/scheduling.md`。
 
 **交付**　按注册域的令牌桶、熔断、robots 口径、SSRF 检查、付费占位与回执、租约队列、按错误类别的退避。
 

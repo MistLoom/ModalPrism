@@ -395,6 +395,55 @@ impl Strata {
     ) -> Result<(), Error> {
         Ok(self.engine.nack(task_id, retry_at, error).await?)
     }
+
+    pub async fn lease_id(
+        &self,
+        task_id: &TaskId,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<AccessTask, Error> {
+        Ok(self.engine.lease_id(task_id, lease_for, now).await?)
+    }
+
+    pub async fn release_leases(&self) -> Result<Vec<AccessTask>, Error> {
+        Ok(self.engine.release_leases().await?)
+    }
+
+    pub async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, Error> {
+        Ok(self.engine.leased_count(queue, now).await?)
+    }
+
+    pub async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error> {
+        Ok(self.engine.task_active(source, locator_key).await?)
+    }
+
+    pub async fn accepted_state(
+        &self,
+        scope: &str,
+        key: &str,
+    ) -> Result<Option<StateValue>, Error> {
+        let Some((version, value)) = self.engine.accepted_state(scope, key).await? else {
+            return Ok(None);
+        };
+        Ok(Some(StateValue {
+            value: serde_json::from_str(&value).map_err(strata_store::Error::from)?,
+            version,
+        }))
+    }
+
+    pub async fn hot_get(&self, kind: &str, key: &str) -> Result<Option<Value>, Error> {
+        let Some(value) = self.engine.hot_get(kind, key).await? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            serde_json::from_str(&value).map_err(strata_store::Error::from)?,
+        ))
+    }
+
+    pub async fn hot_put(&self, kind: &str, key: &str, value: &Value) -> Result<(), Error> {
+        let text = serde_json::to_string(value).map_err(strata_store::Error::from)?;
+        Ok(self.engine.hot_put(kind, key, &text).await?)
+    }
 }
 
 fn same_facet(facet: &FacetRecord, reference: &FacetRef, exact_version: bool) -> bool {

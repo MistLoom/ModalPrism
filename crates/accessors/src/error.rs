@@ -1,12 +1,13 @@
 //! 访问错误。类别交给调度，消息保留调用点的原因。
 
-use strata_model::ErrorClass;
+use strata_model::{ErrorClass, Timestamp};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 pub struct AccessError {
     pub class: ErrorClass,
     pub message: String,
+    pub retry_at: Option<Timestamp>,
     #[source]
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
@@ -16,6 +17,7 @@ impl AccessError {
         Self {
             class,
             message: message.into(),
+            retry_at: None,
             source: None,
         }
     }
@@ -28,6 +30,7 @@ impl AccessError {
         Self {
             class,
             message: message.into(),
+            retry_at: None,
             source: Some(Box::new(source)),
         }
     }
