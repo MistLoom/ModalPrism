@@ -97,6 +97,21 @@ where
         Ok(load_db(&self.persist).await?.audits)
     }
 
+    pub async fn egress_db(&self) -> Result<state::Db, AccessError> {
+        let _guard = self.lock.lock().await;
+        load_db(&self.persist).await
+    }
+
+    pub async fn reset_circuit(&self, host: &str) -> Result<(), AccessError> {
+        let _guard = self.lock.lock().await;
+        let mut db = load_db(&self.persist).await?;
+        if let Some(row) = db.circuits.get_mut(host) {
+            state::reset_circuit(row);
+            save_db(&self.persist, &db).await?;
+        }
+        Ok(())
+    }
+
     pub async fn request(
         &self,
         policy: &Policy,

@@ -1551,6 +1551,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "console-api"
+version = "0.1.0"
+dependencies = [
+ "assembly",
+ "axum",
+ "config",
+ "egress",
+ "serde",
+ "serde_json",
+ "strata-model",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tower-http",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3785,6 +3803,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5635,6 +5659,7 @@ dependencies = [
  "committer",
  "config",
  "config_inspect",
+ "console-api",
  "frame-core",
  "frame-port-http",
  "health",
@@ -5648,6 +5673,7 @@ dependencies = [
  "strata_write",
  "tempfile",
  "tokio",
+ "tower-http",
  "types",
 ]
 
@@ -9152,6 +9178,11 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "http-range-header",
+ "httpdate",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
  "pin-project-lite",
  "tokio",
  "tokio-util",

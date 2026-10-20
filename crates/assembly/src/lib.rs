@@ -121,6 +121,10 @@ impl Services {
         &self.data_dir
     }
 
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
     pub fn set_proxy(&self, url: impl Into<String>) {
         *self.proxy.lock().expect("代理") = url.into();
     }

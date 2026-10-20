@@ -12,6 +12,7 @@ members = [
     "crates/planner",
     "crates/accessors-builtin",
     "crates/assembly",
+    "crates/console-api",
     "crates/types",
     "ability/strata_read",
     "ability/strata_write",

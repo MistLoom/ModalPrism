@@ -1,0 +1,31 @@
+[package]
+name = "console-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "ModalPrism Web 控制台 HTTP API"
+publish = false
+
+[dependencies]
+assembly = { path = "../assembly" }
+axum = { version = "0.8", features = ["json"] }
+config = { path = "../config" }
+egress = { path = "../egress" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strata-model = { path = "../strata-model" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+
+[dev-dependencies]
+assembly = { path = "../assembly" }
+axum = "0.8"
+config = { path = "../config" }
+tempfile.workspace = true
+tokio.workspace = true
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

@@ -18,3 +18,4 @@ pub use policy::{
 };
 pub use proxy::{serve, serve_each};
 pub use ssrf::is_blocked;
+pub use state::{circuit_open, CircuitRow};

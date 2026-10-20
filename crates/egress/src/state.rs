@@ -142,6 +142,14 @@ pub fn note_response(
     }
 }
 
+pub fn reset_circuit(row: &mut CircuitRow) {
+    row.consecutive = 0;
+    row.recent.clear();
+    row.open_until = None;
+    row.cooldown_ms = COOLDOWN_START_MS;
+    row.openings = 0;
+}
+
 pub fn circuit_open(db: &Db, host: &str, now_ms: i64) -> bool {
     db.circuits
         .get(host)
