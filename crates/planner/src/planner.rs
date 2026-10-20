@@ -116,10 +116,6 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             if !due.contains(plan.source_id.as_str()) || !plan.enabled {
                 continue;
             }
-            let key = locator_key(&plan.locator)?;
-            if self.queue.active(plan.source_id.as_str(), &key).await? {
-                continue;
-            }
             chosen.push(plan);
         }
         chosen.sort_by(|left, right| {
@@ -138,11 +134,23 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             if occupied.saturating_add(used[slot]) >= capacities.room(plan.queue) {
                 continue;
             }
-            used[slot] += 1;
-            let task = make_task(plan, now)?;
             let lease_for = lease_span(plan.timeout);
-            self.queue.enqueue(std::slice::from_ref(&task)).await?;
-            let leased = self.queue.lease_id(&task.task_id, lease_for, now).await?;
+            let key = locator_key(&plan.locator)?;
+            let leased = if self.queue.active(plan.source_id.as_str(), &key).await? {
+                let Some(task) = self
+                    .queue
+                    .lease_ready(plan.source_id.as_str(), &key, lease_for, now)
+                    .await?
+                else {
+                    continue;
+                };
+                task
+            } else {
+                let task = make_task(plan, now)?;
+                self.queue.enqueue(std::slice::from_ref(&task)).await?;
+                self.queue.lease_id(&task.task_id, lease_for, now).await?
+            };
+            used[slot] += 1;
             if let Some(row) = db.sources.get_mut(plan.source_id.as_str()) {
                 let until = now
                     .checked_add(lease_for)
