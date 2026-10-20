@@ -32,7 +32,7 @@ modalprism-collector [--data DIR] [--config DIR] [--http ADDR] [--proxy ADDR] [-
    - `strata.control_store.backend` 为 `postgres`
    - `strata.control_store.path` 与 `<data>/control.db` 不是同一路径
    - `strata.staging.dir` 与 `<data>/staging` 不是同一路径
-3. 打开数据目录。空目录因此得到 `control.db`、`lance/`、`staging/`。再次打开沿用已有快照，不删除已发布的版本。
+3. 打开数据目录。`strata.blob.inline_size_threshold`、`strata.blob.dedicated_size_threshold` 和 `strata.staging.ttl` 取这次打开时的快照，缺省分别是 64KiB、16MiB、24h。空目录因此得到 `control.db`、`lance/`、`staging/`。再次打开沿用已有快照，不删除已发布的版本。
 4. 构造 `AbilityHost`，对下列实例 `install` 再 `load`。不调用 `AppBuilder::bootstrap`。
 5. 绑定三个环回监听，进入循环。
 
@@ -50,11 +50,15 @@ modalprism-collector [--data DIR] [--config DIR] [--http ADDR] [--proxy ADDR] [-
 | `policy.commit.flush_interval`，缺省 30 秒 | `committer.flush` |
 | 60 秒 | `health.evaluate` |
 
+`planner.tick`、`runner.run_task`、`flush_interval`、push 监听和健康快照都读 `applied`。`health.evaluate` 每 60 秒调用一次。传给 `Planner::snapshot` 的间隔是 `policy.state.snapshot_interval`，缺省 15 分钟。进行中的任务把变更集的 `config_generation` 写成任务上的 `generation`。
+
 `planner.tick` 的并发容量是固定值：`free` 4、`paid` 1、`render` 2、`push` 4。健康计算使用的产量下降比是 0.3，连续失败阈值是 5。配置里没有这两类键。
 
 定位符是 `channel` 的信源不进入 `tick`。推送由 push 监听调用 `PushAccessor::ingest`。
 
-`runner.run_task` 在进程内调用访问器和 `adapters` 的内置注册表。pipeline 为空时，每个 `document` 部件写成 `raw` facet，正文是 `Body::Staged`。pipeline 非空时采用 `adapters::run` 返回的操作。`follows` 不入队。信源已不在快照中时 `nack`，消息是 `config`。
+`runner.run_task` 在进程内调用访问器和 `adapters` 的内置注册表。访问器拿到的策略是 `overlay_system_policy(applied.system, 信源 policy)`。出站策略和付费 `unknown_receipt` 按同一次 `applied` 组装：robots 的模式、crawl delay、豁免类别来自信源，豁免名单、缓存时间、不可达策略、私网和身份来自系统，`unknown_receipt` 来自访问器。pipeline 为空时，每个 `document` 部件写成 `raw` facet，正文是 `Body::Staged`。pipeline 非空时采用 `adapters::run` 返回的操作。`follows` 不入队。信源已不在快照中时 `nack`，消息是 `config`。
+
+完成回执的 `logicalKey` 是付费网关为该 `receipt_id` 保存的逻辑键，`service` 是该次回执上的服务名。
 
 访问器请求了会话名时，类别 `config`，消息 `session`。不轮换会话。
 
@@ -64,9 +68,9 @@ modalprism-collector [--data DIR] [--config DIR] [--http ADDR] [--proxy ADDR] [-
 
 ## 监听
 
-正向代理是 `egress::serve`。push 是组合根自己的 HTTP 监听，只接受 `POST /<channel>`，把请求头和正文交给 `ingest`。正文上限 8 MiB。它不使用 HTTP Port 的 invoke 路由。
+正向代理是 `egress::serve_each`。每接受一个连接，用当时的 `applied` 系统策略组装出站策略。push 是组合根自己的 HTTP 监听，只接受 `POST /<channel>`，把请求头和正文交给 `ingest`。策略同样经过 `overlay_system_policy`。正文上限 8 MiB。它不使用 HTTP Port 的 invoke 路由。
 
-运维 HTTP 端口是 `frame-port-http`。目录和调用只放行 `strata_read`、`planner`、`health`。Host 不设置单一的 `access_gate`。进程内调用直接使用 `AbilityHost`。
+运维 HTTP 端口使用 `frame-port-http` 的路由，并去掉响应里的 `Access-Control-*` 头和只为跨源协商写入的 `Vary`。目录和调用只放行 `strata_read`、`planner`、`health`。Host 不设置单一的 `access_gate`。进程内调用直接使用 `AbilityHost`。
 
 LEAF 的 CLI Port 会解析自己的子命令。本进程的参数由上面的命令行处理，不打开该 Port。
 

@@ -15,8 +15,11 @@ use crate::transport::EgressGw;
 const HEADER_CAP: usize = 16 * 1024;
 const BODY_CAP: usize = 8 * 1024 * 1024;
 
-pub async fn serve_proxy(gateway: Arc<EgressGw>, listener: TcpListener, policy: egress::Policy) {
-    egress::serve(gateway.as_ref(), listener, policy).await;
+pub async fn serve_proxy<F>(gateway: Arc<EgressGw>, listener: TcpListener, policy_of: F)
+where
+    F: Fn() -> egress::Policy,
+{
+    egress::serve_each(gateway.as_ref(), listener, policy_of).await;
 }
 
 pub async fn serve_push(services: Arc<Services>, listener: TcpListener) {
@@ -84,7 +87,7 @@ async fn handle_push(services: Arc<Services>, mut socket: TcpStream) -> std::io:
         socket.read_exact(&mut rest).await?;
         body.extend_from_slice(&rest);
     }
-    let snapshot = services.config().snapshot();
+    let snapshot = services.config().applied();
     let Some((spec, policy)) = push_source(&snapshot, &channel) else {
         write_response(&mut socket, 404, &json!({"message": "not-found"})).await?;
         return Ok(());
@@ -156,10 +159,11 @@ fn push_source(snapshot: &config::Snapshot, channel: &str) -> Option<(Value, Val
                 snapshot.modules.get(accessor)?.get("spec").cloned()
             })
             .unwrap_or_else(|| Value::Object(Default::default()));
-        let policy = module
+        let module_policy = module
             .get("policy")
             .cloned()
             .unwrap_or_else(|| Value::Object(Default::default()));
+        let policy = config::overlay_system_policy(&snapshot.system, &module_policy);
         return Some((spec, policy));
     }
     None

@@ -66,10 +66,20 @@ pub async fn fetch(
         .and_then(Value::as_str)
         .unwrap_or("");
     let accessor = open_accessor(implementation, &state.browser, &state.proxy)?;
-    let policy = module
+    let source_policy = module
         .get("policy")
         .cloned()
         .unwrap_or_else(|| Value::Object(Map::new()));
+    let accessor_policy = state
+        .snapshot
+        .modules
+        .get(accessor_id)
+        .and_then(|item| item.get("policy"))
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    let policy = config::overlay_system_policy(&state.snapshot.system, &source_policy);
+    let egress_policy = crate::transport::policy_from(&state.snapshot.system, &source_policy);
+    let paid_policy = crate::transport::call_policy_from(&state.snapshot.system, &accessor_policy);
     let spec = if task.spec.is_object() {
         task.spec.clone()
     } else {
@@ -87,16 +97,22 @@ pub async fn fetch(
         deadline: Instant::now() + state.timeout,
     };
     let context = AccessContext {
-        egress: state.egress.clone(),
-        paid: state.paid.clone(),
+        egress: Arc::new(crate::transport::BoundEgress {
+            inner: Arc::clone(&state.egress),
+            policy: egress_policy.clone(),
+        }),
+        paid: Arc::new(crate::transport::BoundPaid {
+            inner: Arc::clone(&state.paid),
+            policy: paid_policy,
+        }),
         sessions: Arc::new(NoSession),
         staging: Arc::new(DiskStaging {
             dir: state.staging_dir.clone(),
         }),
         cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
-    let envelopes = accessor
-        .access(request, &context)
+    let envelopes = crate::transport::EGRESS_POLICY
+        .scope(egress_policy, accessor.access(request, &context))
         .await
         .map_err(from_access)?;
     let pipeline = module
@@ -116,7 +132,10 @@ pub async fn fetch(
     Ok(TaskSuccess {
         ops,
         cursor: last.and_then(|item| item.cursor_candidate.clone()),
-        receipt: last.and_then(receipt_of),
+        receipt: match last {
+            Some(envelope) => receipt_of(&state.paid, envelope).await?,
+            None => None,
+        },
         quality: Quality::Ok,
         selector_miss: false,
         blocked: false,
@@ -272,13 +291,25 @@ async fn adapted_ops(
     Ok(output.changeset.ops)
 }
 
-fn receipt_of(envelope: &RawEnvelope) -> Option<ReceiptBody> {
-    let id = envelope.transport.receipt_id.as_ref()?.as_str().to_string();
-    Some(ReceiptBody {
-        id: id.clone(),
-        service: "paid".into(),
-        logical_key: id,
-    })
+async fn receipt_of(
+    paid: &PaidGw,
+    envelope: &RawEnvelope,
+) -> Result<Option<ReceiptBody>, Classified> {
+    let Some(id) = envelope.transport.receipt_id.as_ref() else {
+        return Ok(None);
+    };
+    let Some((service, logical_key)) = paid
+        .stored_receipt(id.as_str())
+        .await
+        .map_err(from_access)?
+    else {
+        return Err(classified(ErrorClass::Transient, "unknown-receipt"));
+    };
+    Ok(Some(ReceiptBody {
+        id: id.as_str().to_string(),
+        service,
+        logical_key,
+    }))
 }
 
 fn from_access(error: accessors::AccessError) -> Classified {

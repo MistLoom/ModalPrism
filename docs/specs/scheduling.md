@@ -93,7 +93,7 @@
 
 `unknown_receipt` 为 `manual` 时，后续调用类别 `permanent`，消息 `unknown-receipt`，不发送。`retry-once` 在 `unknown` 满 1 小时后放行一次；未满时类别 `transient`，消息 `unknown-wait`，Runner 把任务延后到冷却结束且不计入健康。这次仍未知则改为 `manual`。`unknown-receipt` 不计入健康失败。Runner 确认任务，`next_at` 按正常节奏。
 
-完成的回执由 Runner 写入变更集：`setState`，`scope=receipt`，键是 `receipt_id`，值含 `status=completed`、`service`、`logicalKey`。控制库里的行在 `apply` 被接受后标为 `completed`。
+完成的回执由 Runner 写入变更集：`setState`，`scope=receipt`，键是 `receipt_id`，值含 `status=completed`、`service`、`logicalKey`。`logicalKey` 是付费网关按服务、endpoint、规范参数和窗口算出的逻辑键。控制库里的行在 `apply` 被接受后标为 `completed`。
 
 `batchKey` 只影响 Planner 的成组入队。一次付费调用产出一个信封。把合并响应拆回多个信源的归属规则未规定，访问器不拆分响应。
 

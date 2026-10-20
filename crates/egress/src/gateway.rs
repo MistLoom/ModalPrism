@@ -456,8 +456,24 @@ where
     D: Dial,
 {
     async fn request(&self, request: HttpRequest) -> Result<HttpResponse, AccessError> {
+        self.request_governed(&self.policy, request).await
+    }
+}
+
+impl<P, T, R, D> Gateway<P, T, R, D>
+where
+    P: Persist,
+    T: Transport,
+    R: Resolver,
+    D: Dial,
+{
+    pub async fn request_governed(
+        &self,
+        policy: &Policy,
+        request: HttpRequest,
+    ) -> Result<HttpResponse, AccessError> {
         let now_ms = crate::proxy::clock_ms();
-        self.request(&self.policy, request, now_ms, now_ms.saturating_add(30_000))
+        self.request(policy, request, now_ms, now_ms.saturating_add(30_000))
             .await
     }
 }

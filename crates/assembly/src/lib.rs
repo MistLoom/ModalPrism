@@ -16,7 +16,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use config::{ConfigStore, LoadOptions, Snapshot};
 use egress::{Resolver, TcpDial};
-use paid::CallPolicy;
 use planner::{Handler, Planner, Receipts};
 use serde_json::{Value, json};
 use strata_client::{Options, Strata};
@@ -24,7 +23,7 @@ use strata_model::{ApplyOpts, ChangeSet, Producer, Timestamp};
 
 pub use error::{Error, invalid_input};
 pub use listen::{serve_proxy, serve_push};
-pub use plans::{capacities, flush_interval};
+pub use plans::{capacities, flush_interval, snapshot_interval};
 pub use transport::{EgressGw, policy_of};
 
 use execute::{FetchState, NoSession};
@@ -59,7 +58,7 @@ pub struct Services {
     paid: Arc<PaidGw>,
     proxy: Mutex<String>,
     push: accessors_builtin::PushAccessor,
-    browser_program: PathBuf,
+    browser_program: Mutex<PathBuf>,
 }
 
 impl Services {
@@ -71,7 +70,8 @@ impl Services {
         require_loopback(binds.proxy)?;
         require_loopback(binds.push)?;
         let config = Arc::new(ConfigStore::open(config_dir, load_options.clone())?);
-        let strata = Arc::new(Strata::open(data, Options::default()).await?);
+        let opening = policy_of(&snapshot.system);
+        let strata = Arc::new(Strata::open(data, strata_options(&snapshot.system)).await?);
         let planner = Planner::new(
             StrataQueue(Arc::clone(&strata)),
             Hot::new(Arc::clone(&strata), "planner"),
@@ -81,14 +81,15 @@ impl Services {
             HttpTransport,
             SystemResolver,
             TcpDial,
-            policy_of(&snapshot.system),
+            opening.clone(),
         ));
         let paid = Arc::new(paid::Gateway::new(
             Hot::new(Arc::clone(&strata), "paid"),
             PaidBridge {
                 egress: Arc::clone(&egress),
+                fallback: opening,
             },
-            CallPolicy::default(),
+            transport::call_policy_from(&snapshot.system, &Value::Null),
         ));
         let browser = std::env::var("MODALPRISM_MOLI").unwrap_or_else(|_| "moli".into());
         Ok(Arc::new(Self {
@@ -102,7 +103,7 @@ impl Services {
             paid,
             proxy: Mutex::new(format!("http://{}", binds.proxy)),
             push: accessors_builtin::PushAccessor::new(),
-            browser_program: PathBuf::from(browser),
+            browser_program: Mutex::new(PathBuf::from(browser)),
         }))
     }
 
@@ -126,6 +127,10 @@ impl Services {
         self.proxy.lock().expect("代理").clone()
     }
 
+    pub fn set_browser_program(&self, program: impl Into<PathBuf>) {
+        *self.browser_program.lock().expect("浏览器") = program.into();
+    }
+
     pub async fn shutdown(&self) -> Result<(), Error> {
         self.planner.shutdown(Timestamp::now()).await?;
         Ok(())
@@ -133,12 +138,12 @@ impl Services {
 
     pub(crate) fn fetch_state(&self, timeout: Duration) -> FetchState {
         FetchState {
-            snapshot: self.config.snapshot(),
+            snapshot: self.config.applied(),
             egress: Arc::clone(&self.egress),
             paid: Arc::clone(&self.paid),
             staging_dir: self.data_dir.join("staging"),
             proxy: self.proxy_url(),
-            browser: self.browser_program.clone(),
+            browser: self.browser_program.lock().expect("浏览器").clone(),
             timeout,
         }
     }
@@ -584,7 +589,7 @@ async fn committer_recover(services: &Services) -> Result<Value, Error> {
 }
 
 async fn planner_tick(services: &Services) -> Result<Value, Error> {
-    let plans = plans::plans_of(&services.config.snapshot());
+    let plans = plans::plans_of(&services.config.applied());
     let tasks = services
         .planner
         .tick(&plans, &capacities(), Timestamp::now())
@@ -616,12 +621,11 @@ async fn runner_run(services: &Services, args: &Value) -> Result<Value, Error> {
         task: strata_model::AccessTask,
     }
     let args: Args = parse(args)?;
-    let snapshot = services.config.snapshot();
+    let snapshot = services.config.applied();
     let plans = plans::plans_of(&snapshot);
-    let Some(plan) = plans
-        .iter()
+    let Some(mut plan) = plans
+        .into_iter()
         .find(|plan| plan.source_id == args.task.source_id)
-        .cloned()
     else {
         services
             .strata
@@ -629,6 +633,7 @@ async fn runner_run(services: &Services, args: &Value) -> Result<Value, Error> {
             .await?;
         return Ok(json!({ "nacked": "config" }));
     };
+    plan.generation = args.task.generation;
     let now = Timestamp::now();
     let deadline = now
         .checked_add(plan.timeout)
@@ -648,16 +653,17 @@ async fn runner_run(services: &Services, args: &Value) -> Result<Value, Error> {
 
 async fn health_evaluate(services: &Services) -> Result<Value, Error> {
     let now = Timestamp::now();
+    let applied = services.config.applied();
     let ops = services
         .planner
-        .snapshot(now, Duration::from_secs(60))
+        .snapshot(now, snapshot_interval(&applied))
         .await?;
     if !ops.is_empty() {
         let changeset = ChangeSet {
             producer: Producer {
                 module: "health".into(),
                 version: "1".into(),
-                config_generation: services.config.snapshot().generation,
+                config_generation: applied.generation,
             },
             idempotency_key: None,
             ack: None,
@@ -740,7 +746,7 @@ async fn egress_check(services: &Services, args: &Value) -> Result<Value, Error>
         .lookup(host)
         .await
         .map_err(|error| Error::with_source(error.message.clone(), error))?;
-    let policy = policy_of(&services.config.snapshot().system);
+    let policy = policy_of(&services.config.applied().system);
     let blocked = if policy.private_networks == egress::PrivateNetworks::Allow {
         false
     } else {
@@ -782,12 +788,9 @@ async fn accessor_call(
         _ => return Err(Error::new("spec 无效")),
     };
     let implementation = format!("builtin:{id}");
-    let accessor = execute::open_accessor(
-        &implementation,
-        &services.browser_program,
-        &services.proxy_url(),
-    )
-    .map_err(|error| Error::new(error.message))?;
+    let browser = services.browser_program.lock().expect("浏览器").clone();
+    let accessor = execute::open_accessor(&implementation, &browser, &services.proxy_url())
+        .map_err(|error| Error::new(error.message))?;
     match name {
         "validate" => {
             let spec = field(args, "spec")?;
@@ -838,6 +841,59 @@ async fn accessor_access(
         .await
         .map_err(|error| Error::new(error.message))?;
     serde_json::to_value(envelopes).map_err(|source| Error::with_source("spec 无效", source))
+}
+
+fn strata_options(system: &Value) -> Options {
+    let mut options = Options::default();
+    if let Some(size) = system
+        .pointer("/strata/blob/inline_size_threshold")
+        .and_then(Value::as_str)
+        .and_then(parse_size)
+    {
+        options.blob_inline_threshold = size;
+    }
+    if let Some(size) = system
+        .pointer("/strata/blob/dedicated_size_threshold")
+        .and_then(Value::as_str)
+        .and_then(parse_size)
+    {
+        options.blob_dedicated_threshold = size;
+    }
+    if let Some(ttl) = system
+        .pointer("/strata/staging/ttl")
+        .and_then(Value::as_str)
+        .and_then(parse_duration)
+    {
+        options.staging_ttl = ttl;
+    }
+    options
+}
+
+fn parse_size(text: &str) -> Option<usize> {
+    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
+    let count: u64 = text[..split].parse().ok()?;
+    let scale = match &text[split..] {
+        "B" => 1,
+        "KiB" => 1024,
+        "MiB" => 1024 * 1024,
+        "GiB" => 1024 * 1024 * 1024,
+        _ => return None,
+    };
+    usize::try_from(count.saturating_mul(scale)).ok()
+}
+
+fn parse_duration(text: &str) -> Option<Duration> {
+    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
+    let count: u64 = text[..split].parse().ok()?;
+    let scale = match &text[split..] {
+        "ms" => 1,
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return None,
+    };
+    Some(Duration::from_millis(count.saturating_mul(scale)))
 }
 
 fn refuse_remote(snapshot: &Snapshot, data: &Path) -> Result<(), Error> {
