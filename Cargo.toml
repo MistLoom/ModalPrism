@@ -5,6 +5,8 @@ members = [
     "crates/strata-store",
     "crates/strata-client",
     "crates/config",
+    "crates/accessors",
+    "crates/adapters",
 ]
 
 [workspace.package]
@@ -35,6 +37,10 @@ jsonschema = "0.59"
 notify = "8.2"
 saphyr = "0.2.2"
 signal-hook = { version = "0.3", features = ["iterator"] }
+async-trait = "0.1"
+quick-xml = "0.37"
+scraper = "0.23"
+url = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
