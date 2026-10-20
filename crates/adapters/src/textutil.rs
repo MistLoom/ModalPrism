@@ -147,11 +147,59 @@ pub fn render_template(template: &str, item: &serde_json::Value) -> Option<Strin
 }
 
 pub fn decode_basic_entities(raw: &str) -> String {
-    raw.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
+    let mut current = raw.to_string();
+    for _ in 0..2 {
+        let next = decode_entities_once(&current);
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+    current
+}
+
+fn decode_entities_once(raw: &str) -> String {
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find(';') else {
+            out.push('&');
+            rest = after;
+            break;
+        };
+        if let Some(ch) = entity_char(&after[..end]) {
+            out.push(ch);
+            rest = &after[end + 1..];
+        } else {
+            out.push('&');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn entity_char(body: &str) -> Option<char> {
+    match body {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => numeric_entity(body),
+    }
+}
+
+fn numeric_entity(body: &str) -> Option<char> {
+    let digits = body.strip_prefix('#')?;
+    let code = if let Some(hex) = digits.strip_prefix(['x', 'X']) {
+        u32::from_str_radix(hex, 16).ok()?
+    } else {
+        digits.parse().ok()?
+    };
+    char::from_u32(code).filter(|ch| *ch != '\0')
 }
 
 pub fn http_absolute(raw: &str) -> Option<String> {

@@ -136,7 +136,7 @@ access(request, context) -> Vec<RawEnvelope>
 
 ## 列表与 Feed
 
-`adapter/feed-items` 读 RSS 2.0 与 Atom 1.0。定位符取 RSS `link`，或 Atom `rel=alternate` 的 `href`，否则取第一条 `href`。身份键先 `url:`，若 `guid` 或 Atom `id` 不含空白则再加 `ext:guid:`。有 `content:encoded` 或 Atom `content` 时作为 `html` facet 放入 `materialize`，且不跟进。摘要去掉标签。无法解析的 XML 是永久错误。
+`adapter/feed-items` 读 RSS 2.0 与 Atom 1.0。定位符取 RSS `link`，或 Atom `rel=alternate` 的 `href`，否则取第一条 `href`。身份键先 `url:`，若 `guid` 或 Atom `id` 不含空白则再加 `ext:guid:`。有 `content:encoded` 或 Atom `content` 时作为 `html` facet 放入 `materialize`，且不跟进。摘要去掉标签。标题、作者和去标签后的摘要再解开一层命名实体与数字实体，包括 `&amp;`、`&lt;`、`&gt;`、`&quot;`、`&apos;`、`&#039;` 与 `&#x27;`。无法解析的 XML 是永久错误。
 
 可选 spec：
 
@@ -153,7 +153,7 @@ YouTube、youtu.be、Vimeo 的播放页不把摘要写入正文，也不跟进�
 
 `markdown` 读取 `[标题](地址)`。`minTitle` 缺省 1，按字符数。`docusaurus_changelog` 读取 `article` 或 `.markdown` 内带 `id` 的 `h2`/`h3`；整段标题是日期时，该日期作用于后续条目，直到下一个非日期 `h2`。`intercom_changelog` 读取 `article` 内带 `id` 的 `h2`/`h3`，标题能解析为日期时，后续兄弟节点的文字作为摘要和 `text` facet，且不跟进。日期标题的偏移缺省 `+00:00`。条目地址是列表地址加上标题 `id` 的 fragment。
 
-`adapter/json-list` 用 `items`（JSON Pointer）或 `itemsPath`（点路径；空字符串表示根数组）定位数组。`url` 是条目上的键，相对 `locator` 补全。`urlTemplate` 用 `{路径}` 做百分号编码、`{raw:路径}` 原样插入，结果必须已是 `http` 或 `https` 绝对地址。`title`、`summary`、`author` 可以是键或键数组；`titlePaths`、`summaryPaths`、`authorPaths` 按顺序取第一个非空标量。`publishedAt` 或 `publishedAtPath` 配合 `publishedAtUnit`：`epoch_s`、`epoch_ms`、`yyyymmdd`。`externalIdPath` 追加 `ext:` 身份键。`decodeEntities` 为真时，标题和摘要把 `&amp;` `&lt;` `&gt;` `&quot;` `&#39;` 换成原字符。`summaryIsBody` 为真时，摘要作为 `text` facet 放入 `materialize`，且不跟进。路径不是数组或没有映射出条目时结果为空。
+`adapter/json-list` 用 `items`（JSON Pointer）或 `itemsPath`（点路径；空字符串表示根数组）定位数组。`url` 是条目上的键，相对 `locator` 补全。`urlTemplate` 用 `{路径}` 做百分号编码、`{raw:路径}` 原样插入，结果必须已是 `http` 或 `https` 绝对地址。`title`、`summary`、`author` 可以是键或键数组；`titlePaths`、`summaryPaths`、`authorPaths` 按顺序取第一个非空标量。`publishedAt` 或 `publishedAtPath` 配合 `publishedAtUnit`：`epoch_s`、`epoch_ms`、`yyyymmdd`。`externalIdPath` 追加 `ext:` 身份键。`decodeEntities` 为真时，标题和摘要解开与 Feed 相同的一层命名实体和数字实体。`summaryIsBody` 为真时，摘要作为 `text` facet 放入 `materialize`，且不跟进。路径不是数组或没有映射出条目时结果为空。
 
 ## 相同输入
 

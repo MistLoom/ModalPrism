@@ -50,6 +50,8 @@
 | `source/import-ai` | Import AI | `https://importai.substack.com/feed` | 3h |
 | `source/latent-space` | Latent Space | `https://www.latent.space/feed` | 3h |
 
+`source/the-decoder` 的 `policy.robots.mode` 为 `ignore`。该站点的 robots 禁止全部订阅路径，`robots_reason` 写明采集对象就是这条订阅地址。
+
 `source/inbound-items` 监听推送通道 `items`。令牌写在该信源的 `access.spec.token`，缺省值只用于环回监听。正文是 JSON：`items` 数组，元素含 `title`、`url`，可选 `publishedAt` 与 `summary`。
 
 `source/html-listing` 与 `source/json-listing` 的 `enabled` 为 false。它们声明网页列表和 JSON 列表的字段，地址是 `https://example.com/` 下的示例路径，不作为线上目标。

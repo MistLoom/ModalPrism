@@ -448,6 +448,16 @@ async fn push_stores_items_that_can_be_read_back() {
     );
     write(
         config.path(),
+        "accessors/http.yaml",
+        "id: accessor/http\nkind: accessor\nname: HTTP\nimplementation: builtin:http\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: fixed\n    base: 1s\n    max: 1s\negress:\n  profile: direct\n",
+    );
+    write(
+        config.path(),
+        "sources/ahead.yaml",
+        "id: source/ahead\nkind: source\nname: Ahead\naccess:\n  accessor: accessor/http\n  locator:\n    url: https://example.com/list\npipeline: []\nschedule:\n  interval: 1h\nadmission: {}\n",
+    );
+    write(
+        config.path(),
         "sources/inbound.yaml",
         "id: source/inbound-items\nkind: source\nname: Inbound\naccess:\n  accessor: accessor/push\n  locator:\n    channel: items\n  spec:\n    token: local-inbound-token\npipeline:\n  - run: [adapter/json-list]\n    spec:\n      adapter/json-list:\n        items: /items\n        url: url\n        title: title\nschedule:\n  interval: 1h\nadmission: {}\n",
     );

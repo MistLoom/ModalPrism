@@ -10,6 +10,10 @@ access:
     url: https://the-decoder.com/feed/
 pipeline:
   - run: [adapter/feed-items]
+policy:
+  robots:
+    mode: ignore
+    robots_reason: 站点 robots 禁止全部订阅路径，该信源的采集对象就是这条订阅地址
 schedule:
   interval: 1h
 admission:
