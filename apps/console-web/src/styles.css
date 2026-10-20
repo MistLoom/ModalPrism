@@ -193,6 +193,10 @@ body {
   border-radius: 8px;
 }
 .palette-layer,
+.confirm-layer[hidden],
+.palette-layer[hidden] {
+  display: none !important;
+}
 .confirm-layer {
   position: fixed;
   inset: 0;

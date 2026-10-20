@@ -22,7 +22,7 @@ cargo build -p modalprism-collector</pre>
 
 pub async fn serve(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
-    if path.is_empty() {
+    if path.is_empty() || path.ends_with('/') {
         return serve_file("index.html");
     }
     serve_file(path)

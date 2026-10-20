@@ -380,12 +380,15 @@ async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>, services: Arc<Se
         services,
         http_addr: addr.to_string(),
     };
+    fn dir_service(path: PathBuf) -> ServeDir {
+        ServeDir::new(path).append_index_html_on_directories(true)
+    }
     let console = if let Ok(dist) = std::env::var("MODALPRISM_CONSOLE_DIST") {
-        axum::Router::new().nest_service("/", ServeDir::new(PathBuf::from(dist)))
+        axum::Router::new().fallback_service(dir_service(PathBuf::from(dist)))
     } else {
         let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../console-web/dist");
         if dist.join("index.html").is_file() && !console_static::has_embedded_assets() {
-            axum::Router::new().nest_service("/", ServeDir::new(dist))
+            axum::Router::new().fallback_service(dir_service(dist))
         } else {
             axum::Router::new().fallback(console_static::serve)
         }

@@ -28,7 +28,7 @@ const context = await browser.newContext({
 for (const theme of ["light", "dark"]) {
   const page = await context.newPage();
   for (const { hash, name } of routes) {
-    const url = `${base}/console/?theme=${theme}#${hash}`;
+    const url = `${base}/console?theme=${theme}#${hash}`;
     await page.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
     await page.waitForSelector("#viewRoot .page-title, #viewRoot .error", { timeout: 60_000 });
     await page.waitForFunction(
