@@ -875,3 +875,161 @@ fn registry_skips_browser() {
     assert!(by_id("browser").is_none());
     assert_eq!(by_id("file").unwrap().id(), "file");
 }
+
+struct Keep(std::sync::Mutex<Vec<Vec<u8>>>);
+
+impl Staging for Keep {
+    fn put(&self, bytes: &[u8]) -> Result<strata_model::PartRef, accessors::AccessError> {
+        self.0.lock().expect("暂存").push(bytes.to_vec());
+        Ok(strata_model::PartRef::from_bytes(bytes))
+    }
+}
+
+#[tokio::test]
+async fn browser_redacts_set_cookie_in_metadata_and_trace() {
+    let kept = Arc::new(Keep(std::sync::Mutex::new(Vec::new())));
+    let context = AccessContext {
+        egress: Arc::new(ScriptEgress {
+            hits: AtomicUsize::new(0),
+            responses: Mutex::new(Vec::new()),
+            seen: Mutex::new(Vec::new()),
+        }),
+        paid: Arc::new(ScriptPaid {
+            hits: AtomicUsize::new(0),
+            fail_budget: false,
+        }),
+        sessions: Arc::new(ScriptSessions),
+        staging: kept.clone(),
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+    let network = serde_json::json!({
+        "events": [{
+            "requestHeaders": [["Set-Cookie", "secret"], ["Accept", "text/html"]],
+            "headers": [{"name": "Set-Cookie", "value": "secret"}]
+        }]
+    });
+    let engine = ScriptEngine {
+        hits: AtomicUsize::new(0),
+        output: EngineOutput {
+            final_url: "https://example.com/final".into(),
+            status: 200,
+            headers: vec![
+                ("Content-Type".into(), "text/html".into()),
+                ("Set-Cookie".into(), "secret".into()),
+            ],
+            html: Some(b"<p>rendered</p>".to_vec()),
+            network: Some(serde_json::to_vec(&network).unwrap()),
+            version: Some("fixture".into()),
+            ..EngineOutput::default()
+        },
+    };
+    let accessor = BrowserAccessor::new(engine, "http://127.0.0.1:9");
+    let mut req = request(
+        Locator::Url {
+            url: "https://example.com/page".into(),
+        },
+        json!({}),
+    );
+    req.policy = Arc::new(json!({
+        "raw": {"redact_headers": ["Set-Cookie"]},
+        "capture": {"network": "trace"}
+    }));
+    let pages = accessor.access(req, &context).await.unwrap();
+    assert_eq!(
+        pages[0]
+            .transport
+            .headers
+            .iter()
+            .find(|(name, _)| name == "Set-Cookie")
+            .unwrap()
+            .1,
+        "***"
+    );
+    let bodies = kept.0.lock().expect("暂存").clone();
+    let stored = bodies
+        .iter()
+        .map(|body| String::from_utf8_lossy(body).into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!stored.contains("secret"));
+    assert!(stored.contains("***"));
+    assert!(
+        pages[0]
+            .parts
+            .iter()
+            .any(|part| part.role == PartRole::Metadata)
+    );
+    assert!(
+        pages[0]
+            .parts
+            .iter()
+            .any(|part| part.role == PartRole::NetworkTrace)
+    );
+}
+
+#[tokio::test]
+async fn concurrent_identical_push_keys_store_one_envelope() {
+    let accessor = Arc::new(PushAccessor::new());
+    let puts = Arc::new(AtomicUsize::new(0));
+    let staging: Arc<dyn Staging> = Arc::new(MemStaging {
+        puts: Arc::clone(&puts),
+    });
+    let egress: Arc<dyn EgressGateway> = Arc::new(ScriptEgress {
+        hits: AtomicUsize::new(0),
+        responses: Mutex::new(Vec::new()),
+        seen: Mutex::new(Vec::new()),
+    });
+    let paid: Arc<dyn PaidGateway> = Arc::new(ScriptPaid {
+        hits: AtomicUsize::new(0),
+        fail_budget: false,
+    });
+    let sessions: Arc<dyn SessionPool> = Arc::new(ScriptSessions);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let spec = json!({"token": "secret", "ratePerSec": 100, "burst": 20});
+    let policy = json!({});
+    let now = Timestamp::parse("2026-10-20T00:00:00Z").unwrap();
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let accessor = Arc::clone(&accessor);
+        let staging = Arc::clone(&staging);
+        let egress = Arc::clone(&egress);
+        let paid = Arc::clone(&paid);
+        let sessions = Arc::clone(&sessions);
+        let cancel = Arc::clone(&cancel);
+        let spec = spec.clone();
+        let policy = policy.clone();
+        handles.push(tokio::spawn(async move {
+            let context = AccessContext {
+                egress,
+                paid,
+                sessions,
+                staging,
+                cancel,
+            };
+            accessor
+                .ingest(
+                    &spec,
+                    &Incoming {
+                        channel: "hooks".into(),
+                        headers: vec![
+                            ("Authorization".into(), "Bearer secret".into()),
+                            ("Idempotency-Key".into(), "same".into()),
+                        ],
+                        body: Bytes::from_static(b"{\"a\":1}"),
+                    },
+                    &context,
+                    &policy,
+                    now,
+                )
+                .await
+                .unwrap()
+        }));
+    }
+    let mut ids = Vec::new();
+    for handle in handles {
+        let envelopes = handle.await.unwrap();
+        ids.push(envelopes[0].envelope_id.clone());
+    }
+    assert!(ids.iter().all(|id| id == &ids[0]));
+    assert_eq!(puts.load(Ordering::SeqCst), 1);
+}
