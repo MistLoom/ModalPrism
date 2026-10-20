@@ -70,6 +70,30 @@ fn locate(root: Option<&Path>, raw: &str) -> Result<PathBuf, AccessError> {
     }
 }
 
+async fn read_opened(root: Option<&Path>, path: &Path) -> Result<Vec<u8>, AccessError> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| permanent("not-found"))?;
+    if let Some(root) = root {
+        let root = std::fs::canonicalize(root).map_err(|_| permanent("not-found"))?;
+        let opened = fd_path(&file)?;
+        if !opened.starts_with(&root) {
+            return Err(permanent("not-found"));
+        }
+    }
+    let mut bytes = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut file, &mut bytes)
+        .await
+        .map_err(|_| permanent("not-found"))?;
+    Ok(bytes)
+}
+
+fn fd_path(file: &tokio::fs::File) -> Result<PathBuf, AccessError> {
+    use std::os::unix::io::AsRawFd;
+    let fd = file.as_raw_fd();
+    std::fs::canonicalize(format!("/proc/self/fd/{fd}")).map_err(|_| permanent("not-found"))
+}
+
 #[async_trait]
 impl Accessor for FileAccessor {
     fn id(&self) -> &str {
@@ -96,10 +120,9 @@ impl Accessor for FileAccessor {
         ready(ctx, request.deadline)?;
         let spec = parse_spec(&request.spec)?;
         let raw = raw_path(&spec, &request.locator)?;
-        let path = locate(spec.root.as_deref().map(Path::new), &raw)?;
-        let bytes = tokio::fs::read(&path)
-            .await
-            .map_err(|_| permanent("not-found"))?;
+        let root = spec.root.as_deref().map(Path::new);
+        let path = locate(root, &raw)?;
+        let bytes = read_opened(root, &path).await?;
         let media = spec
             .media_type
             .unwrap_or_else(|| "application/octet-stream".into());
@@ -140,3 +163,22 @@ fn caps() -> AccessorCapabilities {
 }
 
 static CAPS: std::sync::LazyLock<AccessorCapabilities> = std::sync::LazyLock::new(caps);
+
+#[cfg(test)]
+mod tests {
+    use super::{locate, read_opened};
+
+    #[tokio::test]
+    async fn swapped_symlink_after_locate_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let inside = root.path().join("note.txt");
+        std::fs::write(&inside, b"safe").unwrap();
+        std::fs::write(outside.path().join("secret"), b"secret").unwrap();
+        let path = locate(Some(root.path()), "note.txt").unwrap();
+        std::fs::remove_file(&inside).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret"), &inside).unwrap();
+        let error = read_opened(Some(root.path()), &path).await.unwrap_err();
+        assert_eq!(error.message, "not-found");
+    }
+}
