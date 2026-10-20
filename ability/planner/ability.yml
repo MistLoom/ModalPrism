@@ -1,0 +1,20 @@
+framework_version: "1"
+id: planner
+open: true
+protocols: [fun, http]
+depends: []
+stateful: true
+description: 扫描到期信源并租约任务
+methods:
+  - id: tick
+    description: 派出到期任务
+    input:
+      type: object
+  - id: trigger
+    description: 把信源标成到期并派出
+    input:
+      type: object
+  - id: next
+    description: 读取信源的下一次时间
+    input:
+      type: object

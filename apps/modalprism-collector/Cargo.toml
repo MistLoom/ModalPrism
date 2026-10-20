@@ -1,0 +1,46 @@
+[package]
+name = "modalprism-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "一条命令初始化存储并进入采集循环"
+publish = false
+
+[dependencies]
+ability-core.workspace = true
+ability-support.workspace = true
+accessor_api = { path = "../../ability/accessor_api" }
+accessor_browser = { path = "../../ability/accessor_browser" }
+accessor_file = { path = "../../ability/accessor_file" }
+accessor_http = { path = "../../ability/accessor_http" }
+accessor_paid_api = { path = "../../ability/accessor_paid_api" }
+accessor_push = { path = "../../ability/accessor_push" }
+accessor_rss = { path = "../../ability/accessor_rss" }
+accessor_search = { path = "../../ability/accessor_search" }
+assembly = { path = "../../crates/assembly" }
+async-trait.workspace = true
+committer = { path = "../../ability/committer" }
+ability-config = { path = "../../ability/config" }
+ability-egress = { path = "../../ability/egress" }
+ability-planner = { path = "../../ability/planner" }
+config = { path = "../../crates/config" }
+config_inspect = { path = "../../ability/config_inspect" }
+frame-core.workspace = true
+frame-port-http.workspace = true
+health = { path = "../../ability/health" }
+paid_gateway = { path = "../../ability/paid_gateway" }
+runner = { path = "../../ability/runner" }
+serde_json.workspace = true
+strata_queue = { path = "../../ability/strata_queue" }
+strata_read = { path = "../../ability/strata_read" }
+strata_write = { path = "../../ability/strata_write" }
+tokio = { workspace = true, features = ["signal"] }
+
+[dev-dependencies]
+strata-client = { path = "../../crates/strata-client" }
+strata-model = { path = "../../crates/strata-model" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

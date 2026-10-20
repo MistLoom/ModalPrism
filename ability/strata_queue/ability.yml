@@ -1,0 +1,24 @@
+framework_version: "1"
+id: strata_queue
+open: true
+protocols: [fun]
+depends: []
+stateful: true
+description: 控制库任务队列
+methods:
+  - id: enqueue
+    description: 写入任务
+    input:
+      type: object
+  - id: lease
+    description: 租约一批任务
+    input:
+      type: object
+  - id: extend
+    description: 延长租约
+    input:
+      type: object
+  - id: nack
+    description: 退回任务
+    input:
+      type: object

@@ -100,7 +100,7 @@
 
 **目标**　一条命令完成存储初始化并进入采集循环。
 
-**范围**　`ability/` 下的 Ability crate，以及 `apps/modalprism-collector`。链接方式以 `docs/specs/leaf-integration.md` 为准。组合根持有 Planner、Runner、Committer、健康评估和配置监听的循环。
+**范围**　`ability/` 下的 Ability crate，以及 `apps/modalprism-collector`。链接方式以 `docs/specs/leaf-integration.md` 为准。启动、监听和循环见 `docs/specs/assembly.md`。组合根持有 Planner、Runner、Committer、健康评估和配置监听的循环。
 
 **交付**　采集进程的启动路径。
 
