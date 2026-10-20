@@ -93,7 +93,10 @@ fn rewrite_string(
     if parts.len() == 1 {
         return match &parts[0] {
             Part::Env(name) => string_node(node, lookup_env(node, name, world, diags)),
-            Part::Secret(path) => string_node(node, lookup_secret(node, path, world, diags)),
+            Part::Secret(path) => {
+                let _ = lookup_secret(node, path, world, diags);
+                string_node(node, secret_placeholder(path))
+            }
             Part::Ref { id, path } => resolve_ref(owner, node, id, path, world, stack, diags),
             Part::Text(text) => string_node(node, text.clone()),
         };
@@ -103,7 +106,10 @@ fn rewrite_string(
         match part {
             Part::Text(text) => combined.push_str(&text),
             Part::Env(name) => combined.push_str(&lookup_env(node, &name, world, diags)),
-            Part::Secret(path) => combined.push_str(&lookup_secret(node, &path, world, diags)),
+            Part::Secret(path) => {
+                let _ = lookup_secret(node, &path, world, diags);
+                combined.push_str(&secret_placeholder(&path));
+            }
             Part::Ref { id, path } => {
                 let resolved = resolve_ref(owner, node, &id, &path, world, stack, diags);
                 match resolved.as_str() {
@@ -166,6 +172,10 @@ fn lookup_env(at: &Node, name: &str, world: &World<'_>, diags: &mut Vec<Diagnost
             String::new()
         }
     }
+}
+
+fn secret_placeholder(path: &str) -> String {
+    format!("${{secret:{path}}}")
 }
 
 fn lookup_secret(at: &Node, path: &str, world: &World<'_>, diags: &mut Vec<Diagnostic>) -> String {
