@@ -231,6 +231,33 @@ async fn feed_filters_categories_and_can_keep_summary_as_body() {
 }
 
 #[tokio::test]
+async fn feed_decodes_a_second_layer_of_entities() {
+    let registry = Registry::builtins();
+    let feed = r#"<?xml version="1.0"?><rss><channel><item>
+        <title>Army&amp;#039;s unit</title>
+        <link>https://example.com/army</link>
+        <description>Army&amp;#039;s note</description>
+        </item></channel></rss>"#;
+    let pipeline = json!([{ "run": ["adapter/feed-items"] }]);
+    let output = run(&registry, bare(feed, "application/rss+xml", pipeline))
+        .await
+        .unwrap();
+    assert_eq!(titles(&output.changeset.ops), ["Army's unit"]);
+    let summary = output.changeset.ops.iter().find_map(|op| match op {
+        Op::PutFacet {
+            kind: FacetKind::Struct,
+            body: Body::Struct { value },
+            ..
+        } => value
+            .pointer("/hints/summary")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        _ => None,
+    });
+    assert_eq!(summary.as_deref(), Some("Army's note"));
+}
+
+#[tokio::test]
 async fn list_modes_read_markdown_and_changelogs() {
     let registry = Registry::builtins();
     let markdown = "# Notes\n\n[第一条长标题](https://example.com/posts/a)\n[Read](https://example.com/posts/a)\n";

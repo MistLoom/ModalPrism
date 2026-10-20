@@ -12,7 +12,8 @@ use crate::model::{
     FacetDraft, Follow, InputSelector, OutputDecl,
 };
 use crate::textutil::{
-    absolute_http, guid_identity, locator_text, parse_published, strip_tags, url_identity,
+    absolute_http, decode_basic_entities, guid_identity, locator_text, parse_published, strip_tags,
+    url_identity,
 };
 use crate::traits::{ContentAdapter, SearchAdapter};
 
@@ -212,15 +213,16 @@ fn discovery_from(
         .summary
         .as_deref()
         .map(strip_tags)
+        .map(|text| decode_basic_entities(&text))
         .filter(|text| !text.is_empty());
     let offset = spec.get("publishedAtUtcOffset").and_then(Value::as_str);
     let hints = crate::model::DiscoveryHints {
-        title: entry.title.clone(),
+        title: entry.title.as_deref().map(decode_basic_entities),
         published_at: entry
             .published
             .as_deref()
             .and_then(|raw| parse_published(raw, offset, None)),
-        author: entry.author.clone(),
+        author: entry.author.as_deref().map(decode_basic_entities),
         summary: summary.clone(),
         rank: None,
         extra: Default::default(),

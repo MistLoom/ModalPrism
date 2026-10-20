@@ -148,8 +148,10 @@ fn push_source(snapshot: &config::Snapshot, channel: &str) -> Option<(String, Va
         if module.get("kind").and_then(Value::as_str) != Some("source") {
             continue;
         }
-        let locator = module.pointer("/access/locator")?;
-        let Locator::PushChannel { channel: found } = locator_of(locator)? else {
+        let Some(locator) = module.pointer("/access/locator") else {
+            continue;
+        };
+        let Some(Locator::PushChannel { channel: found }) = locator_of(locator) else {
             continue;
         };
         if found != channel {
