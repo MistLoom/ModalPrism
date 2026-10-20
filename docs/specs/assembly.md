@@ -8,6 +8,8 @@
 
 ```text
 modalprism-collector [--data DIR] [--config DIR] [--http ADDR] [--proxy ADDR] [--push ADDR]
+
+同一 ops 端口提供 Web 控制台：`http://<http>/console/`（静态资源）与 `/console/api/v1/*`（控制台 API）。详见 `docs/console.md`。构建采集进程前需在 `apps/console-web` 执行 `npm ci && npm run build`，或通过环境变量 `MODALPRISM_CONSOLE_DIST` 指定前端产物目录。
 ```
 
 缺省：
