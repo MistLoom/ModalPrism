@@ -183,6 +183,7 @@ dependencies = [
  "bytes",
  "config",
  "quick-xml 0.37.5",
+ "regex",
  "scraper",
  "serde",
  "serde_json",

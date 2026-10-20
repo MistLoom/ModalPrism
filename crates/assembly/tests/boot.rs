@@ -490,6 +490,125 @@ async fn push_stores_items_that_can_be_read_back() {
 }
 
 #[tokio::test]
+async fn detail_follow_stores_the_missing_date_and_skips_the_filled_item() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let detail_b = Arc::new(AtomicUsize::new(0));
+    let detail_bg = Arc::clone(&detail_b);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let detail_bg = Arc::clone(&detail_bg);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let text = String::from_utf8_lossy(&buf[..n]);
+                let path = text.split_whitespace().nth(1).unwrap_or("/");
+                let (ctype, body) = if path.contains("robots.txt") {
+                    ("text/plain", "User-agent: *\nAllow: /\n".to_string())
+                } else if path.starts_with("/list") {
+                    (
+                        "application/json",
+                        format!(
+                            r#"{{"items":[{{"url":"http://{addr}/a","title":"甲"}},{{"url":"http://{addr}/b","title":"乙","publishedAt":"2026-10-01T00:00:00Z"}}]}}"#
+                        ),
+                    )
+                } else if path.starts_with("/a") {
+                    (
+                        "text/html",
+                        r#"<time class="hero-date" datetime="2026-09-27">September 27, 2026</time><h1 class="hero-title">文章</h1>"#.to_string(),
+                    )
+                } else if path.starts_with("/b") {
+                    detail_bg.fetch_add(1, Ordering::SeqCst);
+                    ("text/html", "filled".to_string())
+                } else {
+                    ("text/plain", "missing".to_string())
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    write(
+        config.path(),
+        "system.yaml",
+        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\n  egress:\n    private_networks: allow\n",
+    );
+    write(
+        config.path(),
+        "accessors/http.yaml",
+        "id: accessor/http\nkind: accessor\nname: HTTP\nimplementation: builtin:http\nlimits:\n  timeout: 30s\n  concurrency: 4\n  retry:\n    attempts: 1\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
+    );
+    write(
+        config.path(),
+        "adapters/json-list.yaml",
+        "id: adapter/json-list\nkind: adapter\nname: JSON\nimplementation: builtin:json-list\nrole: search\nconsumes:\n  - {kind: raw, media_type: application/json}\nproduces: [discovery]\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: fixed\n    base: 1s\n    max: 1s\n",
+    );
+    write(
+        config.path(),
+        "adapters/page-fields.yaml",
+        "id: adapter/page-fields\nkind: adapter\nname: 页面字段\nimplementation: builtin:page-fields\nrole: content\nconsumes:\n  - {kind: raw, part_role: document, media_type: text/html}\nproduces:\n  - {kind: struct, variant: page}\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: fixed\n    base: 1s\n    max: 1s\n",
+    );
+    write(
+        config.path(),
+        "sources/detail.yaml",
+        &format!(
+            "id: source/detail\nkind: source\nname: Detail\npolicy:\n  robots:\n    mode: ignore\n    robots_reason: local-detail-server\naccess:\n  accessor: accessor/http\n  locator:\n    url: http://{addr}/list\npipeline:\n  - run: [adapter/json-list]\n    spec:\n      adapter/json-list:\n        items: /items\n        url: url\n        title: title\n        publishedAt: publishedAt\n        detail:\n          maxFetches: 1\n          fields: [publishedAt]\n  - for: follow\n    run: [adapter/page-fields]\n    spec:\n      adapter/page-fields:\n        publishedAt: time.hero-date\n        publishedAtAttr: datetime\n        title: h1.hero-title\nschedule:\n  interval: 1h\nadmission:\n  allowUrlPrefixes: [\"http://{addr}/\"]\n  initialBackfill:\n    limit: 10\n    maxAge: 365d\n"
+        ),
+    );
+    let services = Services::open(data.path(), config.path(), binds())
+        .await
+        .unwrap();
+    let tasks = services.call("planner.tick", json!({})).await.unwrap();
+    assert_eq!(tasks.as_array().map(Vec::len), Some(1));
+    let ran = services
+        .call("runner.run_task", json!({ "task": &tasks[0] }))
+        .await
+        .unwrap();
+    let follows = ran.get("follows").and_then(|item| item.as_array()).unwrap();
+    assert_eq!(follows.len(), 1);
+    let locator = follows[0]["locator"]["url"].as_str().unwrap();
+    assert!(locator.ends_with("/a"), "{locator}");
+    services.call("committer.flush", json!({})).await.unwrap();
+    services
+        .call("runner.run_task", json!({ "task": &follows[0] }))
+        .await
+        .unwrap();
+    services.call("committer.flush", json!({})).await.unwrap();
+    assert_eq!(detail_b.load(Ordering::SeqCst), 0);
+    let rid = services
+        .strata()
+        .resolve(&format!("url:http://{addr}/a"))
+        .await
+        .unwrap()
+        .unwrap();
+    let page = services
+        .call(
+            "strata_read.get",
+            json!({ "facet": format!("{rid}@struct:page#latest") }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page.pointer("/struct/publishedAt")
+            .and_then(|item| item.as_str()),
+        Some("2026-09-27T00:00:00Z")
+    );
+    assert_eq!(
+        page.pointer("/struct/title").and_then(|item| item.as_str()),
+        Some("文章")
+    );
+}
+
+#[tokio::test]
 async fn short_limit_interrupts_before_thirty_seconds() {
     let (elapsed, stored, hits) =
         run_slow("2s", Duration::from_secs(2), Duration::from_secs(15)).await;

@@ -8,7 +8,9 @@ use planner::{
     Receipts, SourcePlan, TaskSuccess, backoff, next_interval,
 };
 use serde_json::json;
-use strata_model::{ErrorClass, Locator, QueueName, SourceId, TaskReason, Timestamp};
+use strata_model::{
+    AccessTask, ErrorClass, Locator, QueueName, SourceId, TaskId, TaskReason, Timestamp,
+};
 
 fn now() -> Timestamp {
     Timestamp::parse("2026-10-20T00:00:00Z").unwrap()
@@ -133,6 +135,7 @@ impl Handler for Script {
             render_level: None,
             cost: 0,
             adapters: Vec::new(),
+            follows: Vec::new(),
         })
     }
 }
@@ -413,4 +416,59 @@ async fn earlier_next_at_is_dispatched_first() {
     let tasks = planner.tick(&[late, early], &caps, now()).await.unwrap();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].source_id.as_str(), "source/early");
+}
+
+#[tokio::test]
+async fn follow_task_is_leased_after_the_source_is_scheduled() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let scheduled = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap();
+    assert_eq!(scheduled.len(), 1);
+    let before = planner.source_status("source/blog").await.unwrap();
+    let follow = AccessTask {
+        task_id: TaskId::new("t_follow_1").unwrap(),
+        source_id: SourceId::new("source/blog").unwrap(),
+        accessor: "accessor/http".into(),
+        locator: Locator::Url {
+            url: "https://example.com/blog/post".into(),
+        },
+        spec: json!({}),
+        reason: TaskReason::Follow,
+        priority: 20,
+        queue: QueueName::Free,
+        lease_until: now(),
+        attempt: 0,
+        batch_key: None,
+        generation: 1,
+    };
+    planner
+        .queue()
+        .enqueue(std::slice::from_ref(&follow))
+        .await
+        .unwrap();
+    let mut leased = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap();
+    assert_eq!(leased.len(), 1);
+    assert_eq!(leased[0].task_id, follow.task_id);
+    assert_eq!(leased[0].reason, TaskReason::Follow);
+    let handler = Script {
+        hits: AtomicUsize::new(0),
+        error: None,
+        seen_cursor: std::sync::Mutex::new(None),
+    };
+    planner
+        .run(&plan(), leased.remove(0), &handler, &(), now(), now())
+        .await
+        .unwrap();
+    let after = planner.source_status("source/blog").await.unwrap();
+    assert_eq!(after.next_at, before.next_at);
+    let again = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap();
+    assert!(again.is_empty());
 }

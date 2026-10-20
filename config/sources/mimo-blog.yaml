@@ -1,0 +1,54 @@
+id: source/mimo-blog
+kind: source
+name: Xiaomi MiMo
+labels:
+  tier: T1
+  topic: "官方"
+access:
+  accessor: accessor/bundle-list
+  locator:
+    url: https://mimo.xiaomi.com/
+  spec:
+    maxScripts: 8
+    maxScriptBytes: 1048576
+    extract:
+      - type: quoted-fields
+        marker: 'sectionTitle:"Blog"'
+        endMarker: "sectionTitle:"
+        fields: [title, link, desc]
+      - type: route-record
+        routePrefix: /blog/
+        lang: en
+        skip:
+          - /blog/
+          - /blog/index
+          - /blog/blog1
+pipeline:
+  - run: [adapter/json-list]
+    spec:
+      adapter/json-list:
+        items: /items
+        url: url
+        title: title
+        summary: summary
+        publishedAt: publishedAt
+        publishedAtUtcOffset: "+08:00"
+        detail:
+          maxFetches: 30
+          fields: [publishedAt, title]
+  - for: follow
+    run: [adapter/page-fields]
+    spec:
+      adapter/page-fields:
+        publishedAt: "time.hero-date"
+        publishedAtAttr: datetime
+        title: "h1.hero-title"
+        summary: "p.hero-subtitle"
+        publishedAtUtcOffset: "+08:00"
+schedule:
+  interval: 2h
+admission:
+  allowUrlPrefixes: ["https://mimo.xiaomi.com/blog/"]
+  initialBackfill:
+    limit: 30
+    maxAge: 365d

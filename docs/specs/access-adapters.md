@@ -36,7 +36,7 @@ access(request, context) -> Vec<RawEnvelope>
 
 `Discovery.identity` 是身份键字符串。绝对 URL 先按基准 URL 解析，再使用序列化结果组成 `url:` 键。解析失败的条目跳过。本阶段不删除查询参数，不删除 fragment。
 
-`Follow::Yes` 携带访问器 id、`auto | never | always` 和优先级。条目带 `materialize` 时跟进为 `Follow::No`。
+`Follow::Yes` 携带访问器 id、`auto | never | always`、优先级和 `needs`。`needs` 为空时不入队。条目带 `materialize` 时跟进为 `Follow::No`。
 
 `Feedback.quality` 取 `ok`、`thin`、`blocked`、`empty`。`needs_render` 取 `L0` 到 `L4`。
 
@@ -126,6 +126,7 @@ access(request, context) -> Vec<RawEnvelope>
 | `adapter/feed-fulltext` | 内容 | 一份 `md` 和一份 `text`。顺序是频道标题和各条目的标题与正文 |
 | `adapter/html-list` | 搜索 | HTML、Markdown 与更新日志。规则见「列表与 Feed」 |
 | `adapter/json-list` | 搜索 | JSON 数组映射。规则见「列表与 Feed」 |
+| `adapter/page-fields` | 内容 | 详情页的标题、摘要和发布时间，写入 `struct:page` |
 | `adapter/readability-md` | 内容 | 去掉 `script`、`style`、`noscript`、`nav`、`footer`、`header`、`form`、`iframe`、`svg`。根节点优先 `article`，然后 `main`、`[role=main]`、`body`。产出 `md:readable` 与 `text`。可见文本为空：`empty` 且 `needs_render=L2`。少于 80 个字符：`thin` 且 `needs_render=L2`。输入特征含 `shell-page` 或 `challenge-page`：`blocked` 且 `needs_render=L2` |
 | `adapter/link-discovery` | 搜索 | 收集 `a[href]`，解析为 `http`/`https`，同一身份键只保留第一条 |
 | `adapter/jsonld-struct` | 内容 | 每个可解析的 `application/ld+json` 脚本进入 `struct:jsonld` 的 `items`。脚本值是数组时展开 |
@@ -149,11 +150,15 @@ access(request, context) -> Vec<RawEnvelope>
 
 YouTube、youtu.be、Vimeo 的播放页不把摘要写入正文，也不跟进。已有 `content` 仍写入 `html` facet。
 
-`adapter/html-list` 的 `parseMode` 缺省 `html`。`html` 必填 `item` 与 `link`，可选 `title`、`summary`、`publishedAt`、`baseUrl`、`minTitle`。`publishedAt` 是选择器字符串或 `{ selector, attr }`。未写 `attr` 时依次读 `datetime`、`content`、`title` 和文字，先读到能解析的值。链接相对 `baseUrl`，缺省相对 `locator`。与列表同一路径和查询的链接跳过。同一身份键保留较长的标题。
+`adapter/html-list` 的 `parseMode` 缺省 `html`。`html` 必填 `item` 与 `link`，可选 `title`、`summary`、`publishedAt`、`baseUrl`、`minTitle`、`publishedAtRegex`。`publishedAt` 是选择器字符串或 `{ selector, attr }`。未写 `attr` 时依次读 `datetime`、`content`、`title` 和文字，先读到能解析的值。选择器没有读到日期时，`publishedAtRegex` 在该条目的 HTML 上取第一个捕获组。链接相对 `baseUrl`，缺省相对 `locator`。与列表同一路径和查询的链接跳过。同一身份键保留较长的标题。
 
 `markdown` 读取 `[标题](地址)`。`minTitle` 缺省 1，按字符数。`docusaurus_changelog` 读取 `article` 或 `.markdown` 内带 `id` 的 `h2`/`h3`；整段标题是日期时，该日期作用于后续条目，直到下一个非日期 `h2`。`intercom_changelog` 读取 `article` 内带 `id` 的 `h2`/`h3`，标题能解析为日期时，后续兄弟节点的文字作为摘要和 `text` facet，且不跟进。日期标题的偏移缺省 `+00:00`。条目地址是列表地址加上标题 `id` 的 fragment。
 
 `adapter/json-list` 用 `items`（JSON Pointer）或 `itemsPath`（点路径；空字符串表示根数组）定位数组。`url` 是条目上的键，相对 `locator` 补全。`urlTemplate` 用 `{路径}` 做百分号编码、`{raw:路径}` 原样插入，结果必须已是 `http` 或 `https` 绝对地址。`title`、`summary`、`author` 可以是键或键数组；`titlePaths`、`summaryPaths`、`authorPaths` 按顺序取第一个非空标量。`publishedAt` 或 `publishedAtPath` 配合 `publishedAtUnit`：`epoch_s`、`epoch_ms`、`yyyymmdd`。`externalIdPath` 追加 `ext:` 身份键。`decodeEntities` 为真时，标题和摘要解开与 Feed 相同的一层命名实体和数字实体。`summaryIsBody` 为真时，摘要作为 `text` facet 放入 `materialize`，且不跟进。路径不是数组或没有映射出条目时结果为空。
+
+`html-list` 与 `json-list` 都可以写 `detail`。`maxFetches` 必填，范围 0 到 50。`fields` 取 `publishedAt`、`title`、`summary`。字段在条目中缺失且摘要没有作为正文时，`Follow::Yes` 的访问器是 `accessor/http`，`needs` 列出缺失字段。字段都已存在则为 `Follow::No`。没有 `detail` 时，`Follow::Yes` 的 `needs` 为空。
+
+`adapter/page-fields` 读取详情页。`publishedAt`、`title`、`summary` 是选择器。`publishedAtAttr` 指定属性，缺省时依次读 `datetime`、`content`、`title` 和文字。`publishedAtRegex` 在整页 HTML 上取第一个捕获组，只在选择器没有读到日期时使用。`publishedAtUtcOffset` 与列表相同。至少配置一个字段。抽出的对象写入 `struct:page`，并带上 `url`。什么都没抽出时不写 facet。
 
 ## 相同输入
 

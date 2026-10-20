@@ -19,14 +19,16 @@ use egress::{Resolver, TcpDial};
 use planner::{Handler, Planner, Receipts};
 use serde_json::{Value, json};
 use strata_client::{Options, Strata};
-use strata_model::{ApplyOpts, ChangeSet, Producer, Timestamp};
+use strata_model::{
+    ApplyOpts, ChangeSet, FacetKind, FacetRef, Locator, Producer, TaskReason, Timestamp, VersionSel,
+};
 
 pub use error::{Error, invalid_input};
 pub use listen::{serve_proxy, serve_push};
 pub use plans::{capacities, flush_interval, snapshot_interval};
 pub use transport::{EgressGw, policy_of};
 
-use execute::{FetchState, NoSession};
+use execute::{FetchState, FollowWork, NoSession};
 use queue::{Hot, StrataQueue};
 use stage::DiskStaging;
 use transport::{HttpTransport, PaidBridge, PaidGw, SystemResolver};
@@ -212,6 +214,7 @@ impl Services {
 
 struct TaskHandler {
     state: FetchState,
+    strata: Arc<Strata>,
 }
 
 #[async_trait]
@@ -221,8 +224,67 @@ impl Handler for TaskHandler {
         task: &strata_model::AccessTask,
         cursor: Option<Value>,
     ) -> Result<planner::TaskSuccess, planner::Classified> {
-        execute::fetch(&self.state, task, cursor).await
+        let resource = if task.reason == TaskReason::Follow {
+            let key = match &task.locator {
+                Locator::Url { url } => format!("url:{url}"),
+                _ => String::new(),
+            };
+            if key.is_empty() {
+                None
+            } else {
+                self.strata.resolve(&key).await.ok().flatten()
+            }
+        } else {
+            None
+        };
+        let fetched = execute::fetch(&self.state, task, cursor, resource).await?;
+        let mut success = fetched.success;
+        success.follows = open_follows(&self.strata, fetched.follows, fetched.max_fetches).await;
+        Ok(success)
     }
+}
+
+async fn open_follows(
+    strata: &Strata,
+    works: Vec<FollowWork>,
+    max_fetches: usize,
+) -> Vec<strata_model::AccessTask> {
+    let mut out = Vec::new();
+    for work in works {
+        if out.len() >= max_fetches {
+            break;
+        }
+        if let Some(rid) = strata.resolve(&work.identity).await.ok().flatten() {
+            let reference = FacetRef::new(
+                rid,
+                FacetKind::Struct,
+                Some("page".into()),
+                VersionSel::Latest,
+            );
+            if let Ok(reference) = reference {
+                if let Ok(Some(facet)) = strata.get(&reference, true).await {
+                    if needs_met(facet.value.as_ref(), &work.needs) {
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(work.task);
+    }
+    out
+}
+
+fn needs_met(value: Option<&Value>, needs: &[String]) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    needs.iter().all(|need| {
+        value.get(need).is_some_and(|item| match item {
+            Value::String(text) => !text.is_empty(),
+            Value::Null => false,
+            _ => true,
+        })
+    })
 }
 
 struct PaidReceipts {
@@ -677,15 +739,17 @@ async fn runner_run(services: &Services, args: &Value) -> Result<Value, Error> {
         .map_err(|source| Error::with_source("节奏", source))?;
     let handler = TaskHandler {
         state: services.fetch_state(plan.timeout),
+        strata: services.strata(),
     };
     let receipts = PaidReceipts {
         paid: Arc::clone(&services.paid),
     };
-    services
+    let follows = services
         .planner
         .run(&plan, args.task, &handler, &receipts, now, deadline)
         .await?;
-    Ok(json!({ "ok": true }))
+    let follows = serde_json::to_value(&follows).unwrap_or(Value::Array(Vec::new()));
+    Ok(json!({ "ok": true, "follows": follows }))
 }
 
 async fn health_evaluate(services: &Services) -> Result<Value, Error> {

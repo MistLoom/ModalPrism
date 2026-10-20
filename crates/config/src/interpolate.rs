@@ -20,16 +20,40 @@ pub fn interpolate(
         env,
         secrets,
     };
-    *system = rewrite("system", system, &world, &mut Vec::new(), &mut diags);
+    *system = rewrite(
+        "system",
+        system,
+        &world,
+        &mut Pass {
+            stack: Vec::new(),
+            diags: &mut diags,
+            keep_env: false,
+        },
+    );
     let ids: Vec<String> = modules.keys().cloned().collect();
     for id in ids {
         let Some(node) = modules.get(&id).cloned() else {
             continue;
         };
-        let rewritten = rewrite(&id, &node, &world, &mut Vec::new(), &mut diags);
+        let rewritten = rewrite(
+            &id,
+            &node,
+            &world,
+            &mut Pass {
+                stack: Vec::new(),
+                diags: &mut diags,
+                keep_env: !module_enabled(&node),
+            },
+        );
         modules.insert(id, rewritten);
     }
     diags
+}
+
+struct Pass<'a> {
+    stack: Vec<String>,
+    diags: &'a mut Vec<Diagnostic>,
+    keep_env: bool,
 }
 
 struct World<'a> {
@@ -39,19 +63,24 @@ struct World<'a> {
     secrets: &'a BTreeMap<String, String>,
 }
 
-fn rewrite(
-    owner: &str,
-    node: &Node,
-    world: &World<'_>,
-    stack: &mut Vec<String>,
-    diags: &mut Vec<Diagnostic>,
-) -> Node {
+fn module_enabled(node: &Node) -> bool {
+    let Data::Map(entries) = &node.data else {
+        return true;
+    };
+    entries
+        .iter()
+        .find(|(key, _)| key == "enabled")
+        .map(|(_, child)| !matches!(child.data, Data::Bool(false)))
+        .unwrap_or(true)
+}
+
+fn rewrite(owner: &str, node: &Node, world: &World<'_>, pass: &mut Pass<'_>) -> Node {
     match &node.data {
-        Data::String(text) => rewrite_string(owner, node, text, world, stack, diags),
+        Data::String(text) => rewrite_string(owner, node, text, world, pass),
         Data::Array(items) => {
             let items = items
                 .iter()
-                .map(|item| rewrite(owner, item, world, stack, diags))
+                .map(|item| rewrite(owner, item, world, pass))
                 .collect();
             Node {
                 data: Data::Array(items),
@@ -61,7 +90,7 @@ fn rewrite(
         Data::Map(entries) => {
             let entries = entries
                 .iter()
-                .map(|(key, child)| (key.clone(), rewrite(owner, child, world, stack, diags)))
+                .map(|(key, child)| (key.clone(), rewrite(owner, child, world, pass)))
                 .collect();
             Node {
                 data: Data::Map(entries),
@@ -77,13 +106,12 @@ fn rewrite_string(
     node: &Node,
     text: &str,
     world: &World<'_>,
-    stack: &mut Vec<String>,
-    diags: &mut Vec<Diagnostic>,
+    pass: &mut Pass<'_>,
 ) -> Node {
     let parts = match split_interps(text) {
         Ok(parts) => parts,
         Err(message) => {
-            push(diags, node, message);
+            push(pass.diags, node, message);
             return node.clone();
         }
     };
@@ -92,12 +120,12 @@ fn rewrite_string(
     }
     if parts.len() == 1 {
         return match &parts[0] {
-            Part::Env(name) => string_node(node, lookup_env(node, name, world, diags)),
+            Part::Env(name) => string_node(node, lookup_env(node, name, world, pass)),
             Part::Secret(path) => {
-                let _ = lookup_secret(node, path, world, diags);
+                let _ = lookup_secret(node, path, world, pass.diags);
                 string_node(node, secret_placeholder(path))
             }
-            Part::Ref { id, path } => resolve_ref(owner, node, id, path, world, stack, diags),
+            Part::Ref { id, path } => resolve_ref(owner, node, id, path, world, pass),
             Part::Text(text) => string_node(node, text.clone()),
         };
     }
@@ -105,17 +133,17 @@ fn rewrite_string(
     for part in parts {
         match part {
             Part::Text(text) => combined.push_str(&text),
-            Part::Env(name) => combined.push_str(&lookup_env(node, &name, world, diags)),
+            Part::Env(name) => combined.push_str(&lookup_env(node, &name, world, pass)),
             Part::Secret(path) => {
-                let _ = lookup_secret(node, &path, world, diags);
+                let _ = lookup_secret(node, &path, world, pass.diags);
                 combined.push_str(&secret_placeholder(&path));
             }
             Part::Ref { id, path } => {
-                let resolved = resolve_ref(owner, node, &id, &path, world, stack, diags);
+                let resolved = resolve_ref(owner, node, &id, &path, world, pass);
                 match resolved.as_str() {
                     Some(text) => combined.push_str(text),
                     None => {
-                        push(diags, node, format!("插值 {id}#{path} 的值不是字符串"));
+                        push(pass.diags, node, format!("插值 {id}#{path} 的值不是字符串"));
                     }
                 }
             }
@@ -130,31 +158,29 @@ fn resolve_ref(
     id: &str,
     path: &str,
     world: &World<'_>,
-    stack: &mut Vec<String>,
-    diags: &mut Vec<Diagnostic>,
+    pass: &mut Pass<'_>,
 ) -> Node {
     let mark = format!("{id}#{path}");
-    if stack.iter().any(|item| item == &mark) {
-        push(diags, at, format!("配置引用成环: {mark}"));
+    if pass.stack.iter().any(|item| item == &mark) {
+        push(pass.diags, at, format!("配置引用成环: {mark}"));
         return at.clone();
     }
     let Some(target_root) = world.get(id) else {
-        push(diags, at, format!("配置引用不存在: {id}"));
+        push(pass.diags, at, format!("配置引用不存在: {id}"));
         return at.clone();
     };
     let Some(target) = target_root.dig(path) else {
-        push(diags, at, format!("配置引用不存在: {mark}"));
+        push(pass.diags, at, format!("配置引用不存在: {mark}"));
         return at.clone();
     };
-    stack.push(mark);
+    pass.stack.push(mark);
     let resolved = rewrite(
         if id == "system" { "system" } else { id },
         target,
         world,
-        stack,
-        diags,
+        pass,
     );
-    stack.pop();
+    pass.stack.pop();
     let _ = owner;
     Node {
         file: at.file.clone(),
@@ -164,11 +190,14 @@ fn resolve_ref(
     }
 }
 
-fn lookup_env(at: &Node, name: &str, world: &World<'_>, diags: &mut Vec<Diagnostic>) -> String {
+fn lookup_env(at: &Node, name: &str, world: &World<'_>, pass: &mut Pass<'_>) -> String {
+    if pass.keep_env {
+        return format!("${{env:{name}}}");
+    }
     match world.env.get(name) {
         Some(value) => value.clone(),
         None => {
-            push(diags, at, format!("环境变量不存在: {name}"));
+            push(pass.diags, at, format!("环境变量不存在: {name}"));
             String::new()
         }
     }

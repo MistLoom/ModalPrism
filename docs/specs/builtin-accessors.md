@@ -1,6 +1,6 @@
 # 内置访问器
 
-本文固定 `http`、`rss`、`api`、`paid-api`、`search`、`push`、`file`、`browser` 的行为。契约见 `docs/specs/access-adapters.md`。设计第 6 节是模型。
+本文固定 `http`、`rss`、`api`、`paid-api`、`search`、`push`、`file`、`browser`、`bundle-list` 的行为。契约见 `docs/specs/access-adapters.md`。设计第 6 节是模型。
 
 实现在 `crates/accessors-builtin`。版本都是 `1`。`validate` 用 JSON 反序列化，未知字段类别为 `config`，消息 `spec 无效`。
 
@@ -79,7 +79,7 @@ spec 字段：`method` 缺省 `GET`，`headers`，`body`，`session`，`pages`�
 
 id 是 `paid-api`。定位符是非空的 `apiEndpoint`，不要求为 `http` URL。分页规则同 `api`，传输走 `PaidGateway::call`。
 
-`spec.service` 为非空字符串。`spec.params` 是对象，缺省 `{}`。`method` 不是 `GET` 时写入 `params.method`。请求体放进 `PaidCall.body`。分页参数并入 `params`：`offset` 与 `cursor` 写入同名查询参数的键，`link` 把当前 URL 写入 `params.url`。调用的 `endpoint` 仍是定位符。
+`spec.service` 为非空字符串。`spec.params` 是对象，缺省 `{}`。`spec.headers` 是二元组列表，缺省空，原样写入 `PaidCall.headers`。`method` 不是 `GET` 时写入 `params.method`。请求体放进 `PaidCall.body`。分页参数并入 `params`：`offset` 与 `cursor` 写入同名查询参数的键，`link` 把当前 URL 写入 `params.url`。调用的 `endpoint` 仍是定位符。
 
 `capabilities.paid.service` 为 `spec`，表示服务名在每次请求的 spec 里。`batchable` 为真。
 
@@ -177,6 +177,14 @@ spec 接受 `engine` 缺省 `moli`，`mode` 缺省 `auto`（`auto` 与 `cli` 相
 `metadata` 与 `network-trace` 在写入前按 `raw.redact_headers` 改写头值，命中的值是 `***`。追踪里键名为 `headers` 或以 `headers` 结尾的节点，以及全部由 `[名称, 值]` 组成的数组，使用同一名单。`transport.headers` 仍由 `redact_envelope` 改写。
 
 进程退出状态非 0 时，类别 `permanent`，消息 `engine`。
+
+## bundle-list
+
+id 是 `bundle-list`。定位符是 `http` 或 `https` URL。先取该页。页面不是 2xx 时原样返回。2xx 时按 `extract` 顺序在 HTML 上抽取；没有条目时，从页面里的 `script src` 取最后 `maxScripts` 个（缺省 8，范围 1 到 20），从后往前请求。非 2xx 或超过 `maxScriptBytes`（缺省 1048576，上限 2000000）的脚本跳过。第一份抽出条目的脚本停止。
+
+`extract` 非空。`quoted-fields` 从 `marker` 到 `endMarker` 之间读取对象，`fields` 是字段名，标题和链接都非空才保留。`route-record` 读取含 `routePath` 的对象，路径以 `routePrefix` 开头；`lang` 非空时还要相等；`skip` 中的路径丢弃。相对地址相对页面最终 URL 补全。标题、摘要和日期来自对象或 `frontmatter`。
+
+返回一个信封，媒体类型 `application/json`，正文是 `{"items":[...]}`。传输错误向上返回。
 
 ## 未实测
 

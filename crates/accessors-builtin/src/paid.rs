@@ -26,6 +26,8 @@ struct Spec {
     method: String,
     #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
+    headers: Vec<(String, String)>,
     #[serde(default = "empty_object")]
     params: Value,
     #[serde(default = "one_page")]
@@ -153,6 +155,7 @@ impl Accessor for PaidApiAccessor {
                     endpoint: endpoint.clone(),
                     params,
                     body: Bytes::from(spec.body.clone().unwrap_or_default()),
+                    headers: spec.headers.clone(),
                 })
                 .await?;
             let cursor = next_cursor(

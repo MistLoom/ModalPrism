@@ -333,6 +333,20 @@ impl Engine {
             .await
     }
 
+    pub async fn lease_follows(
+        &self,
+        queue: QueueName,
+        count: usize,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Vec<strata_model::AccessTask>, Error> {
+        let inner = self.inner.lock().await;
+        inner
+            .control
+            .lease_follows(queue, count, lease_for, now)
+            .await
+    }
+
     pub async fn accepted_state(
         &self,
         scope: &str,

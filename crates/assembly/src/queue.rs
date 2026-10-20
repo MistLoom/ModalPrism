@@ -160,6 +160,19 @@ impl planner::Queue for StrataQueue {
             .map_err(plan_err)
     }
 
+    async fn lease_follows(
+        &self,
+        queue: QueueName,
+        count: usize,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Vec<AccessTask>, planner::PlannerError> {
+        self.0
+            .lease_follows(queue, count, lease_for, now)
+            .await
+            .map_err(plan_err)
+    }
+
     async fn leased_count(
         &self,
         queue: QueueName,

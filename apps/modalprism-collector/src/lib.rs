@@ -293,7 +293,26 @@ fn spawn_loops(
                 continue;
             };
             for task in tasks {
-                let _ = invoke(&host_tick, "runner", "run_task", json!({ "task": task })).await;
+                let Ok(value) = invoke(&host_tick, "runner", "run_task", json!({ "task": task })).await
+                else {
+                    continue;
+                };
+                let Some(follows) = value.get("follows").and_then(Value::as_array) else {
+                    continue;
+                };
+                if follows.is_empty() {
+                    continue;
+                }
+                let _ = invoke(&host_tick, "committer", "flush", json!({})).await;
+                for follow in follows {
+                    let _ = invoke(
+                        &host_tick,
+                        "runner",
+                        "run_task",
+                        json!({ "task": follow }),
+                    )
+                    .await;
+                }
             }
         }
     });

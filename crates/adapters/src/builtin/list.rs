@@ -11,8 +11,8 @@ use crate::model::{
     FacetDraft, Feedback, Follow, InputSelector, OutputDecl, Quality,
 };
 use crate::textutil::{
-    absolute_http, collapse_ws, decode_basic_entities, http_absolute, json_path, locator_text,
-    parse_published, render_template, url_identity,
+    absolute_http, capture_pattern, collapse_ws, decode_basic_entities, first_capture,
+    http_absolute, json_path, locator_text, parse_published, render_template, url_identity,
 };
 use crate::traits::SearchAdapter;
 
@@ -92,8 +92,16 @@ struct HtmlSpec {
     published_selector: Option<String>,
     published_attr: Option<String>,
     offset: Option<String>,
+    published_regex: Option<String>,
     base_url: Option<String>,
     min_title: usize,
+    detail: Option<DetailNeed>,
+}
+
+struct DetailNeed {
+    published: bool,
+    title: bool,
+    summary: bool,
 }
 
 #[async_trait]
@@ -128,6 +136,10 @@ impl SearchAdapter for HtmlList {
                 return Err(AdapterError::config("publishedAtUtcOffset"));
             }
         }
+        if let Some(pattern) = &parsed.published_regex {
+            capture_pattern(pattern).map_err(|_| AdapterError::config("publishedAtRegex"))?;
+        }
+        detail_need(spec)?;
         Ok(())
     }
 
@@ -197,6 +209,7 @@ impl SearchAdapter for JsonList {
                 return Err(AdapterError::config("publishedAtUtcOffset"));
             }
         }
+        detail_need(spec)?;
         Ok(())
     }
 
@@ -279,7 +292,15 @@ fn html_items(
             .and_then(|selector| element.select(selector).next())
             .map(|node| collapse_ws(&node.text().collect::<String>()))
             .filter(|text| !text.is_empty());
-        let published = published_at(element, published_sel.as_ref(), spec);
+        let mut published = published_at(element, published_sel.as_ref(), spec);
+        if published.is_none() {
+            if let Some(pattern) = &spec.published_regex {
+                let raw = first_capture(pattern, &element.html());
+                published = raw
+                    .as_deref()
+                    .and_then(|text| parse_published(text, spec.offset.as_deref(), None));
+            }
+        }
         if let Some(index) = seen.iter().position(|item| item == &identity) {
             if let Some(title) = title.clone() {
                 replace_shorter_title(&mut items[index], title);
@@ -292,11 +313,19 @@ fn html_items(
             ItemFields {
                 url: absolute,
                 identity: vec![identity],
-                title,
+                title: title.clone(),
                 published,
                 author: None,
-                summary,
+                summary: summary.clone(),
                 summary_is_body: false,
+                follow: listing_follow(
+                    input,
+                    spec.detail.as_ref(),
+                    published.is_some(),
+                    title.as_deref(),
+                    summary.as_deref(),
+                    false,
+                ),
             },
         ));
     }
@@ -330,11 +359,19 @@ fn markdown_items(text: &str, base: &str, spec: &HtmlSpec, input: &AdapterInput)
             ItemFields {
                 url: absolute,
                 identity: vec![identity],
-                title: Some(title),
+                title: Some(title.clone()),
                 published: None,
                 author: None,
                 summary: None,
                 summary_is_body: false,
+                follow: listing_follow(
+                    input,
+                    spec.detail.as_ref(),
+                    false,
+                    Some(&title),
+                    None,
+                    false,
+                ),
             },
         ));
     }
@@ -384,11 +421,19 @@ fn changelog_items(
             ItemFields {
                 url: absolute,
                 identity: vec![identity],
-                title: Some(title),
+                title: Some(title.clone()),
                 published: section_date,
                 author: None,
                 summary: None,
                 summary_is_body: false,
+                follow: listing_follow(
+                    input,
+                    spec.detail.as_ref(),
+                    section_date.is_some(),
+                    Some(&title),
+                    None,
+                    false,
+                ),
             },
         ));
     }
@@ -437,6 +482,7 @@ fn intercom_items(
                 author: None,
                 summary: Some(body.clone()),
                 summary_is_body: true,
+                follow: Follow::No,
             },
         ));
     }
@@ -566,6 +612,14 @@ fn json_discovery(entry: &Value, input: &AdapterInput, spec: &Value) -> Option<D
         .get("summaryIsBody")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let follow = listing_follow(
+        input,
+        detail_need(spec).ok().flatten().as_ref(),
+        published.is_some(),
+        title.as_deref(),
+        summary.as_deref(),
+        summary_is_body,
+    );
     Some(discovery(
         input,
         ItemFields {
@@ -576,6 +630,7 @@ fn json_discovery(entry: &Value, input: &AdapterInput, spec: &Value) -> Option<D
             author,
             summary,
             summary_is_body,
+            follow,
         },
     ))
 }
@@ -597,9 +652,10 @@ struct ItemFields {
     author: Option<String>,
     summary: Option<String>,
     summary_is_body: bool,
+    follow: Follow,
 }
 
-fn discovery(input: &AdapterInput, fields: ItemFields) -> Discovery {
+fn discovery(_input: &AdapterInput, fields: ItemFields) -> Discovery {
     let ItemFields {
         url,
         identity,
@@ -608,20 +664,18 @@ fn discovery(input: &AdapterInput, fields: ItemFields) -> Discovery {
         author,
         summary,
         summary_is_body,
+        follow,
     } = fields;
-    let (materialize, follow) = if summary_is_body && summary.is_some() {
-        (
-            vec![FacetDraft {
-                kind: FacetKind::Text,
-                variant: None,
-                body: DraftBody::Text(summary.clone().unwrap_or_default()),
-                media_type: Some("text/plain".into()),
-                derived_from: Vec::new(),
-            }],
-            Follow::No,
-        )
+    let materialize = if summary_is_body && summary.is_some() {
+        vec![FacetDraft {
+            kind: FacetKind::Text,
+            variant: None,
+            body: DraftBody::Text(summary.clone().unwrap_or_default()),
+            media_type: Some("text/plain".into()),
+            derived_from: Vec::new(),
+        }]
     } else {
-        (Vec::new(), follow_yes(input))
+        Vec::new()
     };
     Discovery {
         locator: Locator::Url { url },
@@ -666,8 +720,10 @@ fn html_spec(spec: &Value) -> Result<HtmlSpec, AdapterError> {
         published_selector,
         published_attr,
         offset: optional_string(spec, "publishedAtUtcOffset"),
+        published_regex: optional_string(spec, "publishedAtRegex"),
         base_url: optional_string(spec, "baseUrl"),
         min_title,
+        detail: detail_need(spec)?,
     })
 }
 
@@ -816,12 +872,84 @@ fn parse_optional(raw: &Option<String>) -> Result<(), AdapterError> {
     Ok(())
 }
 
-fn follow_yes(input: &AdapterInput) -> Follow {
+fn listing_follow(
+    input: &AdapterInput,
+    detail: Option<&DetailNeed>,
+    has_published: bool,
+    title: Option<&str>,
+    summary: Option<&str>,
+    summary_is_body: bool,
+) -> Follow {
+    if summary_is_body && summary.is_some() {
+        return Follow::No;
+    }
+    let Some(detail) = detail else {
+        return Follow::Yes {
+            accessor: input.source.accessor.clone(),
+            render: input.source.render,
+            priority: 0,
+            needs: Vec::new(),
+        };
+    };
+    let mut needs = Vec::new();
+    if detail.published && !has_published {
+        needs.push("publishedAt".into());
+    }
+    if detail.title && title.unwrap_or("").trim().is_empty() {
+        needs.push("title".into());
+    }
+    if detail.summary && summary.unwrap_or("").trim().is_empty() {
+        needs.push("summary".into());
+    }
+    if needs.is_empty() {
+        return Follow::No;
+    }
     Follow::Yes {
-        accessor: input.source.accessor.clone(),
+        accessor: "accessor/http".into(),
         render: input.source.render,
         priority: 0,
+        needs,
     }
+}
+
+fn detail_need(spec: &Value) -> Result<Option<DetailNeed>, AdapterError> {
+    let Some(detail) = spec.get("detail") else {
+        return Ok(None);
+    };
+    let Some(detail) = detail.as_object() else {
+        return Err(AdapterError::config("detail"));
+    };
+    let max = detail
+        .get("maxFetches")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| AdapterError::config("detail.maxFetches"))?;
+    if max > 50 {
+        return Err(AdapterError::config("detail.maxFetches"));
+    }
+    let fields = detail
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AdapterError::config("detail.fields"))?;
+    let mut need = DetailNeed {
+        published: false,
+        title: false,
+        summary: false,
+    };
+    for field in fields {
+        match field.as_str() {
+            Some("publishedAt") => need.published = true,
+            Some("title") => need.title = true,
+            Some("summary") => need.summary = true,
+            _ => return Err(AdapterError::config("detail.fields")),
+        }
+    }
+    if max > 0 && fields.is_empty() {
+        return Err(AdapterError::config("detail.fields"));
+    }
+    if max == 0 {
+        return Ok(None);
+    }
+    Ok(Some(need))
 }
 
 fn number_ranks(items: &mut [Discovery]) {

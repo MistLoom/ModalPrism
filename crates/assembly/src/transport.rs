@@ -159,7 +159,7 @@ impl PaidTransport for PaidBridge {
                 HttpRequest {
                     method,
                     url: url.to_string(),
-                    headers: Vec::new(),
+                    headers: call.headers.clone(),
                     body: call.body,
                 },
             )

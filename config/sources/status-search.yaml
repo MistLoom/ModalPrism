@@ -10,6 +10,8 @@ access:
   spec:
     service: socialdata
     method: GET
+    headers:
+      - ["Authorization", "Bearer ${env:SOCIALDATA_API_KEY}"]
     params:
       query: "from:example -filter:replies"
       type: Latest

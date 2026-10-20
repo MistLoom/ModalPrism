@@ -1,0 +1,15 @@
+id: accessor/bundle-list
+kind: accessor
+name: 脚本列表
+implementation: builtin:bundle-list
+limits:
+  timeout: 60s
+  concurrency: 2
+  retry:
+    attempts: 2
+    backoff: exponential
+    base: 1s
+    max: 30s
+
+egress:
+  profile: direct

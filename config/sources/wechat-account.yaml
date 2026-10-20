@@ -10,7 +10,7 @@ access:
   spec:
     service: dajiala
     method: POST
-    body: '{"ghid":"gh_example","verifycode":""}'
+    body: '{"ghid":"gh_example","key":"${env:DAJIALA_KEY}","verifycode":""}'
 pipeline:
   - run: [adapter/json-list]
     spec:

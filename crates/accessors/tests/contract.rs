@@ -229,6 +229,7 @@ async fn paid_port_returns_budget_without_rewriting_it() {
             endpoint: "/q".into(),
             params: json!({}),
             body: Bytes::new(),
+            headers: Vec::new(),
         })
         .await
         .unwrap_err();

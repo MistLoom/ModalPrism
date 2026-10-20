@@ -33,6 +33,13 @@ pub trait Queue: Send + Sync {
         lease_for: Duration,
         now: Timestamp,
     ) -> Result<Option<AccessTask>, PlannerError>;
+    async fn lease_follows(
+        &self,
+        queue: QueueName,
+        count: usize,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Vec<AccessTask>, PlannerError>;
     async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, PlannerError>;
     async fn apply(&self, changeset: ChangeSet) -> Result<(), PlannerError>;
     async fn accepted_cursor(&self, source: &str) -> Result<Option<Value>, PlannerError>;
@@ -191,6 +198,37 @@ impl Queue for MemoryQueue {
             return Ok(None);
         };
         self.lease_id(&task_id, lease_for, now).await.map(Some)
+    }
+
+    async fn lease_follows(
+        &self,
+        queue: QueueName,
+        count: usize,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Vec<AccessTask>, PlannerError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let ids = {
+            let rows = self.rows.lock().await;
+            rows.iter()
+                .filter(|row| {
+                    row.task.queue == queue
+                        && row.task.reason == strata_model::TaskReason::Follow
+                        && row.status != "done"
+                        && !(row.status == "leased" && row.task.lease_until > now)
+                        && !row.retry_at.is_some_and(|retry| retry > now)
+                })
+                .take(count)
+                .map(|row| row.task.task_id.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut leased = Vec::with_capacity(ids.len());
+        for task_id in ids {
+            leased.push(self.lease_id(&task_id, lease_for, now).await?);
+        }
+        Ok(leased)
     }
 
     async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, PlannerError> {
