@@ -147,6 +147,19 @@ impl planner::Queue for StrataQueue {
             .map_err(plan_err)
     }
 
+    async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<AccessTask>, planner::PlannerError> {
+        self.0
+            .lease_ready(source, locator_key, lease_for, now)
+            .await
+            .map_err(plan_err)
+    }
+
     async fn leased_count(
         &self,
         queue: QueueName,

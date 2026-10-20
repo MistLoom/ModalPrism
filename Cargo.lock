@@ -5599,6 +5599,7 @@ dependencies = [
  "accessor_search",
  "assembly",
  "async-trait",
+ "axum",
  "committer",
  "config",
  "config_inspect",

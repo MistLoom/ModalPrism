@@ -215,3 +215,114 @@ async fn shutdown_releases_leases() {
         0
     );
 }
+
+#[tokio::test]
+async fn standard_preset_redacts_headers_before_they_reach_staging() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    write(
+        config.path(),
+        "system.yaml",
+        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\n  egress:\n    private_networks: allow\nstrata:\n  blob:\n    inline_size_threshold: 32KiB\n    dedicated_size_threshold: 8MiB\n  staging:\n    ttl: 12h\n",
+    );
+    write(
+        config.path(),
+        "accessors/browser.yaml",
+        "id: accessor/browser\nkind: accessor\nname: Browser\nimplementation: builtin:browser\nlimits:\n  timeout: 30s\n  concurrency: 2\n  retry:\n    attempts: 1\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+                let text = String::from_utf8_lossy(&buf);
+                let body = if text.contains("robots.txt") {
+                    "User-agent: *\nAllow: /\n"
+                } else {
+                    "ok"
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
+            });
+        }
+    });
+    write(
+        config.path(),
+        "sources/demo.yaml",
+        &format!(
+            "id: source/demo\nkind: source\nname: Demo\naccess:\n  accessor: accessor/browser\n  locator:\n    url: http://{addr}/page\npipeline: []\nschedule:\n  interval: 15m\nadmission: {{}}\n"
+        ),
+    );
+    let script = data.path().join("moli.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ncat <<'EOF'\n{\"final_url\":\"http://127.0.0.1/page\",\"status\":200,\"headers\":[[\"Content-Type\",\"text/html\"],[\"Set-Cookie\",\"secret\"]],\"html\":\"<p>ok</p>\",\"version\":\"fixture\"}\nEOF\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    let services = Services::open(data.path(), config.path(), binds())
+        .await
+        .unwrap();
+    services.set_browser_program(&script);
+    assert_eq!(
+        assembly::snapshot_interval(&services.config().applied()),
+        Duration::from_secs(15 * 60)
+    );
+    let task = AccessTask {
+        task_id: TaskId::new("task-redact").unwrap(),
+        source_id: SourceId::new("source/demo").unwrap(),
+        accessor: "accessor/browser".into(),
+        locator: Locator::Url {
+            url: format!("http://{addr}/page"),
+        },
+        spec: json!({}),
+        reason: TaskReason::Manual,
+        priority: 10,
+        queue: QueueName::Render,
+        lease_until: Timestamp::now(),
+        attempt: 0,
+        batch_key: None,
+        generation: 4,
+    };
+    services
+        .strata()
+        .enqueue(std::slice::from_ref(&task))
+        .await
+        .unwrap();
+    services
+        .strata()
+        .lease_id(&task.task_id, Duration::from_secs(60), Timestamp::now())
+        .await
+        .unwrap();
+    services
+        .call(
+            "runner.run_task",
+            json!({ "task": serde_json::to_value(&task).unwrap() }),
+        )
+        .await
+        .unwrap();
+    let mut saw_redacted = false;
+    for entry in std::fs::read_dir(data.path().join("staging")).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.is_file() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+        assert!(!text.contains("secret"), "{text}");
+        if text.contains("***") {
+            saw_redacted = true;
+        }
+    }
+    assert!(saw_redacted);
+}
