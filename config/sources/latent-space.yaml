@@ -1,0 +1,18 @@
+id: source/latent-space
+kind: source
+name: "Latent Space"
+labels:
+  tier: T2
+  topic: "个人"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://www.latent.space/feed
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 3h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

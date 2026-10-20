@@ -164,6 +164,43 @@ impl Services {
         &self.push
     }
 
+    pub(crate) async fn commit_inbound(
+        &self,
+        source_id: &str,
+        envelopes: &[strata_model::RawEnvelope],
+    ) -> Result<(), Error> {
+        let snapshot = self.config.applied();
+        let module = snapshot
+            .modules
+            .get(source_id)
+            .cloned()
+            .ok_or_else(|| Error::new("config"))?;
+        let state = self.fetch_state(Duration::from_secs(30));
+        let ops = execute::inbound_ops(&state, source_id, &module, envelopes)
+            .await
+            .map_err(|error| Error::new(error.message))?;
+        if ops.is_empty() {
+            return Ok(());
+        }
+        self.strata
+            .apply(
+                ChangeSet {
+                    producer: Producer {
+                        module: "push".into(),
+                        version: "1".into(),
+                        config_generation: snapshot.generation,
+                    },
+                    idempotency_key: None,
+                    ack: None,
+                    ops,
+                },
+                ApplyOpts::default(),
+            )
+            .await?;
+        self.strata.flush().await?;
+        Ok(())
+    }
+
     pub fn egress_gateway(&self) -> Arc<EgressGw> {
         Arc::clone(&self.egress)
     }

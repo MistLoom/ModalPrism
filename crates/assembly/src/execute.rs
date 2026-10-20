@@ -18,7 +18,7 @@ use planner::{Classified, Quality, ReceiptBody, TaskSuccess};
 use serde_json::{Map, Value};
 use strata_model::{
     Body, ErrorClass, FacetKind, IdentityKey, LineageInput, Locator, Op, PartRole, Producer,
-    RawEnvelope, Target, TaskReason,
+    QueueName, RawEnvelope, SourceId, Target, TaskId, TaskReason, Timestamp,
 };
 
 use crate::stage::{DiskStaging, read_part};
@@ -185,6 +185,50 @@ pub(crate) fn open_accessor(
         )));
     }
     by_id(name).ok_or_else(|| classified(ErrorClass::Config, "implementation"))
+}
+
+pub(crate) async fn inbound_ops(
+    state: &FetchState,
+    source_id: &str,
+    module: &Value,
+    envelopes: &[RawEnvelope],
+) -> Result<Vec<Op>, Classified> {
+    let source_id =
+        SourceId::new(source_id).map_err(|_| classified(ErrorClass::Config, "config"))?;
+    let accessor = module
+        .pointer("/access/accessor")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let channel = module
+        .pointer("/access/locator/channel")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let task = strata_model::AccessTask {
+        task_id: TaskId::new(format!("push-{source_id}"))
+            .map_err(|_| classified(ErrorClass::Config, "config"))?,
+        source_id,
+        accessor,
+        locator: Locator::PushChannel { channel },
+        spec: Value::Object(Map::new()),
+        reason: TaskReason::Manual,
+        priority: 0,
+        queue: QueueName::Push,
+        lease_until: Timestamp::now(),
+        attempt: 1,
+        batch_key: None,
+        generation: state.snapshot.generation,
+    };
+    let pipeline = module
+        .get("pipeline")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
+        raw_ops(envelopes)
+    } else {
+        adapted_ops(state, &task, module, envelopes, &pipeline, false).await
+    }
 }
 
 fn raw_ops(envelopes: &[RawEnvelope]) -> Result<Vec<Op>, Classified> {

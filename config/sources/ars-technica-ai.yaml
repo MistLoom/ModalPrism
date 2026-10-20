@@ -1,0 +1,18 @@
+id: source/ars-technica-ai
+kind: source
+name: "Ars Technica · AI"
+labels:
+  tier: T2
+  topic: "媒体"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://arstechnica.com/ai/feed/
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 1h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

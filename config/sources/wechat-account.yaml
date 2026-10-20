@@ -1,0 +1,26 @@
+id: source/wechat-account
+kind: source
+name: 公众号
+enabled: false
+description: 公众号历史列表。声明不含密钥。
+access:
+  accessor: accessor/paid-api
+  locator:
+    endpoint: https://www.dajiala.com/fbmain/monitor/v3/post_history
+  spec:
+    service: dajiala
+    method: POST
+    body: '{"ghid":"gh_example","verifycode":""}'
+pipeline:
+  - run: [adapter/json-list]
+    spec:
+      adapter/json-list:
+        items: /data
+        url: url
+        title: title
+        summary: digest
+        publishedAtPath: post_time
+        publishedAtUnit: epoch_s
+schedule:
+  interval: 2h
+admission: {}

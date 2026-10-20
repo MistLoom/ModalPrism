@@ -1,0 +1,20 @@
+id: accessor/rss
+kind: accessor
+name: rss
+implementation: builtin:rss
+limits:
+  timeout: 45s
+  concurrency: 4
+  retry:
+    attempts: 2
+    backoff: exponential
+    base: 1s
+    max: 30s
+
+egress:
+  profile: direct
+
+spec:
+  pages: 1
+  headers:
+    - ["Accept-Encoding", "gzip, identity"]

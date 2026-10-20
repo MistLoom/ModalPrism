@@ -1,0 +1,22 @@
+id: source/html-listing
+kind: source
+name: 网页列表示例
+enabled: false
+access:
+  accessor: accessor/http
+  locator:
+    url: https://example.com/news
+pipeline:
+  - run: [adapter/html-list]
+    spec:
+      adapter/html-list:
+        parseMode: html
+        item: ".news-list > .news-item"
+        link: "h2 a"
+        title: "h2 a"
+        publishedAt: time
+        publishedAtUtcOffset: "+08:00"
+schedule:
+  interval: 1h
+admission:
+  allowUrlPrefixes: ["https://example.com/posts/"]

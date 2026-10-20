@@ -1,0 +1,31 @@
+id: source/status-search
+kind: source
+name: 状态搜索
+enabled: false
+description: 查询最新公开状态。声明不含密钥。
+access:
+  accessor: accessor/paid-api
+  locator:
+    endpoint: https://api.socialdata.tools/twitter/search
+  spec:
+    service: socialdata
+    method: GET
+    params:
+      query: "from:example -filter:replies"
+      type: Latest
+pipeline:
+  - run: [adapter/json-list]
+    spec:
+      adapter/json-list:
+        items: /tweets
+        urlTemplate: "https://x.com/{user.screen_name}/status/{id_str}"
+        titlePaths: [full_text, text]
+        summaryPaths: [full_text, text]
+        authorPaths: [user.screen_name]
+        publishedAtPath: tweet_created_at
+        externalIdPath: id_str
+        decodeEntities: true
+        summaryIsBody: true
+schedule:
+  interval: 30m
+admission: {}

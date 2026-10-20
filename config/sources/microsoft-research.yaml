@@ -1,0 +1,18 @@
+id: source/microsoft-research
+kind: source
+name: "Microsoft Research"
+labels:
+  tier: T1
+  topic: "官方,研究"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://www.microsoft.com/en-us/research/feed/
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 2h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

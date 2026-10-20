@@ -1,0 +1,18 @@
+id: adapter/html-list
+kind: adapter
+name: 网页列表
+implementation: builtin:html-list
+role: search
+consumes:
+  - {kind: raw, part_role: document, media_type: text/html}
+  - {kind: raw, part_role: document, media_type: text/markdown}
+  - {kind: raw, part_role: document, media_type: text/plain}
+produces: [discovery]
+limits:
+  timeout: 30s
+  concurrency: 1
+  retry:
+    attempts: 0
+    backoff: exponential
+    base: 1s
+    max: 30s

@@ -122,17 +122,38 @@ access(request, context) -> Vec<RawEnvelope>
 
 | id | 角色 | 行为 |
 |---|---|---|
-| `adapter/feed-items` | 搜索 | RSS 2.0 与 Atom 1.0。定位符取 RSS `link`，或 Atom `rel=alternate` 的 `href`，否则取第一条 `href`。身份键先 `url:`，若 `guid` 或 Atom `id` 不含空白则再加 `ext:guid:`。有 `content:encoded` 或 Atom `content` 时作为 `html` facet 放入 `materialize`，且不跟进。摘要去掉标签。无法解析的 XML 是永久错误 |
+| `adapter/feed-items` | 搜索 | RSS 2.0 与 Atom 1.0。规则见「列表与 Feed」 |
 | `adapter/feed-fulltext` | 内容 | 一份 `md` 和一份 `text`。顺序是频道标题和各条目的标题与正文 |
-| `adapter/html-list` | 搜索 | spec 必填 `item` 与 `link` 选择器，可选 `title`、`summary`、`publishedAt`。`publishedAt` 可以是选择器字符串，或 `{ selector, attr }`。链接相对 `locator` 解析。零条时 `quality=empty`、`missing=[item]`、`needs_render=L2` |
-| `adapter/json-list` | 搜索 | spec 必填 `items`（JSON Pointer）和 `url`（条目上的键）。可选 `title`、`summary`、`publishedAt`。`items` 不是数组时结果为空 |
+| `adapter/html-list` | 搜索 | HTML、Markdown 与更新日志。规则见「列表与 Feed」 |
+| `adapter/json-list` | 搜索 | JSON 数组映射。规则见「列表与 Feed」 |
 | `adapter/readability-md` | 内容 | 去掉 `script`、`style`、`noscript`、`nav`、`footer`、`header`、`form`、`iframe`、`svg`。根节点优先 `article`，然后 `main`、`[role=main]`、`body`。产出 `md:readable` 与 `text`。可见文本为空：`empty` 且 `needs_render=L2`。少于 80 个字符：`thin` 且 `needs_render=L2`。输入特征含 `shell-page` 或 `challenge-page`：`blocked` 且 `needs_render=L2` |
 | `adapter/link-discovery` | 搜索 | 收集 `a[href]`，解析为 `http`/`https`，同一身份键只保留第一条 |
 | `adapter/jsonld-struct` | 内容 | 每个可解析的 `application/ld+json` 脚本进入 `struct:jsonld` 的 `items`。脚本值是数组时展开 |
 
 选择器无法解析、必填 spec 缺失，类别为 `config`。
 
-零条 Feed 或 JSON 列表的 `quality` 为 `empty`，不请求渲染。
+零条 Feed 或 JSON 列表的 `quality` 为 `empty`，不请求渲染。HTML 模式零条时 `needs_render=L2`。Markdown 与更新日志零条时不请求渲染。
+
+## 列表与 Feed
+
+`adapter/feed-items` 读 RSS 2.0 与 Atom 1.0。定位符取 RSS `link`，或 Atom `rel=alternate` 的 `href`，否则取第一条 `href`。身份键先 `url:`，若 `guid` 或 Atom `id` 不含空白则再加 `ext:guid:`。有 `content:encoded` 或 Atom `content` 时作为 `html` facet 放入 `materialize`，且不跟进。摘要去掉标签。无法解析的 XML 是永久错误。
+
+可选 spec：
+
+| 字段 | 行为 |
+|---|---|
+| `allowCategories` | 非空时，条目的 `category` 文本或 Atom `term` 至少有一项与名单大小写不敏感相等 |
+| `denyCategories` | 命中任一项则丢弃。先于允许名单 |
+| `summaryIsBody` | 为真且没有 `content` 时，把去标签后的摘要作为 `text` facet 放入 `materialize`，且不跟进 |
+| `publishedAtUtcOffset` | `+08:00` 这种偏移。纯日期按 UTC 零点。没有时区的日期时间使用该偏移，缺省 `+08:00` |
+
+YouTube、youtu.be、Vimeo 的播放页不把摘要写入正文，也不跟进。已有 `content` 仍写入 `html` facet。
+
+`adapter/html-list` 的 `parseMode` 缺省 `html`。`html` 必填 `item` 与 `link`，可选 `title`、`summary`、`publishedAt`、`baseUrl`、`minTitle`。`publishedAt` 是选择器字符串或 `{ selector, attr }`。未写 `attr` 时依次读 `datetime`、`content`、`title` 和文字，先读到能解析的值。链接相对 `baseUrl`，缺省相对 `locator`。与列表同一路径和查询的链接跳过。同一身份键保留较长的标题。
+
+`markdown` 读取 `[标题](地址)`。`minTitle` 缺省 1，按字符数。`docusaurus_changelog` 读取 `article` 或 `.markdown` 内带 `id` 的 `h2`/`h3`；整段标题是日期时，该日期作用于后续条目，直到下一个非日期 `h2`。`intercom_changelog` 读取 `article` 内带 `id` 的 `h2`/`h3`，标题能解析为日期时，后续兄弟节点的文字作为摘要和 `text` facet，且不跟进。日期标题的偏移缺省 `+00:00`。条目地址是列表地址加上标题 `id` 的 fragment。
+
+`adapter/json-list` 用 `items`（JSON Pointer）或 `itemsPath`（点路径；空字符串表示根数组）定位数组。`url` 是条目上的键，相对 `locator` 补全。`urlTemplate` 用 `{路径}` 做百分号编码、`{raw:路径}` 原样插入，结果必须已是 `http` 或 `https` 绝对地址。`title`、`summary`、`author` 可以是键或键数组；`titlePaths`、`summaryPaths`、`authorPaths` 按顺序取第一个非空标量。`publishedAt` 或 `publishedAtPath` 配合 `publishedAtUnit`：`epoch_s`、`epoch_ms`、`yyyymmdd`。`externalIdPath` 追加 `ext:` 身份键。`decodeEntities` 为真时，标题和摘要把 `&amp;` `&lt;` `&gt;` `&quot;` `&#39;` 换成原字符。`summaryIsBody` 为真时，摘要作为 `text` facet 放入 `materialize`，且不跟进。路径不是数组或没有映射出条目时结果为空。
 
 ## 相同输入
 

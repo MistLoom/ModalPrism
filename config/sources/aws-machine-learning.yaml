@@ -1,0 +1,18 @@
+id: source/aws-machine-learning
+kind: source
+name: "AWS Machine Learning Blog"
+labels:
+  tier: T1
+  topic: "官方,教程"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://aws.amazon.com/blogs/machine-learning/feed/
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 2h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

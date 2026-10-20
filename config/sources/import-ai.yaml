@@ -1,0 +1,18 @@
+id: source/import-ai
+kind: source
+name: "Import AI"
+labels:
+  tier: T2
+  topic: "个人,周刊"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://importai.substack.com/feed
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 3h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

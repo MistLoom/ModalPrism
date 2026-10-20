@@ -1,0 +1,18 @@
+id: source/the-verge-ai
+kind: source
+name: "The Verge · AI"
+labels:
+  tier: T2
+  topic: "媒体"
+access:
+  accessor: accessor/rss
+  locator:
+    url: https://www.theverge.com/rss/ai-artificial-intelligence/index.xml
+pipeline:
+  - run: [adapter/feed-items]
+schedule:
+  interval: 1h
+admission:
+  initialBackfill:
+    limit: 8
+    maxAge: 365d

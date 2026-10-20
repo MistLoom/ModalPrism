@@ -1,0 +1,23 @@
+id: source/inbound-items
+kind: source
+name: 外部推送
+access:
+  accessor: accessor/push
+  locator:
+    channel: items
+  spec:
+    token: local-inbound-token
+    ratePerSec: 5
+    burst: 10
+pipeline:
+  - run: [adapter/json-list]
+    spec:
+      adapter/json-list:
+        items: /items
+        url: url
+        title: title
+        summary: summary
+        publishedAt: publishedAt
+schedule:
+  interval: 1h
+admission: {}
