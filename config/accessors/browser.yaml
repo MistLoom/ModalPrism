@@ -1,0 +1,14 @@
+id: accessor/browser
+kind: accessor
+name: Browser
+implementation: builtin:browser
+limits:
+  timeout: 60s
+  concurrency: 2
+  retry:
+    attempts: 1
+    backoff: exponential
+    base: 1s
+    max: 30s
+egress:
+  profile: direct

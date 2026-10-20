@@ -817,7 +817,8 @@ async fn moli_command_passes_the_proxy_to_a_stand_in() {
         url: "https://example.com/page".into(),
         proxy: "http://127.0.0.1:9".into(),
         headers: vec![("Accept".into(), "text/html".into())],
-        wait_until: None,
+        wait_until: Some("networkidle".into()),
+        wait_selector: Some("time.hero-date".into()),
         eval: None,
         js: true,
         frames: false,
@@ -833,6 +834,14 @@ async fn moli_command_passes_the_proxy_to_a_stand_in() {
     );
     assert!(args.iter().any(|arg| arg == "--block-private-networks"));
     assert!(args.iter().any(|arg| arg == "--image"));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--wait" && pair[1] == "networkidle")
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--wait-selector" && pair[1] == "time.hero-date")
+    );
 
     let egress = Arc::new(ScriptEgress {
         hits: AtomicUsize::new(0),
@@ -1158,5 +1167,46 @@ async fn paid_api_sends_configured_headers() {
     assert_eq!(
         headers.0.lock().await.as_slice(),
         [("Authorization".into(), "Bearer test-key".into())]
+    );
+}
+
+#[test]
+fn moli_measured_ssr_blog_page_includes_hero_date() {
+    let program = std::env::var_os("MODALPRISM_MOLI")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::process::Command::new("moli")
+                .arg("--version")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|_| std::path::PathBuf::from("moli"))
+        });
+    let Some(program) = program else {
+        return;
+    };
+    let output = std::process::Command::new(&program)
+        .args([
+            "fetch",
+            "https://mimo.xiaomi.com/blog/mimo-v2-6-tool-call-repetition",
+            "--dump",
+            "json",
+            "--wait",
+            "networkidle",
+            "--wait-selector",
+            "time.hero-date",
+        ])
+        .output()
+        .expect("moli fetch");
+    assert!(
+        output.status.success(),
+        "moli failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed = accessors_builtin::parse_dump(&output.stdout).expect("parse dump");
+    let html = String::from_utf8_lossy(parsed.html.as_deref().unwrap_or(&[]));
+    assert!(
+        html.contains("hero-date"),
+        "expected hero-date in rendered HTML"
     );
 }

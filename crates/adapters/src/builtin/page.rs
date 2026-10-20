@@ -168,9 +168,83 @@ fn published_on(document: &Html, html: &str, spec: &PageSpec) -> Option<strata_m
             }
         }
     }
-    let pattern = spec.published_regex.as_deref()?;
-    let raw = first_capture(pattern, html)?;
-    parse_published(&raw, spec.offset.as_deref(), None)
+    for key in [
+        "article:published_time",
+        "og:published_time",
+        "article:modified_time",
+    ] {
+        if let Some(raw) = meta_content(document, "property", key) {
+            if let Some(parsed) = parse_published(&raw, spec.offset.as_deref(), None) {
+                return Some(parsed);
+            }
+        }
+    }
+    for key in ["pubdate", "publishdate", "date"] {
+        if let Some(raw) = meta_content(document, "name", key) {
+            if let Some(parsed) = parse_published(&raw, spec.offset.as_deref(), None) {
+                return Some(parsed);
+            }
+        }
+    }
+    if let Some(raw) = json_ld_published(html) {
+        if let Some(parsed) = parse_published(&raw, spec.offset.as_deref(), None) {
+            return Some(parsed);
+        }
+    }
+    if let Some(pattern) = spec.published_regex.as_deref() {
+        let raw = first_capture(pattern, html)?;
+        return parse_published(&raw, spec.offset.as_deref(), None);
+    }
+    None
+}
+
+fn meta_content(document: &Html, attr: &str, key: &str) -> Option<String> {
+    let selector = Selector::parse(&format!("meta[{attr}=\"{key}\"]")).ok()?;
+    document
+        .select(&selector)
+        .next()?
+        .attr("content")
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn json_ld_published(html: &str) -> Option<String> {
+    let document = Html::parse_document(html);
+    let selector = Selector::parse("script[type='application/ld+json']").ok()?;
+    for element in document.select(&selector) {
+        let text = element.text().collect::<String>();
+        let Ok(value) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        if let Some(raw) = json_ld_date_value(&value) {
+            return Some(raw);
+        }
+    }
+    None
+}
+
+fn json_ld_date_value(value: &Value) -> Option<String> {
+    for key in ["datePublished", "dateCreated", "uploadDate"] {
+        if let Some(raw) = value.get(key).and_then(Value::as_str) {
+            if !raw.trim().is_empty() {
+                return Some(raw.trim().to_string());
+            }
+        }
+    }
+    if let Some(items) = value.get("@graph").and_then(Value::as_array) {
+        for item in items {
+            if let Some(raw) = json_ld_date_value(item) {
+                return Some(raw);
+            }
+        }
+    }
+    if let Some(item) = value.get("mainEntity") {
+        if let Some(raw) = json_ld_date_value(item) {
+            return Some(raw);
+        }
+    }
+    None
 }
 
 fn node_text(document: &Html, selector: &str) -> Option<String> {

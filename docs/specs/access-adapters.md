@@ -156,7 +156,7 @@ YouTube、youtu.be、Vimeo 的播放页不把摘要写入正文，也不跟进�
 
 `adapter/json-list` 用 `items`（JSON Pointer）或 `itemsPath`（点路径；空字符串表示根数组）定位数组。`url` 是条目上的键，相对 `locator` 补全。`urlTemplate` 用 `{路径}` 做百分号编码、`{raw:路径}` 原样插入，结果必须已是 `http` 或 `https` 绝对地址。`title`、`summary`、`author` 可以是键或键数组；`titlePaths`、`summaryPaths`、`authorPaths` 按顺序取第一个非空标量。`publishedAt` 或 `publishedAtPath` 配合 `publishedAtUnit`：`epoch_s`、`epoch_ms`、`yyyymmdd`。`externalIdPath` 追加 `ext:` 身份键。`decodeEntities` 为真时，标题和摘要解开与 Feed 相同的一层命名实体和数字实体。`summaryIsBody` 为真时，摘要作为 `text` facet 放入 `materialize`，且不跟进。路径不是数组或没有映射出条目时结果为空。
 
-`html-list` 与 `json-list` 都可以写 `detail`。`maxFetches` 必填，范围 0 到 50。`fields` 取 `publishedAt`、`title`、`summary`。字段在条目中缺失且摘要没有作为正文时，`Follow::Yes` 的访问器是 `accessor/http`，`needs` 列出缺失字段。字段都已存在则为 `Follow::No`。没有 `detail` 时，`Follow::Yes` 的 `needs` 为空。
+`html-list` 与 `json-list` 都可以写 `detail`。`maxFetches` 必填，范围 0 到 50。`fields` 取 `publishedAt`、`title`、`summary`。字段在条目中缺失且摘要没有作为正文时，`Follow::Yes` 的访问器缺省 `accessor/http`，`needs` 列出缺失字段；`followAccessor` 可改成例如 `accessor/browser`，`followSpec` 传给该访问器（浏览器 `wait` 等）。字段都已存在则为 `Follow::No`。没有 `detail` 时，`Follow::Yes` 的 `needs` 为空。
 
 `adapter/page-fields` 读取详情页。`publishedAt`、`title`、`summary` 是选择器。`publishedAtAttr` 指定属性，缺省时依次读 `datetime`、`content`、`title` 和文字。`publishedAtRegex` 在整页 HTML 上取第一个捕获组，只在选择器没有读到日期时使用。`publishedAtUtcOffset` 与列表相同。至少配置一个字段。抽出的对象写入 `struct:page`，并带上 `url`。什么都没抽出时不写 facet。
 

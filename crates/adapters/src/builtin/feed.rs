@@ -258,6 +258,7 @@ fn discovery_from(
             Vec::new(),
             Follow::Yes {
                 accessor: input.source.accessor.clone(),
+                accessor_spec: serde_json::json!({}),
                 render: input.source.render,
                 priority: 0,
                 needs: Vec::new(),

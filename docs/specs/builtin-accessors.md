@@ -142,9 +142,9 @@ id 是 `browser`。`render` 与 `layout` 为真。`capture_network` 为 `matched
 1. 经出站端口对目标 URL 发送 `GET`。这一步只做 robots、限速、熔断和 SSRF。响应体不进入信封。出站错误则不调用内核。
 2. 调用 `BrowserEngine::fetch`。请求里的 `proxy` 是访问器持有的代理 URL。`block_private_networks` 为真，不随 `egress.private_networks` 关闭。
 
-spec 接受 `engine` 缺省 `moli`，`mode` 缺省 `auto`（`auto` 与 `cli` 相同），`js` 缺省真，`frames`，`layout`，`resources`，`eval`，`session`，`wait.until`。
+spec 接受 `engine` 缺省 `moli`，`mode` 缺省 `auto`（`auto` 与 `cli` 相同），`js` 缺省真，`frames`，`layout`，`resources`，`eval`，`session`，`wait.until`，`wait.selector`。
 
-`wait` 里出现 `selector`、`script`、`responseUrl`、`responseUrlRegex`、`responseJson` 或 `delay` 时，消息 `未实测`。`resources` 只接受 `image`、`font`、`media`，其他取值的消息是 `未实测`。
+`wait` 里出现 `script`、`responseUrl`、`responseUrlRegex`、`responseJson` 或 `delay` 时，消息 `未实测`。`resources` 只接受 `image`、`font`、`media`，其他取值的消息是 `未实测`。
 
 `policy.capture.screenshot` 为 `on-failure`、`on-render` 或 `always` 时，内核请求的 `layout` 为真。缺省、`never` 或其他取值不因此打开布局。引擎没有返回截图字节时不造部件。
 
@@ -170,7 +170,7 @@ spec 接受 `engine` 缺省 `moli`，`mode` 缺省 `auto`（`auto` 与 `cli` 相
 
 `transport.engine.name` 为 `moli`。`version` 用结果里的版本字符串；没有则为 `unmeasured`。
 
-`moli_args` 生成参数：`fetch`、URL、`--dump`、`json`、`--http-proxy`、代理、`--block-private-networks`。按请求追加 `--disable-js`、`--with-frames`、`--layout`、`--eval`、`--wait-until`、`--trace-network`、`--trace-matched-response-body`、`--image`、`--font`、`--media`，以及每个头的 `-H`、`Name: Value`。
+`moli_args` 生成参数：`fetch`、URL、`--dump`、`json`、`--http-proxy`、代理、`--block-private-networks`。按请求追加 `--disable-js`、`--with-frames`、`--layout`、`--eval`、`--wait`、`--wait-selector`、`--trace-network`、`--trace-matched-response-body`、`--image`、`--font`、`--media`，以及每个头的 `-H`、`Name: Value`。
 
 `MoliCommand` 启动给定可执行文件并解析标准输出。JSON 只读取 `final_url`、`status`、`headers`、`redirect_chain`、`title`、`html`、`body_base64`、`network`、`version`。`headers` 是 `[名称, 值]` 数组。`network` 的原始 JSON 作为追踪字节。不从 `network` 里挑选响应体。标准输出无法按这些字段解析时，类别 `permanent`，消息 `engine`。
 
@@ -190,7 +190,7 @@ id 是 `bundle-list`。定位符是 `http` 或 `https` URL。先取该页。页�
 
 下列各项是要求，本仓库的测试没有对真实内核执行它们：
 
-- 安装并运行 `moli fetch` 或 `moli serve`，确认标准输出字段与上面的解析器一致。
+- 在 CI 之外，若环境里有 `moli`（或 `MODALPRISM_MOLI`），`accessors-builtin` 会对 `https://mimo.xiaomi.com/blog/mimo-v2-6-tool-call-repetition` 做一次 `moli fetch`，确认预渲染文章页含 `time.hero-date`。
 - `capture.network=all-bodies` 的响应体覆盖度。
 - CDP 或 WebDriver 会话、进程池、健康检查和回收。
 - 真实内核的截图、PDF 和布局。

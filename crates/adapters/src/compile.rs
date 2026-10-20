@@ -98,6 +98,7 @@ pub struct Batch {
 pub struct FollowRequest {
     pub locator: Locator,
     pub accessor: String,
+    pub spec: Value,
     pub render: RenderMode,
     pub priority: i32,
     pub identity: String,
@@ -268,6 +269,7 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
 fn record_follow(follows: &mut Vec<FollowRequest>, discovery: &crate::model::Discovery) {
     let crate::model::Follow::Yes {
         accessor,
+        accessor_spec,
         render,
         priority,
         needs,
@@ -281,6 +283,7 @@ fn record_follow(follows: &mut Vec<FollowRequest>, discovery: &crate::model::Dis
     follows.push(FollowRequest {
         locator: discovery.locator.clone(),
         accessor: accessor.clone(),
+        spec: accessor_spec.clone(),
         render: *render,
         priority: *priority,
         identity: identity.clone(),

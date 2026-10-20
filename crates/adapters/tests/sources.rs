@@ -398,6 +398,64 @@ async fn missing_detail_field_requests_one_follow() {
 }
 
 #[tokio::test]
+async fn page_fields_reads_json_ld_published_date() {
+    let registry = Registry::builtins();
+    let html = r#"<script type="application/ld+json">{"@type":"BlogPosting","datePublished":"2026-09-27T08:00:00+08:00"}</script>"#;
+    let pipeline = json!([{
+        "for": "follow",
+        "run": ["adapter/page-fields"],
+        "spec": {"adapter/page-fields": {
+            "publishedAt": "time.missing",
+            "publishedAtUtcOffset": "+08:00"
+        }}
+    }]);
+    let mut request = bare(html, "text/html", pipeline);
+    request.reason = TaskReason::Follow;
+    request.resource = Some(strata_model::Rid::parse("r_01JAF3K8Z2X7Q9M4T6V0B5N1CE").unwrap());
+    let output = run(&registry, request).await.unwrap();
+    let page = output.changeset.ops.iter().find_map(|op| match op {
+        Op::PutFacet {
+            kind: FacetKind::Struct,
+            variant: Some(variant),
+            body: Body::Struct { value },
+            ..
+        } if variant == "page" => Some(value),
+        _ => None,
+    });
+    assert_eq!(
+        page.unwrap().get("publishedAt").and_then(Value::as_str),
+        Some("2026-09-27T08:00:00+08:00")
+    );
+}
+
+#[tokio::test]
+async fn mimo_shell_detail_does_not_emit_struct_page() {
+    let registry = Registry::builtins();
+    let html = r#"<!doctype html><html><head><script defer src="/static/js/index.js"></script></head><body><div id="root"></div></body></html>"#;
+    let pipeline = json!([{
+        "for": "follow",
+        "run": ["adapter/page-fields"],
+        "spec": {"adapter/page-fields": {
+            "publishedAt": "time.hero-date",
+            "publishedAtAttr": "datetime",
+            "title": "h1.hero-title",
+            "publishedAtUtcOffset": "+08:00"
+        }}
+    }]);
+    let mut request = bare(html, "text/html", pipeline);
+    request.reason = TaskReason::Follow;
+    request.resource = Some(strata_model::Rid::parse("r_01JAF3K8Z2X7Q9M4T6V0B5N1CE").unwrap());
+    let output = run(&registry, request).await.unwrap();
+    assert!(
+        !output
+            .changeset
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::PutFacet { variant: Some(v), .. } if v == "page"))
+    );
+}
+
+#[tokio::test]
 async fn page_fields_reads_the_detail_date() {
     let registry = Registry::builtins();
     let html = r#"<time class="hero-date" datetime="2026-09-27">September 27, 2026</time><h1 class="hero-title">文章标题</h1><p class="hero-subtitle">一句摘要</p>"#;
