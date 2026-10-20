@@ -10,6 +10,7 @@ members = [
     "crates/egress",
     "crates/paid",
     "crates/planner",
+    "crates/accessors-builtin",
 ]
 
 [workspace.package]
@@ -35,7 +36,7 @@ lance = "=13.0.0"
 lancedb = { version = "=0.40.0", features = ["remote"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 jsonschema = "0.59"
 notify = "8.2"
 saphyr = "0.2.2"
@@ -45,6 +46,8 @@ quick-xml = "0.37"
 scraper = "0.23"
 url = "2"
 psl = "2"
+flate2 = "1"
+base64 = "0.22"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

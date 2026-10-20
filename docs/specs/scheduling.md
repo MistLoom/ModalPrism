@@ -95,7 +95,7 @@
 
 完成的回执由 Runner 写入变更集：`setState`，`scope=receipt`，键是 `receipt_id`，值含 `status=completed`、`service`、`logicalKey`。控制库里的行在 `apply` 被接受后标为 `completed`。
 
-`batchKey` 只影响 Planner 的成组入队。一次调用拆回多个信源由访问器完成。
+`batchKey` 只影响 Planner 的成组入队。一次付费调用产出一个信封。把合并响应拆回多个信源的归属规则未规定，访问器不拆分响应。
 
 ## 节奏
 
