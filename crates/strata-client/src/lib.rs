@@ -417,6 +417,19 @@ impl Strata {
         Ok(self.engine.task_active(source, locator_key).await?)
     }
 
+    pub async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<AccessTask>, Error> {
+        Ok(self
+            .engine
+            .lease_ready(source, locator_key, lease_for, now)
+            .await?)
+    }
+
     pub async fn accepted_state(
         &self,
         scope: &str,

@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use strata_model::{ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, Target};
+use strata_model::{
+    ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, Target, WaitFor,
+};
 
 use crate::{Engine, Options};
 
@@ -187,4 +190,119 @@ async fn read_stays_on_observed_snapshot_after_rewind() {
     assert_eq!(still.snapshot.unwrap().seq, 2);
     assert_eq!(still.resources.len(), 2);
     assert_eq!(still.facets.len(), 2);
+}
+
+#[tokio::test]
+async fn empty_flush_sweeps_expired_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options {
+        staging_ttl: Duration::ZERO,
+        ..Options::default()
+    };
+    let engine = Engine::open(dir.path(), options).await.unwrap();
+    let part = engine.stage(b"orphan").await.unwrap();
+    let path = dir.path().join("staging").join(part.sha256());
+    assert!(path.is_file());
+    assert!(engine.flush().await.unwrap().is_none());
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn visible_timeout_leaves_flush_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = Engine::open(dir.path(), Options::default()).await.unwrap();
+    let hold = Arc::new(tokio::sync::Notify::new());
+    let done = Arc::new(tokio::sync::Notify::new());
+    engine
+        .testing_pause_flush(Arc::clone(&hold), Arc::clone(&done))
+        .await;
+    let error = engine
+        .apply(
+            ChangeSet {
+                producer: producer(),
+                idempotency_key: None,
+                ack: None,
+                ops: vec![
+                    ensure("ext:doi:visible-wait", "a"),
+                    text_facet("a", "later"),
+                ],
+            },
+            ApplyOpts {
+                wait: WaitFor::Visible,
+                timeout: Some(Duration::from_millis(200)),
+            },
+        )
+        .await
+        .unwrap_err();
+    let crate::Error::WaitTimeout(commit_id) = error else {
+        panic!("期望等待超时，得到 {error}");
+    };
+    assert!(!commit_id.is_empty());
+    assert!(engine.view_latest().await.unwrap().resources.is_empty());
+    hold.notify_one();
+    done.notified().await;
+    let view = engine.view_latest().await.unwrap();
+    assert_eq!(view.resources.len(), 1);
+}
+
+#[tokio::test]
+async fn release_leases_rewrites_payload_and_can_be_leased_again() {
+    use sqlx::Row;
+    use strata_model::{AccessTask, Locator, QueueName, SourceId, TaskId, TaskReason, Timestamp};
+
+    let dir = tempfile::tempdir().unwrap();
+    let engine = Engine::open(dir.path(), Options::default()).await.unwrap();
+    let now = Timestamp::parse("2026-10-20T00:00:00Z").unwrap();
+    let task = AccessTask {
+        task_id: TaskId::new("t_release").unwrap(),
+        source_id: SourceId::new("source/blog").unwrap(),
+        accessor: "accessor/http".into(),
+        locator: Locator::Url {
+            url: "https://example.com/a".into(),
+        },
+        spec: serde_json::json!({}),
+        reason: TaskReason::Schedule,
+        priority: 10,
+        queue: QueueName::Free,
+        lease_until: now,
+        attempt: 0,
+        batch_key: None,
+        generation: 1,
+    };
+    engine.enqueue(std::slice::from_ref(&task)).await.unwrap();
+    let leased = engine
+        .lease_id(&task.task_id, Duration::from_secs(60), now)
+        .await
+        .unwrap();
+    let original = leased.lease_until;
+    let released = engine.release_leases().await.unwrap();
+    assert_eq!(released[0].task_id, task.task_id);
+    assert_eq!(released[0].lease_until, original);
+    let url = format!(
+        "sqlite://{}?mode=ro",
+        dir.path().join("control.db").display()
+    );
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect(&url)
+        .await
+        .unwrap();
+    let row = sqlx::query("SELECT payload, lease_until, status FROM tasks WHERE task_id = ?")
+        .bind(task.task_id.as_str())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let payload: String = row.get(0);
+    let column: Option<String> = row.get(1);
+    let status: String = row.get(2);
+    assert!(column.is_none());
+    assert_eq!(status, "queued");
+    let stored: AccessTask = serde_json::from_str(&payload).unwrap();
+    assert_ne!(stored.lease_until, original);
+    let locator_key = serde_json::to_string(&task.locator).unwrap();
+    let again = engine
+        .lease_ready("source/blog", &locator_key, Duration::from_secs(60), now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.task_id, task.task_id);
 }

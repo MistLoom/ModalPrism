@@ -98,7 +98,37 @@ impl<P: Persist, T: PaidTransport> Gateway<P, T> {
         request: PaidCall,
         now_ms: i64,
     ) -> Result<PaidResponse, AccessError> {
-        let window_ms = i64::try_from(self.policy.window.as_millis())
+        self.call_with(&self.policy, request, now_ms).await
+    }
+
+    pub async fn call_governed(
+        &self,
+        policy: &CallPolicy,
+        request: PaidCall,
+    ) -> Result<PaidResponse, AccessError> {
+        self.call_with(policy, request, clock_ms()).await
+    }
+
+    pub async fn stored_receipt(
+        &self,
+        receipt_id: &str,
+    ) -> Result<Option<(String, String)>, AccessError> {
+        let _guard = self.lock.lock().await;
+        let db = load(&self.persist).await?;
+        Ok(db
+            .receipts
+            .iter()
+            .find(|row| row.id == receipt_id)
+            .map(|row| (row.service.clone(), row.logical_key.clone())))
+    }
+
+    async fn call_with(
+        &self,
+        policy: &CallPolicy,
+        request: PaidCall,
+        now_ms: i64,
+    ) -> Result<PaidResponse, AccessError> {
+        let window_ms = i64::try_from(policy.window.as_millis())
             .unwrap_or(DEFAULT_WINDOW_MS)
             .max(1);
         let window_start = now_ms.div_euclid(window_ms) * window_ms;
@@ -114,15 +144,13 @@ impl<P: Persist, T: PaidTransport> Gateway<P, T> {
             if let Some(done) = replay(&db, &logical_key) {
                 return Ok(done);
             }
-            match plan(&mut db, &logical_key, self.policy.unknown, now_ms) {
+            match plan(&mut db, &logical_key, policy.unknown, now_ms) {
                 Plan::Stop(error) => {
                     save(&self.persist, &db).await?;
                     return Err(error);
                 }
                 Plan::Go { index } => {
-                    if let Some(end) =
-                        charge(&mut db, &request.service, &self.policy.limits, now_ms)
-                    {
+                    if let Some(end) = charge(&mut db, &request.service, &policy.limits, now_ms) {
                         save(&self.persist, &db).await?;
                         let mut error = AccessError::new(ErrorClass::Budget, "预算不足");
                         error.retry_at = Timestamp::from_unix_millis(end).ok();

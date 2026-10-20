@@ -6,8 +6,10 @@ pub fn is_blocked(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => blocked_v4(v4),
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return blocked_v4(v4);
+            if let Some(v4) = embedded_v4(v6) {
+                if blocked_v4(v4) {
+                    return true;
+                }
             }
             v6.is_loopback()
                 || v6.is_unspecified()
@@ -17,6 +19,34 @@ pub fn is_blocked(ip: IpAddr) -> bool {
                 || in_net_v6(v6, Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 32)
         }
     }
+}
+
+fn embedded_v4(v6: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = v6.to_ipv4() {
+        return Some(v4);
+    }
+    let seg = v6.segments();
+    if seg[0] == 0x2002 {
+        return Some(Ipv4Addr::new(
+            (seg[1] >> 8) as u8,
+            (seg[1] & 0xff) as u8,
+            (seg[2] >> 8) as u8,
+            (seg[2] & 0xff) as u8,
+        ));
+    }
+    if seg[0] == 0x0064
+        && seg[1] == 0xff9b
+        && seg[2] == 0
+        && seg[3] == 0
+        && seg[4] == 0
+        && seg[5] == 0
+    {
+        let octets = v6.octets();
+        return Some(Ipv4Addr::new(
+            octets[12], octets[13], octets[14], octets[15],
+        ));
+    }
+    None
 }
 
 fn blocked_v4(v4: Ipv4Addr) -> bool {

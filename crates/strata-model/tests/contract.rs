@@ -154,7 +154,31 @@ fn changeset_serde_and_validation() {
     assert_eq!(value["ops"][0]["as"], "a");
     assert_eq!(value["ops"][1]["op"], "putFacet");
     assert_eq!(value["ops"][1]["kind"], "md");
+    assert_eq!(value["ops"][1]["mediaType"], "text/markdown");
+    assert!(value["ops"][1].get("media_type").is_none());
     assert_eq!(value["ops"][1]["body"]["type"], "text");
+    let state: Op = serde_json::from_value(json!({
+        "op": "setState",
+        "scope": "cursor",
+        "key": "source/a",
+        "value": 1,
+        "expectVersion": 3
+    }))
+    .unwrap();
+    match state {
+        Op::SetState { expect_version, .. } => assert_eq!(expect_version, Some(3)),
+        other => panic!("期望 setState，得到 {other:?}"),
+    }
+    assert!(
+        serde_json::from_value::<Op>(json!({
+            "op": "setState",
+            "scope": "cursor",
+            "key": "source/a",
+            "value": 1,
+            "expect_version": 3
+        }))
+        .is_err()
+    );
     let back: ChangeSet = serde_json::from_value(value).unwrap();
     assert_eq!(back, cs);
 

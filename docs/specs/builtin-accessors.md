@@ -45,7 +45,7 @@ spec 字段：`headers`，`session`，`pages`。`pages` 缺省 10，范围 1 到
 下一页只看两处，HTTP `Link` 优先：
 
 - `Link` 头里 rel 含 token `next` 的尖括号 URL。
-- 没有该头时，在正文前 65536 字节内查找 `rel="next"`、`rel='next'` 或 `rel=next`，并在其前后 300 字节内取 `href`。
+- 没有该头时，在正文前 65536 字节内查找 `rel="next"`、`rel='next'` 或 `rel=next`，并在其前后 300 字节内取 `href`。窗口两端落在字符中间时扩到完整字符。
 
 相对 URL 按该页最终 URL 解析。下一页与已请求的 URL 相同，或 URL 无法解析时停止，并保留已取到的页。不读取条目标题、条目链接或全文。
 
@@ -109,7 +109,7 @@ spec 字段：`token` 非空，`ratePerSec` 缺省 1，`burst` 缺省 3。两者
 
 同一 channel 的令牌桶按 `ratePerSec` 补充，上限 `burst`。没有令牌时类别 `transient`，消息 `rate-limit`。
 
-`Idempotency-Key` 缺省时每次请求一个新信封。键相同且正文 sha256 相同：在 24 小时内返回已保存的信封，不写入暂存。键相同而正文不同：类别 `permanent`，消息 `idempotency`。保存的键超过 1024 时丢掉最旧的一条。
+`Idempotency-Key` 缺省时每次请求一个新信封。键相同且正文 sha256 相同：在 24 小时内返回已保存的信封，不写入暂存。键相同而正文不同：类别 `permanent`，消息 `idempotency`。同一键的检查、扣减令牌和写入持有同一把锁。并发的相同键只产生一个信封。保存的键超过 1024 时丢掉最旧的一条。
 
 信封定位符是 `pushChannel`。部件是一个 `document`，媒体类型取 `Content-Type`，缺省 `application/octet-stream`。
 
@@ -119,7 +119,7 @@ id 是 `file`。协议是 `file`。
 
 路径来自 `spec.path`，没有则来自定位符 `url`。`file://` 去掉该前缀。其余定位符类别为 `config`，消息 `locator`。
 
-`spec.root` 存在时，路径必须位于该目录之内。比较使用规范化后的绝对路径。`..` 不能离开 root。没有 root 时路径必须是绝对路径。
+`spec.root` 存在时，路径必须位于该目录之内。比较使用规范化后的绝对路径。`..` 不能离开 root。没有 root 时路径必须是绝对路径。打开文件后读取该描述符。有 root 时，用 `/proc/self/fd` 的规范化路径确认描述符仍在 root 内；落在 root 外则类别 `permanent`，消息 `not-found`。
 
 文件不存在的类别是 `permanent`，消息 `not-found`。
 
@@ -173,6 +173,8 @@ spec 接受 `engine` 缺省 `moli`，`mode` 缺省 `auto`（`auto` 与 `cli` 相
 `moli_args` 生成参数：`fetch`、URL、`--dump`、`json`、`--http-proxy`、代理、`--block-private-networks`。按请求追加 `--disable-js`、`--with-frames`、`--layout`、`--eval`、`--wait-until`、`--trace-network`、`--trace-matched-response-body`、`--image`、`--font`、`--media`，以及每个头的 `-H`、`Name: Value`。
 
 `MoliCommand` 启动给定可执行文件并解析标准输出。JSON 只读取 `final_url`、`status`、`headers`、`redirect_chain`、`title`、`html`、`body_base64`、`network`、`version`。`headers` 是 `[名称, 值]` 数组。`network` 的原始 JSON 作为追踪字节。不从 `network` 里挑选响应体。标准输出无法按这些字段解析时，类别 `permanent`，消息 `engine`。
+
+`metadata` 与 `network-trace` 在写入前按 `raw.redact_headers` 改写头值，命中的值是 `***`。追踪里键名为 `headers` 或以 `headers` 结尾的节点，以及全部由 `[名称, 值]` 组成的数组，使用同一名单。`transport.headers` 仍由 `redact_envelope` 改写。
 
 进程退出状态非 0 时，类别 `permanent`，消息 `engine`。
 

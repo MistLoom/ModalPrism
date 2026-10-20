@@ -70,7 +70,26 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
     let mut body = Vec::new();
     stream.read_to_end(&mut body).await.unwrap();
     let text = String::from_utf8_lossy(&body);
-    assert!(text.contains("ok"));
+    assert!(text.contains("ok"), "{text}");
+    assert!(
+        !text.to_ascii_lowercase().contains("access-control-"),
+        "{text}"
+    );
+
+    let mut options = TcpStream::connect(running.http()).await.unwrap();
+    options
+        .write_all(
+            b"OPTIONS /health HTTP/1.1\r\nHost: localhost\r\nOrigin: https://evil.example\r\nAccess-Control-Request-Method: GET\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut option_body = Vec::new();
+    options.read_to_end(&mut option_body).await.unwrap();
+    let option_text = String::from_utf8_lossy(&option_body);
+    assert!(
+        !option_text.to_ascii_lowercase().contains("access-control-"),
+        "{option_text}"
+    );
 
     let catalog = running.gateway().catalog();
     assert!(

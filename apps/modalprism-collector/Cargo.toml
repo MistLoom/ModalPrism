@@ -20,6 +20,7 @@ accessor_rss = { path = "../../ability/accessor_rss" }
 accessor_search = { path = "../../ability/accessor_search" }
 assembly = { path = "../../crates/assembly" }
 async-trait.workspace = true
+axum = "0.8"
 committer = { path = "../../ability/committer" }
 ability-config = { path = "../../ability/config" }
 ability-egress = { path = "../../ability/egress" }

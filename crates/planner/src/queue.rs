@@ -26,6 +26,13 @@ pub trait Queue: Send + Sync {
     ) -> Result<(), PlannerError>;
     async fn release_leases(&self) -> Result<Vec<AccessTask>, PlannerError>;
     async fn active(&self, source: &str, locator_key: &str) -> Result<bool, PlannerError>;
+    async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<AccessTask>, PlannerError>;
     async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, PlannerError>;
     async fn apply(&self, changeset: ChangeSet) -> Result<(), PlannerError>;
     async fn accepted_cursor(&self, source: &str) -> Result<Option<Value>, PlannerError>;
@@ -138,9 +145,11 @@ impl Queue for MemoryQueue {
     async fn release_leases(&self) -> Result<Vec<AccessTask>, PlannerError> {
         let mut rows = self.rows.lock().await;
         let mut released = Vec::new();
+        let released_at = Timestamp::now();
         for row in rows.iter_mut().filter(|row| row.status == "leased") {
-            row.status = "queued".into();
             released.push(row.task.clone());
+            row.status = "queued".into();
+            row.task.lease_until = released_at;
         }
         Ok(released)
     }
@@ -152,6 +161,36 @@ impl Queue for MemoryQueue {
                 && row.task.source_id.as_str() == source
                 && row.locator_key == locator_key
         }))
+    }
+
+    async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<AccessTask>, PlannerError> {
+        let ready = {
+            let rows = self.rows.lock().await;
+            let Some(row) = rows.iter().find(|row| {
+                row.status != "done"
+                    && row.task.source_id.as_str() == source
+                    && row.locator_key == locator_key
+            }) else {
+                return Ok(None);
+            };
+            let live = row.status == "leased" && row.task.lease_until > now;
+            let waiting = row.retry_at.is_some_and(|retry| retry > now);
+            if live || waiting {
+                None
+            } else {
+                Some(row.task.task_id.clone())
+            }
+        };
+        let Some(task_id) = ready else {
+            return Ok(None);
+        };
+        self.lease_id(&task_id, lease_for, now).await.map(Some)
     }
 
     async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, PlannerError> {

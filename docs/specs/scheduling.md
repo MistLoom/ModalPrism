@@ -54,7 +54,7 @@
 
 ### robots
 
-缓存键是 `scheme://host:port`，端口总是写出来。正文缓存 `robots.cache_ttl`。获取 `robots.txt` 时走 SSRF、熔断和令牌桶，不检查 robots。
+缓存键是 `scheme://host:port`，端口总是写出来。正文缓存 `robots.cache_ttl`。获取 `robots.txt` 时走 SSRF、熔断和令牌桶，不检查 robots。响应为 301、302、303、307、308 且带 `Location` 时按普通重定向跟随，最多 5 跳。跟随结束后状态仍是这些码，或跳数用尽时，按不可达处理，空正文不作为允许。
 
 `ignore` 不检查。`obey` 始终检查。`obey-with-exemptions` 且本次请求带了豁免类别时不检查，并向 `audits` 追加 `origin`、`category`、`reason`、`at`。
 
@@ -93,7 +93,7 @@
 
 `unknown_receipt` 为 `manual` 时，后续调用类别 `permanent`，消息 `unknown-receipt`，不发送。`retry-once` 在 `unknown` 满 1 小时后放行一次；未满时类别 `transient`，消息 `unknown-wait`，Runner 把任务延后到冷却结束且不计入健康。这次仍未知则改为 `manual`。`unknown-receipt` 不计入健康失败。Runner 确认任务，`next_at` 按正常节奏。
 
-完成的回执由 Runner 写入变更集：`setState`，`scope=receipt`，键是 `receipt_id`，值含 `status=completed`、`service`、`logicalKey`。控制库里的行在 `apply` 被接受后标为 `completed`。
+完成的回执由 Runner 写入变更集：`setState`，`scope=receipt`，键是 `receipt_id`，值含 `status=completed`、`service`、`logicalKey`。`logicalKey` 是付费网关按服务、endpoint、规范参数和窗口算出的逻辑键。控制库里的行在 `apply` 被接受后标为 `completed`。
 
 `batchKey` 只影响 Planner 的成组入队。一次付费调用产出一个信封。把合并响应拆回多个信源的归属规则未规定，访问器不拆分响应。
 
@@ -140,13 +140,13 @@ interval  = clamp(max(adaptive, signal, floor_eff), floor_eff, ceiling)
 
 优先级：`manual` 与 `replay` 为 30，`follow`、`detail`、`render_upgrade` 为 20，`schedule` 为 10。
 
-每个队列本次新入队数不超过 `容量 - 未过期租约数`。租约时长是信源 `timeout` 的 1.5 倍。入队时把 `next_at` 设为 `now + 租约时长`。`tick` 随即 `lease` 并返回领到的任务。未完成的同一 `(source, locator)` 不会有第二行；定位符键是 `Locator` 的 JSON。
+每个队列本次新入队数不超过 `容量 - 未过期租约数`。租约时长是信源 `timeout` 的 1.5 倍。入队时把 `next_at` 设为 `now + 租约时长`。`tick` 随即 `lease` 并返回领到的任务。未完成的同一 `(source, locator)` 不会有第二行；定位符键是 `Locator` 的 JSON。该行处于 `queued` 且 `retry_at` 为空或不晚于现在，或租约已到期时，`tick` 重新领取原任务。`retry_at` 仍在未来或租约未到期时不领取。
 
 `run` 用 accepted 游标。游标是对象且 `configHash` 与当前信源配置哈希不同时，交给处理函数的游标为 null。处理函数成功后，Runner 把数据操作、游标 `setState`、完成回执 `setState` 和 `ack` 放进同一个变更集再 `apply`。游标对象写入当前 `configHash`。任一环节失败时不调用 `apply`，游标保持原值。
 
 错误类别缺省按瞬时。瞬时错误在任务内立即重试 1 次，且不超过截止时间；这次重试不增加 `attempt`。仍失败则 `nack`。`nack` 把 `attempt` 加 1。外层延迟是 `max(Retry-After, min(6h, interval × 2^attempt))`。
 
-`shutdown` 调用 `release_leases`，并把这些任务对应信源的 `next_at` 设为现在。不记失败，不增加 `attempt`。
+`shutdown` 调用 `release_leases`，并把这些任务对应信源的 `next_at` 设为现在。不记失败，不增加 `attempt`。`release_leases` 在同一事务里把任务改回 `queued`，列上的 `lease_until` 置空，payload 里的 `leaseUntil` 写成释放时刻。下一次 `tick` 重新领取这些任务。
 
 ## 未闭合
 

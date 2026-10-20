@@ -142,6 +142,19 @@ impl Queue for StrataQueue {
         self.0.release_leases().await.map_err(plan_err)
     }
 
+    async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<AccessTask>, PlannerError> {
+        self.0
+            .lease_ready(source, locator_key, lease_for, now)
+            .await
+            .map_err(plan_err)
+    }
+
     async fn active(&self, source: &str, locator_key: &str) -> Result<bool, PlannerError> {
         self.0
             .task_active(source, locator_key)
@@ -448,4 +461,65 @@ async fn control_store_keeps_lease_cursor_and_receipt() {
             .unwrap()
             .is_some()
     );
+}
+
+struct Boom;
+
+#[async_trait]
+impl Handler for Boom {
+    async fn execute(
+        &self,
+        _task: &AccessTask,
+        _cursor: Option<Value>,
+    ) -> Result<TaskSuccess, Classified> {
+        Err(Classified {
+            class: ErrorClass::Transient,
+            message: "transport".into(),
+            retry_after: None,
+            retry_at: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn nack_on_the_control_store_runs_again_when_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let strata = Arc::new(Strata::open(dir.path(), Options::default()).await.unwrap());
+    let planner = Planner::new(
+        StrataQueue(strata.clone()),
+        Hot {
+            strata: strata.clone(),
+            kind: "planner",
+        },
+    );
+    let caps = Capacities {
+        free: 2,
+        paid: 1,
+        render: 1,
+        push: 1,
+    };
+    let first = planner
+        .tick(std::slice::from_ref(&plan()), &caps, now())
+        .await
+        .unwrap();
+    planner
+        .run(&plan(), first[0].clone(), &Boom, &(), now(), now())
+        .await
+        .unwrap();
+    let early = now().checked_add(Duration::from_secs(45)).unwrap();
+    assert!(
+        planner
+            .tick(std::slice::from_ref(&plan()), &caps, early)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let due_at = now().checked_add(Duration::from_secs(60 * 60)).unwrap();
+    let due = planner
+        .tick(std::slice::from_ref(&plan()), &caps, due_at)
+        .await
+        .unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].task_id, first[0].task_id);
+    assert_eq!(due[0].attempt, 1);
 }

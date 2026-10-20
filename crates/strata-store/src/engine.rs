@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use strata_model::{
@@ -53,10 +54,14 @@ struct Inner {
     control: SqliteControl,
     staging: Staging,
     observed: Option<SnapshotInfo>,
+    #[cfg(test)]
+    flush_hold: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    flush_done: Option<Arc<tokio::sync::Notify>>,
 }
 
 pub struct Engine {
-    inner: Mutex<Inner>,
+    inner: Arc<Mutex<Inner>>,
 }
 
 impl Engine {
@@ -92,10 +97,14 @@ impl Engine {
             control,
             staging: Staging::new(staging_dir),
             observed: None,
+            #[cfg(test)]
+            flush_hold: None,
+            #[cfg(test)]
+            flush_done: None,
         };
         recover(&mut inner).await?;
         Ok(Self {
-            inner: Mutex::new(inner),
+            inner: Arc::new(Mutex::new(inner)),
         })
     }
 
@@ -131,11 +140,19 @@ impl Engine {
             return Ok(result);
         }
         let flushed = match opts.timeout {
-            Some(timeout) => match tokio::time::timeout(timeout, self.flush()).await {
-                Ok(value) => value?,
-                Err(_) => return Err(Error::WaitTimeout(result.commit_id.to_string())),
+            Some(timeout) => {
+                let shared = Arc::clone(&self.inner);
+                let handle = tokio::spawn(async move { Engine::flush_owned(shared, false).await });
+                match tokio::time::timeout(timeout, handle).await {
+                    Ok(Ok(Ok(seq))) => seq,
+                    Ok(Ok(Err(_))) | Ok(Err(_)) => return Ok(result),
+                    Err(_) => return Err(Error::WaitTimeout(result.commit_id.to_string())),
+                }
+            }
+            None => match self.flush().await {
+                Ok(seq) => seq,
+                Err(_) => return Ok(result),
             },
-            None => self.flush().await?,
         };
         if let Some(seq) = flushed {
             return Ok(CommitResult {
@@ -159,7 +176,7 @@ impl Engine {
     }
 
     pub async fn flush(&self) -> Result<Option<u64>, Error> {
-        self.flush_inner(false).await
+        Self::flush_owned(Arc::clone(&self.inner), false).await
     }
 
     pub async fn recover(&self) -> Result<(), Error> {
@@ -302,6 +319,20 @@ impl Engine {
         inner.control.task_active(source, locator_key).await
     }
 
+    pub async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<strata_model::AccessTask>, Error> {
+        let inner = self.inner.lock().await;
+        inner
+            .control
+            .lease_ready(source, locator_key, lease_for, now)
+            .await
+    }
+
     pub async fn accepted_state(
         &self,
         scope: &str,
@@ -321,11 +352,34 @@ impl Engine {
         inner.control.hot_put(kind, key, value).await
     }
 
-    async fn flush_inner(&self, stop_before_snapshot: bool) -> Result<Option<u64>, Error> {
-        let mut inner = self.inner.lock().await;
+    async fn flush_owned(
+        shared: Arc<Mutex<Inner>>,
+        stop_before_snapshot: bool,
+    ) -> Result<Option<u64>, Error> {
+        #[cfg(test)]
+        let done = {
+            let inner = shared.lock().await;
+            let hold = inner.flush_hold.clone();
+            let done = inner.flush_done.clone();
+            drop(inner);
+            if let Some(hold) = hold {
+                hold.notified().await;
+            }
+            done
+        };
+        let mut inner = shared.lock().await;
         recover(&mut inner).await?;
         let commits = inner.control.list_accepted().await?;
         if commits.is_empty() {
+            let keep = inner.control.accepted_staging().await?;
+            inner
+                .staging
+                .sweep(&keep, inner.options.staging_ttl)
+                .await?;
+            #[cfg(test)]
+            if let Some(done) = done {
+                done.notify_one();
+            }
             return Ok(None);
         }
         if inner.control.flush_batch().await?.is_some() {
@@ -356,6 +410,10 @@ impl Engine {
         assign_seq(&inner.control, &mut rows).await?;
         inner.lance.write_data(&rows).await?;
         if stop_before_snapshot {
+            #[cfg(test)]
+            if let Some(done) = done.clone() {
+                done.notify_one();
+            }
             return Ok(None);
         }
         let mut versions = inner.lance.versions().await?;
@@ -408,6 +466,10 @@ impl Engine {
             .sweep(&keep, inner.options.staging_ttl)
             .await?;
         inner.observed = None;
+        #[cfg(test)]
+        if let Some(done) = done {
+            done.notify_one();
+        }
         Ok(Some(snapshot_seq))
     }
 
@@ -418,8 +480,18 @@ impl Engine {
     }
 
     #[cfg(test)]
+    pub async fn testing_pause_flush(
+        &self,
+        hold: Arc<tokio::sync::Notify>,
+        done: Arc<tokio::sync::Notify>,
+    ) {
+        let mut inner = self.inner.lock().await;
+        inner.flush_hold = Some(hold);
+        inner.flush_done = Some(done);
+    }
+
     pub async fn testing_stop_before_snapshot(&self) -> Result<(), Error> {
-        self.flush_inner(true).await?;
+        Self::flush_owned(Arc::clone(&self.inner), true).await?;
         Ok(())
     }
 
