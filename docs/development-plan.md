@@ -32,7 +32,7 @@
 
 ## 阶段 8　抽象类型与只读表面
 
-`crates/types` 实现 `Article` 与 `HotList`。`project` 只读。超过内联上限的文章正文写入 `readable`。热榜按 `createdAt` 的时间点排序。`on_commit` 返回变更集或 JSON `null`，类型实现不调用 `apply`。采集进程在快照可见之后调用 `HotList::on_commit`，并把变更集交给 Strata。`ability/type_article` 与 `ability/type_hotlist` 把这两个类型挂到 Ability 上。`apps/modalprism-agent` 是只读进程，命令是 `modalprism-agent`。它只安装 `strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist`，不构造 Planner、Runner、出站网关、付费网关和访问器。工具面是 MCP 的标准输入输出，工具名是 `instance.method`。`AccessKind::Tools` 没有 Port。该 LEAF 提交没有 Skill Port，进程不放置 `info.yml`，不运行 codegen。规则见 `docs/specs/types.md`。
+`crates/types` 实现 `Article` 与 `HotList`。`project` 只读。超过内联上限的文章正文写入 `readable`。热榜按 `createdAt` 的时间点排序。`on_commit` 读取已生效配置快照，返回变更集或 JSON `null`，类型实现不调用 `apply`。采集进程在快照可见之后调用 `HotList::on_commit`，并把变更集交给 Strata。`ability/type_article` 与 `ability/type_hotlist` 把这两个类型挂到 Ability 上。`apps/modalprism-agent` 是只读进程，命令是 `modalprism-agent`。它只安装 `strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist`，不构造 Planner、Runner、出站网关、付费网关和访问器。打开 Strata 时采用配置里的 blob 阈值和暂存 ttl。工具面是 MCP 的标准输入输出，工具名是 `instance.method`，只读方法的 `readOnlyHint` 为 true。`AccessKind::Tools` 没有 Port。该 LEAF 提交没有 Skill Port，进程不放置 `info.yml`，不运行 codegen。规则见 `docs/specs/types.md`。
 
 ## 未闭合
 

@@ -127,6 +127,7 @@ impl Gateway for MethodTools {
             .catalog()
             .into_iter()
             .filter_map(|mut entry| {
+                mark_read_only(&mut entry);
                 let name = format!("{}.{}", entry.instance.as_str(), entry.method.as_str());
                 entry.instance = InstanceId::new(&name).ok()?;
                 Some(entry)
@@ -140,9 +141,38 @@ impl Gateway for MethodTools {
             return None;
         }
         let mut entry = self.inner.get_entry(&real_instance, &real_method)?;
+        mark_read_only(&mut entry);
         entry.instance = instance.clone();
         Some(entry)
     }
+}
+
+fn mark_read_only(entry: &mut CatalogEntry) {
+    if method_is_read_only(entry.method.as_str()) {
+        entry.stateful = false;
+    }
+}
+
+fn method_is_read_only(method: &str) -> bool {
+    matches!(
+        method,
+        "kinds"
+            | "has"
+            | "get"
+            | "slice"
+            | "resolve"
+            | "history"
+            | "lineage"
+            | "related"
+            | "query"
+            | "changes"
+            | "status"
+            | "validate"
+            | "diff"
+            | "explain"
+            | "project"
+            | "on_commit"
+    )
 }
 
 fn split_tool(name: &str) -> ability_support::Result<(InstanceId, MethodId)> {

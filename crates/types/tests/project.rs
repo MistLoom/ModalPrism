@@ -482,3 +482,27 @@ async fn workspace_config_loads_type_modules() {
     );
     assert!(HotList::schema()["properties"]["entries"].is_object());
 }
+
+#[tokio::test]
+async fn read_root_uses_configured_blob_thresholds() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path(), None);
+    write(
+        config.path(),
+        "system.yaml",
+        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  blob:\n    inline_size_threshold: 8KiB\n    dedicated_size_threshold: 1KiB\n  staging:\n    ttl: 12h\n",
+    );
+    let Err(error) = ReadRoot::open(data.path(), config.path()).await else {
+        panic!("倒挂的 blob 阈值应当拒绝打开");
+    };
+    assert_eq!(error.to_string(), "blob 阈值无效");
+
+    write(
+        config.path(),
+        "system.yaml",
+        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  blob:\n    inline_size_threshold: 32KiB\n    dedicated_size_threshold: 8MiB\n  staging:\n    ttl: 12h\n",
+    );
+    let opened = tempfile::tempdir().unwrap();
+    ReadRoot::open(opened.path(), config.path()).await.unwrap();
+}

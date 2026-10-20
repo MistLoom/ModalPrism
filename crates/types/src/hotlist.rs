@@ -76,8 +76,11 @@ impl HotList {
         }))
     }
 
-    pub async fn on_commit(root: &ReadRoot) -> Result<Value, Error> {
-        match Self::changeset(root.strata(), &root.config().snapshot()).await? {
+    pub async fn on_commit(
+        strata: &strata_client::Strata,
+        applied: &config::Snapshot,
+    ) -> Result<Value, Error> {
+        match Self::changeset(strata, applied).await? {
             Some(changeset) => serde_json::to_value(changeset)
                 .map_err(|source| Error::with_source(source.to_string(), source)),
             None => Ok(Value::Null),
@@ -208,7 +211,7 @@ pub(crate) async fn project_call(root: &ReadRoot, args: &Value) -> Result<Value,
 
 pub(crate) async fn on_commit_call(root: &ReadRoot, args: &Value) -> Result<Value, Error> {
     empty_args(args)?;
-    HotList::on_commit(root).await
+    HotList::on_commit(root.strata(), root.config().applied().as_ref()).await
 }
 
 fn keep_snapshots(snapshot: &config::Snapshot) -> Option<usize> {
