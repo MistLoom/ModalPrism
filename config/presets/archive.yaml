@@ -1,0 +1,13 @@
+id: preset/archive
+kind: preset
+name: 归档
+extends: [preset/standard]
+policy:
+  raw: { retain: forever, max_part_size: 1GiB }
+  media: { kinds: [image, audio, video, file], max_size: 1GiB }
+  versions: { facet_keep: { default: all }, snapshot_retain: 7d, audit_tag: daily }
+  robots: { crawl_delay: honor }
+  render: { max_level: L4, fallback_engine: chromium }
+  capture: { screenshot: on-render, network: matched-body, renditions: [markdown] }
+  reprocess: { on_adapter_change: "window:30d" }
+  state: { snapshot_interval: 5m }

@@ -1,0 +1,18 @@
+id: preset/debug
+kind: preset
+name: 调试
+extends: [preset/standard]
+policy:
+  raw: { retain: 3d }
+  media: { mode: reference }
+  versions: { facet_keep: { default: 1 }, snapshot_retain: 1d, audit_tag: none }
+  commit: { flush_interval: 1s }
+  state: { snapshot_interval: 1m }
+  robots: { mode: obey, crawl_delay: honor }
+  render: { max_level: L4, fallback_engine: chromium }
+  capture:
+    screenshot: always
+    network: all-bodies
+    renditions: [markdown, semantic_tree_text]
+  reprocess: { on_adapter_change: latest }
+  dedupe: { near_duplicate: off }
