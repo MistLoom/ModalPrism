@@ -78,21 +78,23 @@ impl PushAccessor {
         let hash = hex(Sha256::digest(&incoming.body));
         let map_key = header(&incoming.headers, "idempotency-key")
             .map(|key| format!("{}\n{key}", incoming.channel));
-        if let Some(map_key) = &map_key {
+        if let Some(map_key) = map_key {
             let mut seen = self.seen.lock().await;
             seen.retain(|_, item| fresh(item.at, now));
-            if let Some(found) = seen.get(map_key) {
+            if let Some(found) = seen.get(&map_key) {
                 if found.hash != hash {
                     return Err(permanent("idempotency"));
                 }
                 return Ok(found.envelopes.clone());
             }
-        }
-        self.take_token(&incoming.channel, spec.rate_per_sec, spec.burst)
+            take_token(
+                &self.buckets,
+                &incoming.channel,
+                spec.rate_per_sec,
+                spec.burst,
+            )
             .await?;
-        let envelopes = one_envelope(incoming, ctx, policy)?;
-        if let Some(map_key) = map_key {
-            let mut seen = self.seen.lock().await;
+            let envelopes = one_envelope(incoming, ctx, policy)?;
             if seen.len() >= 1024 {
                 if let Some(oldest) = seen
                     .iter()
@@ -110,8 +112,16 @@ impl PushAccessor {
                     envelopes: envelopes.clone(),
                 },
             );
+            return Ok(envelopes);
         }
-        Ok(envelopes)
+        take_token(
+            &self.buckets,
+            &incoming.channel,
+            spec.rate_per_sec,
+            spec.burst,
+        )
+        .await?;
+        one_envelope(incoming, ctx, policy)
     }
 }
 
@@ -209,25 +219,28 @@ fn parse_spec(spec: &Value) -> Result<Spec, AccessError> {
     Ok(spec)
 }
 
-impl PushAccessor {
-    async fn take_token(&self, channel: &str, rate: u32, burst: u32) -> Result<(), AccessError> {
-        let mut buckets = self.buckets.lock().await;
-        let bucket = buckets.entry(channel.to_string()).or_insert(Bucket {
-            tokens: f64::from(burst),
-            updated: Instant::now(),
-        });
-        let elapsed = bucket.updated.elapsed().as_secs_f64();
-        bucket.updated = Instant::now();
-        bucket.tokens = (bucket.tokens + elapsed * f64::from(rate)).min(f64::from(burst));
-        if bucket.tokens < 1.0 {
-            return Err(AccessError::new(
-                strata_model::ErrorClass::Transient,
-                "rate-limit",
-            ));
-        }
-        bucket.tokens -= 1.0;
-        Ok(())
+async fn take_token(
+    buckets: &Mutex<BTreeMap<String, Bucket>>,
+    channel: &str,
+    rate: u32,
+    burst: u32,
+) -> Result<(), AccessError> {
+    let mut buckets = buckets.lock().await;
+    let bucket = buckets.entry(channel.to_string()).or_insert(Bucket {
+        tokens: f64::from(burst),
+        updated: Instant::now(),
+    });
+    let elapsed = bucket.updated.elapsed().as_secs_f64();
+    bucket.updated = Instant::now();
+    bucket.tokens = (bucket.tokens + elapsed * f64::from(rate)).min(f64::from(burst));
+    if bucket.tokens < 1.0 {
+        return Err(AccessError::new(
+            strata_model::ErrorClass::Transient,
+            "rate-limit",
+        ));
     }
+    bucket.tokens -= 1.0;
+    Ok(())
 }
 
 #[async_trait]

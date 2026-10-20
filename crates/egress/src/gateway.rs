@@ -228,19 +228,16 @@ where
                 Err(error) => return Err(error),
             }
         };
-        let mut blocked = false;
+        let mut chosen = None;
         for ip in ips {
             if policy.private_networks == PrivateNetworks::Deny && is_blocked(ip) {
-                blocked = true;
-                continue;
+                return Err(permanent("ssrf"));
             }
-            return Ok(SocketAddr::new(ip, port));
+            if chosen.is_none() {
+                chosen = Some(SocketAddr::new(ip, port));
+            }
         }
-        if blocked {
-            Err(permanent("ssrf"))
-        } else {
-            Err(permanent("dns"))
-        }
+        chosen.ok_or_else(|| permanent("dns"))
     }
 
     async fn enforce_robots(
@@ -328,7 +325,7 @@ where
             body: bytes::Bytes::new(),
         };
         let mut fetch_now = now_ms;
-        let response = self
+        let mut response = self
             .send_direct(
                 &fetch_policy,
                 &mut robots_request,
@@ -336,17 +333,39 @@ where
                 deadline_ms,
             )
             .await;
+        let mut hops = 0u8;
+        while let Ok(current) = &response {
+            let Some(next) = follow_redirect(&robots_request, current)? else {
+                break;
+            };
+            hops = hops.saturating_add(1);
+            if hops > 5 {
+                break;
+            }
+            robots_request = next;
+            response = self
+                .send_direct(
+                    &fetch_policy,
+                    &mut robots_request,
+                    &mut fetch_now,
+                    deadline_ms,
+                )
+                .await;
+        }
         let row = match response {
-            Ok(response) => state::RobotsRow {
-                status: response.status,
-                body: if response.status < 400 {
-                    String::from_utf8_lossy(&response.body).into_owned()
-                } else {
-                    String::new()
-                },
-                fetched_ms: now_ms,
-                failed: response.status >= 500,
-            },
+            Ok(response) => {
+                let unfinished = matches!(response.status, 301 | 302 | 303 | 307 | 308);
+                state::RobotsRow {
+                    status: response.status,
+                    body: if response.status < 400 && !unfinished {
+                        String::from_utf8_lossy(&response.body).into_owned()
+                    } else {
+                        String::new()
+                    },
+                    fetched_ms: now_ms,
+                    failed: response.status >= 500 || unfinished,
+                }
+            }
             Err(_) => state::RobotsRow {
                 status: 0,
                 body: String::new(),

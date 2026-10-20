@@ -431,6 +431,123 @@ impl<E: BrowserEngine> Accessor for BrowserAccessor<E> {
     }
 }
 
+fn redact_trace(bytes: &[u8], names: &[String]) -> Vec<u8> {
+    if names.is_empty() {
+        return bytes.to_vec();
+    }
+    let Ok(mut value) = serde_json::from_slice::<Value>(bytes) else {
+        return bytes.to_vec();
+    };
+    redact_json(&mut value, names);
+    serde_json::to_vec(&value).unwrap_or_else(|_| bytes.to_vec())
+}
+
+fn redact_json(value: &mut Value, names: &[String]) {
+    match value {
+        Value::Array(items) => {
+            if !redact_pairs(items, names) {
+                for item in items {
+                    redact_json(item, names);
+                }
+            }
+        }
+        Value::Object(map) => {
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                let Some(child) = map.get_mut(&key) else {
+                    continue;
+                };
+                if header_key(&key) {
+                    redact_header_node(child, names);
+                } else {
+                    redact_json(child, names);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn header_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower == "headers" || lower.ends_with("headers")
+}
+
+fn redact_header_node(value: &mut Value, names: &[String]) {
+    match value {
+        Value::Array(items) => {
+            if redact_pairs(items, names) {
+                return;
+            }
+            for item in items {
+                if let Value::Object(map) = item {
+                    redact_named(map, names);
+                } else {
+                    redact_json(item, names);
+                }
+            }
+        }
+        Value::Object(map) => {
+            if map.contains_key("name") && map.contains_key("value") {
+                redact_named(map, names);
+                return;
+            }
+            let keys: Vec<String> = map.keys().cloned().collect();
+            let all_strings = !keys.is_empty()
+                && keys
+                    .iter()
+                    .all(|key| map.get(key).is_some_and(Value::is_string));
+            if all_strings {
+                for key in keys {
+                    if names.iter().any(|needle| needle.eq_ignore_ascii_case(&key)) {
+                        map.insert(key, Value::String("***".into()));
+                    }
+                }
+                return;
+            }
+            for child in map.values_mut() {
+                redact_json(child, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_named(map: &mut Map<String, Value>, names: &[String]) {
+    let Some(name) = map.get("name").and_then(Value::as_str).map(str::to_string) else {
+        return;
+    };
+    if names
+        .iter()
+        .any(|needle| needle.eq_ignore_ascii_case(&name))
+    {
+        map.insert("value".into(), Value::String("***".into()));
+    }
+}
+
+fn redact_pairs(items: &mut [Value], names: &[String]) -> bool {
+    if items.is_empty()
+        || !items.iter().all(|item| {
+            item.as_array()
+                .is_some_and(|pair| pair.len() == 2 && pair[0].is_string() && pair[1].is_string())
+        })
+    {
+        return false;
+    }
+    for item in items {
+        let Some(pair) = item.as_array_mut() else {
+            continue;
+        };
+        let hit = pair[0]
+            .as_str()
+            .is_some_and(|name| names.iter().any(|needle| needle.eq_ignore_ascii_case(name)));
+        if hit {
+            pair[1] = Value::String("***".into());
+        }
+    }
+    true
+}
+
 fn map_output(
     ctx: &AccessContext,
     request: &AccessRequest,
@@ -448,10 +565,13 @@ fn map_output(
             (Bytes::from(body), kind)
         })
     };
+    let names = accessors::redact_names(&request.policy);
+    let mut meta_headers = output.headers.clone();
+    accessors::redact_headers(&mut meta_headers, &names);
     let metadata = json!({
         "finalUrl": output.final_url,
         "status": output.status,
-        "headers": output.headers,
+        "headers": meta_headers,
         "redirectChain": output.redirect_chain,
         "title": output.title,
     });
@@ -468,7 +588,7 @@ fn map_output(
             extra.push(ExtraPart {
                 role: PartRole::NetworkTrace,
                 media_type: "application/json".into(),
-                body: Bytes::from(network),
+                body: Bytes::from(redact_trace(&network, &names)),
                 locator: None,
                 meta: Map::new(),
             });

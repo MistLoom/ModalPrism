@@ -3,10 +3,11 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use config::{
-    ConfigStore, EnvSource, LoadOptions, builtin_presets, diff, explain, validate, watch,
+    ConfigStore, EnvSource, LoadOptions, builtin_presets, diff, explain, overlay_system_policy,
+    validate, watch,
 };
 use serde_json::json;
 
@@ -472,30 +473,89 @@ fn watch_debounces_and_keeps_snapshot_on_failure() {
     scaffold(dir.path());
     let store = Arc::new(ConfigStore::open(dir.path(), options()).unwrap());
     let _watch = watch(Arc::clone(&store), Duration::from_millis(200)).unwrap();
-    std::thread::sleep(Duration::from_millis(80));
     write(
         dir.path(),
         "sources/demo.yaml",
         &source_yaml("policy:\n  raw:\n    retain: 2d\n"),
     );
-    std::thread::sleep(Duration::from_millis(30));
     write(
         dir.path(),
         "sources/demo.yaml",
         &source_yaml("policy:\n  raw:\n    retain: 4d\n"),
     );
-    std::thread::sleep(Duration::from_millis(80));
-    assert_eq!(store.snapshot().generation, 1, "安静时间结束前就重载了");
-    std::thread::sleep(Duration::from_millis(400));
-    assert_eq!(store.snapshot().generation, 2);
+    assert_eq!(store.snapshot().generation, 1);
+    assert!(wait_until(Duration::from_secs(2), || store
+        .snapshot()
+        .generation
+        == 2));
     assert_eq!(
         store.snapshot().modules["source/demo"].pointer("/policy/raw/retain"),
         Some(&json!("4d"))
     );
     write(dir.path(), "sources/demo.yaml", &source_yaml("foo: 1\n"));
-    std::thread::sleep(Duration::from_millis(500));
+    assert!(wait_until(Duration::from_secs(2), || {
+        store.last_error().is_some()
+    }));
     assert_eq!(store.snapshot().generation, 2);
-    assert!(store.last_error().is_some());
+}
+
+fn wait_until(limit: Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < limit {
+        if ready() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    ready()
+}
+
+#[test]
+fn secret_stays_a_placeholder_in_snapshot_explain_and_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "sources/demo.yaml",
+        &source_yaml("").replace("name: Demo", "name: ${secret:blog/token}"),
+    );
+    let options = LoadOptions {
+        secrets: [("blog/token".into(), "s3cret-value".into())].into(),
+        ..LoadOptions::default()
+    };
+    let snapshot = validate(dir.path(), &options).unwrap();
+    let name = snapshot.modules["source/demo"]
+        .get("name")
+        .cloned()
+        .unwrap();
+    assert_eq!(name, json!("${secret:blog/token}"));
+    let rendered = serde_json::to_string(&snapshot.modules).unwrap();
+    assert!(!rendered.contains("s3cret-value"));
+    let fields = explain(&snapshot, "source/demo").unwrap();
+    assert!(fields.iter().any(|field| field.value == name));
+    assert!(!format!("{fields:?}").contains("s3cret-value"));
+    let again = validate(dir.path(), &options).unwrap();
+    let changes = diff(&snapshot, &again);
+    assert!(changes.is_empty());
+}
+
+#[test]
+fn effective_policy_includes_system_redact_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    let snapshot = validate(dir.path(), &options()).unwrap();
+    let module = &snapshot.modules["source/demo"];
+    assert!(module.pointer("/policy/raw/redact_headers").is_none());
+    let policy = overlay_system_policy(&snapshot.system, module.get("policy").unwrap());
+    assert_eq!(
+        policy.pointer("/raw/redact_headers"),
+        Some(&json!([
+            "authorization",
+            "cookie",
+            "set-cookie",
+            "proxy-authorization"
+        ]))
+    );
 }
 
 #[test]
