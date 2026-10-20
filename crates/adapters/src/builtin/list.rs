@@ -800,7 +800,12 @@ fn date_heading(title: &str, offset: Option<&str>) -> Option<strata_model::Times
     if let Some(index) = text.find([':', '：']) {
         let prefix = &text[..index];
         if prefix.chars().count() <= 12 && !prefix.chars().any(|ch| ch.is_ascii_digit()) {
-            text = text[index + 1..].trim();
+            let colon = text[index..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(1);
+            text = text[index + colon..].trim();
         }
     }
     if text.len() > 32 || text.chars().any(|ch| ch.is_ascii_alphabetic()) {
