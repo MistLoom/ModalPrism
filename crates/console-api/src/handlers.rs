@@ -1,32 +1,70 @@
-use std::path::{Component, Path};
-
 use assembly::capacities;
 use axum::Json;
 use axum::extract::{Path as AxPath, Query, State};
 use egress::circuit_open;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use strata_model::{FacetRef, Query as StrataQuery, QueryFrom, VersionSel};
+use strata_model::{AsOf, Expr, FacetKind, FacetRef, Query as StrataQuery, QueryFrom, VersionSel};
 
+use crate::config_path::{list_whitelist_files, normalize_rel_path, resolve_config_file};
+use crate::copy::{change_summary, circuit_label, health_label, schedule_note};
 use crate::error::{ApiError, ApiResult};
 use crate::ConsoleState;
 
-pub async fn meta(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
+#[derive(Deserialize)]
+pub struct AsOfQuery {
+    #[serde(default)]
+    as_of_snapshot: Option<u64>,
+}
+
+pub async fn meta(
+    State(state): State<ConsoleState>,
+    Query(q): Query<AsOfQuery>,
+) -> ApiResult<Json<Value>> {
     let generation = state
         .services
         .call("config.generation", json!({}))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let snapshot = latest_snapshot_seq(&state).await?;
+    let read_only = q.as_of_snapshot.is_some();
     Ok(Json(json!({
         "httpListen": state.http_addr,
         "configGeneration": generation.get("generation"),
-        "latestSnapshotSeq": snapshot,
+        "readOnly": read_only,
+        "asOfSnapshot": q.as_of_snapshot,
         "consolePath": "/console/",
     })))
 }
 
-pub async fn overview(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
+pub async fn timeline(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
+    let changes = state
+        .services
+        .call("strata_read.changes", json!({ "after": 0, "limit": 100 }))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let items: Vec<Value> = changes
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            json!({
+                "snapshot": row.get("snapshot"),
+                "publishedAt": row.get("publishedAt"),
+                "label": change_summary(&row),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "items": items })))
+}
+
+pub async fn overview(
+    State(state): State<ConsoleState>,
+    Query(q): Query<AsOfQuery>,
+) -> ApiResult<Json<Value>> {
+    if q.as_of_snapshot.is_some() {
+        return Err(ApiError::bad_request("总览仅支持实时数据"));
+    }
     let sources = source_summaries(&state).await?;
     let healthy = sources
         .iter()
@@ -37,6 +75,19 @@ pub async fn overview(State(state): State<ConsoleState>) -> ApiResult<Json<Value
         .call("strata_read.changes", json!({ "after": 0, "limit": 20 }))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let recent: Vec<Value> = changes
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            json!({
+                "snapshot": row.get("snapshot"),
+                "publishedAt": row.get("publishedAt"),
+                "summary": change_summary(&row),
+            })
+        })
+        .collect();
     let c = capacities();
     Ok(Json(json!({
         "sourceCount": sources.len(),
@@ -47,12 +98,18 @@ pub async fn overview(State(state): State<ConsoleState>) -> ApiResult<Json<Value
             "render": c.render,
             "push": c.push,
         },
-        "recentChanges": changes,
+        "recentUpdates": recent,
         "sources": sources,
     })))
 }
 
-pub async fn sources_list(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
+pub async fn sources_list(
+    State(state): State<ConsoleState>,
+    Query(q): Query<AsOfQuery>,
+) -> ApiResult<Json<Value>> {
+    if q.as_of_snapshot.is_some() {
+        return Err(ApiError::bad_request("信源状态仅支持实时数据"));
+    }
     let items = source_summaries(&state).await?;
     Ok(Json(json!({ "items": items })))
 }
@@ -60,7 +117,11 @@ pub async fn sources_list(State(state): State<ConsoleState>) -> ApiResult<Json<V
 pub async fn source_get(
     State(state): State<ConsoleState>,
     AxPath(id): AxPath<String>,
+    Query(q): Query<AsOfQuery>,
 ) -> ApiResult<Json<Value>> {
+    if q.as_of_snapshot.is_some() {
+        return Err(ApiError::bad_request("信源状态仅支持实时数据"));
+    }
     let key = normalize_source_id(&id)?;
     let items = source_summaries(&state).await?;
     let Some(item) = items
@@ -89,7 +150,10 @@ pub async fn source_trigger(
     }
     let tasks = state
         .services
-        .call("planner.trigger", json!({ "source": key.strip_prefix("source/").unwrap_or(&key) }))
+        .call(
+            "planner.trigger",
+            json!({ "source": key.strip_prefix("source/").unwrap_or(&key) }),
+        )
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({ "tasks": tasks })))
@@ -115,27 +179,17 @@ pub async fn source_patch(
         .enabled
         .ok_or_else(|| ApiError::bad_request("需要 enabled 字段"))?;
     let rel = format!("sources/{}.yaml", key.strip_prefix("source/").unwrap_or(&key));
-    let path = state.services.config_dir().join(&rel);
-    if !path.is_file() {
-        return Err(ApiError::not_found("配置文件不存在"));
-    }
+    let rel_path = normalize_rel_path(&rel)?;
+    let path = resolve_config_file(&state, &rel_path)?;
     let text = tokio::fs::read_to_string(&path)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    write_backup(&state, &rel, &text)?;
     let updated = set_enabled_line(&text, enabled);
     tokio::fs::write(&path, updated)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    state
-        .services
-        .call("config_inspect.validate", json!({}))
-        .await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    state
-        .services
-        .call("config.load", json!({}))
-        .await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    validate_and_reload(&state).await?;
     Ok(Json(json!({ "ok": true, "enabled": enabled })))
 }
 
@@ -143,6 +197,14 @@ pub async fn source_patch(
 pub struct RecordsQuery {
     #[serde(default = "default_limit")]
     limit: u64,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    as_of_snapshot: Option<u64>,
 }
 
 fn default_limit() -> u64 {
@@ -154,17 +216,30 @@ pub async fn records_list(
     Query(q): Query<RecordsQuery>,
 ) -> ApiResult<Json<Value>> {
     let limit = q.limit.clamp(1, 100) as u32;
+    let mut where_expr = None;
+    if let Some(source) = &q.source {
+        let sid = if source.starts_with("source/") {
+            source.clone()
+        } else {
+            format!("source/{source}")
+        };
+        where_expr = Some(Expr::try_from(json!({ "eq": { "field": "sourceId", "value": sid } }))
+            .map_err(|_| ApiError::bad_request("信源筛选无效"))?);
+    }
+    let as_of = q
+        .as_of_snapshot
+        .map(AsOf::Snapshot);
     let query = StrataQuery {
         from: QueryFrom::Resources,
-        r#where: None,
+        r#where: where_expr,
         has_facets: vec![],
         expand: vec![],
         order_by: vec![],
-        limit: Some(limit),
-        cursor: None,
+        limit: Some(limit.saturating_mul(2).min(200)),
+        cursor: q.cursor.clone(),
         search: None,
         select: vec![],
-        as_of: None,
+        as_of,
     };
     let page = state
         .services
@@ -172,62 +247,51 @@ pub async fn records_list(
         .query(query)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let needle = q.q.as_deref().map(|s| s.to_lowercase());
     let items: Vec<Value> = page
         .rows
         .into_iter()
-        .map(|row| {
-            json!({
-                "id": row.get("rid"),
-                "sourceId": row.get("sourceId"),
-                "updatedAt": row.get("updatedAt"),
-                "tombstone": row.get("tombstone"),
-            })
+        .filter(|row| {
+            if let Some(needle) = &needle {
+                let rid = row.get("rid").and_then(Value::as_str).unwrap_or("");
+                let sid = row.get("sourceId").and_then(Value::as_str).unwrap_or("");
+                rid.to_lowercase().contains(needle) || sid.to_lowercase().contains(needle)
+            } else {
+                true
+            }
         })
+        .take(limit as usize)
+        .map(|row| record_summary(&row))
         .collect();
     Ok(Json(json!({
         "items": items,
         "nextCursor": page.next_cursor,
+        "readOnly": q.as_of_snapshot.is_some(),
     })))
 }
 
 pub async fn record_get(
     State(state): State<ConsoleState>,
     AxPath(id): AxPath<String>,
+    Query(q): Query<AsOfQuery>,
 ) -> ApiResult<Json<Value>> {
     let rid_text = if id.starts_with("r_") {
         id.clone()
     } else {
         format!("r_{id}")
     };
-    let reference = FacetRef::new(
-        strata_model::Rid::parse(&rid_text).map_err(|_| ApiError::bad_request("记录 ID 无效"))?,
-        strata_model::FacetKind::Struct,
-        Some("discovery".into()),
-        VersionSel::Latest,
-    )
-    .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
-    let discovery = state
-        .services
-        .strata()
-        .get(&reference, true)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let kinds = state
-        .services
-        .call(
-            "strata_read.kinds",
-            json!({ "facet": format!("{rid_text}@struct:discovery#latest") }),
-        )
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(json!({
-        "id": rid_text,
-        "discovery": discovery.map(|f| f.value),
-        "facetKinds": kinds,
-    })))
+    let as_of = q.as_of_snapshot.map(AsOf::Snapshot);
+    let detail = load_record_detail(&state, &rid_text, as_of).await?;
+    Ok(Json(detail))
 }
 
-pub async fn governance_egress(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
+pub async fn governance_egress(
+    State(state): State<ConsoleState>,
+    Query(q): Query<AsOfQuery>,
+) -> ApiResult<Json<Value>> {
+    if q.as_of_snapshot.is_some() {
+        return Err(ApiError::bad_request("治理状态仅支持实时数据"));
+    }
     let db = state
         .services
         .egress_gateway()
@@ -253,6 +317,7 @@ pub async fn governance_egress(State(state): State<ConsoleState>) -> ApiResult<J
             json!({
                 "host": host,
                 "circuit": state_label,
+                "circuitLabel": circuit_label(state_label),
                 "consecutiveFailures": row.consecutive,
                 "cooldownMs": row.cooldown_ms,
             })
@@ -306,12 +371,12 @@ pub async fn config_summary(State(state): State<ConsoleState>) -> ApiResult<Json
 }
 
 pub async fn config_validate(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
-    let value = state
+    state
         .services
         .call("config_inspect.validate", json!({}))
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    Ok(Json(value))
+    Ok(Json(json!({ "ok": true })))
 }
 
 pub async fn config_reload(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
@@ -323,50 +388,160 @@ pub async fn config_reload(State(state): State<ConsoleState>) -> ApiResult<Json<
     Ok(Json(value))
 }
 
+pub async fn config_files_list(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
+    let paths = list_whitelist_files(&state)?;
+    Ok(Json(json!({ "items": paths })))
+}
+
 pub async fn config_file_get(
     State(state): State<ConsoleState>,
     AxPath(path): AxPath<String>,
 ) -> ApiResult<Json<Value>> {
-    let file = safe_config_path(&state, &path)?;
+    let rel = normalize_rel_path(&path)?;
+    let file = resolve_config_file(&state, &rel)?;
     let text = tokio::fs::read_to_string(&file)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
-    Ok(Json(json!({ "path": path, "text": text })))
+    let has_backup = backup_path(&state, &path).is_file();
+    Ok(Json(json!({
+        "path": path,
+        "text": text,
+        "canRollback": has_backup,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct FileValidateBody {
+    path: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+pub struct FilePathBody {
+    path: String,
+    #[serde(default)]
+    confirm: bool,
+}
+
+pub async fn config_file_validate_text(
+    State(state): State<ConsoleState>,
+    Json(body): Json<FileValidateBody>,
+) -> ApiResult<Json<Value>> {
+    let rel = normalize_rel_path(&body.path)?;
+    let file = resolve_config_file(&state, &rel)?;
+    let original = if file.is_file() {
+        tokio::fs::read_to_string(&file)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        String::new()
+    };
+    tokio::fs::write(&file, &body.text)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let result = state
+        .services
+        .call("config_inspect.validate", json!({}))
+        .await;
+    tokio::fs::write(&file, original)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    match result {
+        Ok(_) => Ok(Json(json!({ "ok": true }))),
+        Err(e) => Err(ApiError::bad_request(e.to_string())),
+    }
 }
 
 pub async fn config_file_put(
     State(state): State<ConsoleState>,
     AxPath(path): AxPath<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<PutFileBody>,
 ) -> ApiResult<Json<Value>> {
-    let text = body
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::bad_request("需要 text 字段"))?;
-    let file = safe_config_path(&state, &path)?;
+    if !body.confirm {
+        return Err(ApiError::bad_request("需要 confirm: true"));
+    }
+    let rel = normalize_rel_path(&path)?;
+    let file = resolve_config_file(&state, &rel)?;
+    let original = if file.is_file() {
+        tokio::fs::read_to_string(&file)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        String::new()
+    };
+    write_backup(&state, &path.to_string(), &original)?;
+    tokio::fs::write(&file, &body.text)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if let Err(e) = validate_and_reload(&state).await {
+        tokio::fs::write(&file, original)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        return Err(e);
+    }
+    Ok(Json(json!({ "ok": true, "path": path })))
+}
+
+#[derive(Deserialize)]
+pub struct PutFileBody {
+    text: String,
+    #[serde(default)]
+    confirm: bool,
+}
+
+pub async fn config_file_rollback(
+    State(state): State<ConsoleState>,
+    Json(body): Json<FilePathBody>,
+) -> ApiResult<Json<Value>> {
+    if !body.confirm {
+        return Err(ApiError::bad_request("需要 confirm: true"));
+    }
+    let rel = normalize_rel_path(&body.path)?;
+    let file = resolve_config_file(&state, &rel)?;
+    let backup = backup_path(&state, &body.path);
+    if !backup.is_file() {
+        return Err(ApiError::not_found("没有可回滚的备份"));
+    }
+    let text = tokio::fs::read_to_string(&backup)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     tokio::fs::write(&file, text)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    validate_and_reload(&state).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
-fn safe_config_path(state: &ConsoleState, path: &str) -> ApiResult<std::path::PathBuf> {
-    let rel = Path::new(path);
-    if rel
-        .components()
-        .any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
-    {
-        return Err(ApiError::bad_request("路径无效"));
+async fn validate_and_reload(state: &ConsoleState) -> ApiResult<()> {
+    state
+        .services
+        .call("config_inspect.validate", json!({}))
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    state
+        .services
+        .call("config.load", json!({}))
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(())
+}
+
+fn backup_path(state: &ConsoleState, rel_path: &str) -> std::path::PathBuf {
+    let safe = rel_path.replace('/', "__");
+    state
+        .services
+        .data_dir()
+        .join(".console-config-backups")
+        .join(safe)
+}
+
+fn write_backup(state: &ConsoleState, rel_path: &str, text: &str) -> ApiResult<()> {
+    let path = backup_path(state, rel_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
     }
-    let allowed = rel.starts_with("sources")
-        || rel.starts_with("presets")
-        || rel.starts_with("profiles")
-        || rel.starts_with("accessors")
-        || rel == Path::new("system.yaml");
-    if !allowed {
-        return Err(ApiError::bad_request("路径不在允许范围内"));
-    }
-    Ok(state.services.config_dir().join(rel))
+    std::fs::write(&path, text).map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(())
 }
 
 fn normalize_source_id(id: &str) -> ApiResult<String> {
@@ -375,7 +550,7 @@ fn normalize_source_id(id: &str) -> ApiResult<String> {
     } else {
         format!("source/{id}")
     };
-    if key.contains("..") || key.contains('/') && key.split('/').count() > 2 {
+    if key.contains("..") {
         return Err(ApiError::bad_request("信源 ID 无效"));
     }
     Ok(key)
@@ -410,22 +585,28 @@ async fn source_summaries(state: &ConsoleState) -> ApiResult<Vec<Value>> {
             .call("health.status", json!({ "source": source_key }))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
-        let scheduled = module
-            .pointer("/access/locator/type")
+        let health_status = health
+            .get("status")
             .and_then(Value::as_str)
-            != Some("channel");
+            .unwrap_or("ok");
+        let alert = health.get("alert").and_then(Value::as_bool).unwrap_or(false);
+        let skip = status.get("skipReason").and_then(Value::as_str);
+        let budget_used = status.get("budgetUsed").and_then(Value::as_u64);
+        let note = schedule_note(
+            enabled,
+            skip,
+            budget_used,
+            status.get("nextAt"),
+        );
         out.push(json!({
             "id": id,
             "name": name,
             "enabled": enabled,
             "accessor": accessor,
-            "scheduled": scheduled,
-            "healthStatus": health.get("status"),
-            "alert": health.get("alert"),
+            "healthStatus": health_status,
+            "healthLabel": health_label(health_status, alert),
+            "scheduleNote": note,
             "nextAt": status.get("nextAt"),
-            "intervalMs": status.get("intervalMs"),
-            "skipReason": status.get("skipReason"),
-            "budgetUsed": status.get("budgetUsed"),
         }));
     }
     out.sort_by(|a, b| {
@@ -437,18 +618,130 @@ async fn source_summaries(state: &ConsoleState) -> ApiResult<Vec<Value>> {
     Ok(out)
 }
 
-async fn latest_snapshot_seq(state: &ConsoleState) -> ApiResult<Option<u64>> {
-    let changes = state
+fn record_summary(row: &Value) -> Value {
+    json!({
+        "id": row.get("rid"),
+        "sourceId": row.get("sourceId"),
+        "updatedAt": row.get("updatedAt"),
+        "tombstone": row.get("tombstone"),
+    })
+}
+
+async fn load_record_detail(
+    state: &ConsoleState,
+    rid_text: &str,
+    as_of: Option<AsOf>,
+) -> ApiResult<Value> {
+    if as_of.is_some() {
+        return Err(ApiError::bad_request("历史快照下暂不支持记录详情，请切回实时"));
+    }
+    let rid = strata_model::Rid::parse(rid_text)
+        .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
+    let discovery_ref = FacetRef::new(
+        rid.clone(),
+        FacetKind::Struct,
+        Some("discovery".into()),
+        VersionSel::Latest,
+    )
+        .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
+    let page_ref = FacetRef::new(rid.clone(), FacetKind::Struct, Some("page".into()), VersionSel::Latest)
+        .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
+    let strata = state.services.strata();
+    let discovery = facet_get(strata.as_ref(), &discovery_ref).await?;
+    let page = facet_get(strata.as_ref(), &page_ref).await?;
+    let fields = parse_discovery(&discovery);
+    let body_preview = page
+        .as_ref()
+        .and_then(|f| f.value.as_ref())
+        .and_then(|v| v.get("readable"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            page.as_ref()
+                .and_then(|f| f.value.as_ref())
+                .and_then(|v| v.get("text"))
+                .and_then(Value::as_str)
+        })
+        .map(|s| truncate(s, 2000));
+    let kinds = state
         .services
-        .call("strata_read.changes", json!({ "after": 0, "limit": 1 }))
+        .call(
+            "strata_read.kinds",
+            json!({ "facet": format!("{rid_text}@struct:discovery#latest") }),
+        )
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    if let Some(arr) = changes.as_array() {
-        if let Some(first) = arr.first() {
-            return Ok(first.get("seq").and_then(Value::as_u64));
+    Ok(json!({
+        "id": rid_text,
+        "title": fields.title,
+        "url": fields.url,
+        "publishedAt": fields.published_at,
+        "summary": fields.summary,
+        "author": fields.author,
+        "sourceId": discovery.as_ref().and_then(|f| f.value.as_ref()).and_then(|v| v.pointer("/sourceId")),
+        "bodyPreview": body_preview,
+        "structured": discovery.as_ref().and_then(|f| f.value.clone()),
+        "technical": {
+            "rid": rid_text,
+            "facetKinds": kinds,
+            "pageFacet": page.as_ref().and_then(|f| f.value.clone()),
+        },
+    }))
+}
+
+async fn facet_get(
+    strata: &strata_client::Strata,
+    reference: &FacetRef,
+) -> ApiResult<Option<strata_client::Facet>> {
+    match strata.get(reference, true).await {
+        Ok(facet) => Ok(facet),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("Not found") || msg.contains("not found") {
+                Ok(None)
+            } else {
+                Err(ApiError::internal(msg))
+            }
         }
     }
-    Ok(None)
+}
+
+struct DiscoveryFields {
+    title: Option<String>,
+    url: Option<String>,
+    published_at: Option<String>,
+    summary: Option<String>,
+    author: Option<String>,
+}
+
+fn parse_discovery(facet: &Option<strata_client::Facet>) -> DiscoveryFields {
+    let value = facet.as_ref().and_then(|f| f.value.as_ref());
+    let hints = value.and_then(|v| v.pointer("/hints"));
+    let title = hints.and_then(|h| h.get("title")).and_then(Value::as_str).map(String::from);
+    let published_at = hints
+        .and_then(|h| h.get("publishedAt"))
+        .map(|v| v.as_str().map(String::from).unwrap_or_else(|| v.to_string()));
+    let summary = hints.and_then(|h| h.get("summary")).and_then(Value::as_str).map(String::from);
+    let author = hints.and_then(|h| h.get("author")).and_then(Value::as_str).map(String::from);
+    let url = value
+        .and_then(|v| v.pointer("/locator/url"))
+        .and_then(Value::as_str)
+        .map(String::from)
+        .or_else(|| value.and_then(|v| v.pointer("/locator/href")).and_then(Value::as_str).map(String::from));
+    DiscoveryFields {
+        title,
+        url,
+        published_at,
+        summary,
+        author,
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }
 
 fn set_enabled_line(yaml: &str, enabled: bool) -> String {

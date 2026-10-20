@@ -14,6 +14,7 @@ config = { path = "../config" }
 egress = { path = "../egress" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+strata-client = { path = "../strata-client" }
 strata-model = { path = "../strata-model" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }

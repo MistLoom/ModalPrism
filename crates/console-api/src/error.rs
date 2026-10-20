@@ -34,6 +34,14 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: message.into(),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
