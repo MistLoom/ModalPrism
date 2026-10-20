@@ -1,0 +1,53 @@
+id: preset/standard
+kind: preset
+name: 标准
+policy:
+  raw:
+    store: all
+    retain: 30d
+    max_part_size: 50MiB
+    redact_headers: [authorization, cookie, set-cookie, proxy-authorization]
+  media:
+    mode: download
+    kinds: [image]
+    max_size: 20MiB
+  versions:
+    facet_keep: { raw: 1, md: all, default: 5 }
+    snapshot_retain: 3d
+    audit_tag: none
+  commit:
+    flush_interval: 10s
+    flush_max_rows: 10000
+  state:
+    snapshot_interval: 15m
+  robots:
+    mode: obey-with-exemptions
+    cache_ttl: 24h
+    on_unreachable: rfc9309
+    crawl_delay: "cap:30s"
+  render:
+    max_level: L3
+    fallback_engine: none
+    downgrade_probe: 7d
+  capture:
+    screenshot: on-failure
+    network: off
+    renditions: []
+  paid:
+    unknown_receipt: retry-once
+  reprocess:
+    on_adapter_change: latest
+  identity:
+    merge_primary: external-id-first
+    fragment: drop
+    strip_params: ["utm_*", spm, fbclid, gclid]
+  dedupe:
+    near_duplicate: simhash
+  backfill:
+    initial: { limit: 30, max_age: 365d }
+  classify:
+    detector: basic
+  health:
+    expected_period: 7d
+    yield_drop_ratio: 0.3
+    failure_threshold: 5

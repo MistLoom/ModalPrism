@@ -1,0 +1,22 @@
+[package]
+name = "config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "ModalPrism 配置快照：合并、校验、溯源与热加载"
+publish = false
+
+[dependencies]
+jsonschema.workspace = true
+notify.workspace = true
+saphyr.workspace = true
+serde_json.workspace = true
+signal-hook = { workspace = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

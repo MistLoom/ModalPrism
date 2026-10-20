@@ -1,0 +1,51 @@
+id: preset/minimal
+kind: preset
+name: 最小
+policy:
+  raw:
+    store: on-failure
+    retain: 3d
+    max_part_size: 5MiB
+    redact_headers: [authorization, cookie, set-cookie, proxy-authorization]
+  media:
+    mode: reference
+  versions:
+    facet_keep: { default: 1 }
+    snapshot_retain: 1d
+    audit_tag: none
+  commit:
+    flush_interval: 30s
+    flush_max_rows: 10000
+  state:
+    snapshot_interval: 1h
+  robots:
+    mode: obey
+    cache_ttl: 24h
+    on_unreachable: rfc9309
+    crawl_delay: honor
+  render:
+    max_level: L2
+    fallback_engine: none
+    downgrade_probe: 7d
+  capture:
+    screenshot: never
+    network: off
+    renditions: []
+  paid:
+    unknown_receipt: retry-once
+  reprocess:
+    on_adapter_change: none
+  identity:
+    merge_primary: external-id-first
+    fragment: drop
+    strip_params: ["utm_*", spm, fbclid, gclid]
+  dedupe:
+    near_duplicate: off
+  backfill:
+    initial: { limit: 30, max_age: 365d }
+  classify:
+    detector: basic
+  health:
+    expected_period: 7d
+    yield_drop_ratio: 0.3
+    failure_threshold: 5

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/strata-model", "crates/strata-store", "crates/strata-client"]
+members = [
+    "crates/strata-model",
+    "crates/strata-store",
+    "crates/strata-client",
+    "crates/config",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -26,6 +31,10 @@ lancedb = { version = "=0.40.0", features = ["remote"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+jsonschema = "0.59"
+notify = "8.2"
+saphyr = "0.2.2"
+signal-hook = { version = "0.3", features = ["iterator"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
