@@ -223,6 +223,7 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "policy",
             "spec",
             "egress",
+            "paid",
             "access",
             "pipeline",
             "schedule",

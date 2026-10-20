@@ -19,7 +19,7 @@
 
 策略键与设计 10.4.1 的路径一致，并加上信源上的 `robots.exempt_as`、`robots.robots_reason`。`policy.preset` 与 `policy.locks` 写在 `policy` 对象内。
 
-结构字段与设计 10.8 的示例一致：`schedule.expectedPeriod`、`schedule.batchKey`、`admission.allowUrlPrefixes`、`admission.denyUrlPrefixes`、`admission.publishedAfter`、`admission.initialBackfill`、`initialBackfill.maxAge`。`locator` 使用 `url`、`query`、`endpoint`、`channel` 之一。`locator.url` 以 `http://` 或 `https://` 开头。
+结构字段与设计 10.8 的示例一致：`schedule.expectedPeriod`、`schedule.batchKey`、`admission.allowUrlPrefixes`、`admission.denyUrlPrefixes`、`admission.publishedAfter`、`admission.initialBackfill`、`initialBackfill.maxAge`。信源可以写出 `paid`。`locator` 使用 `url`、`query`、`endpoint`、`channel` 之一。`locator.url` 以 `http://` 或 `https://` 开头。
 
 `access.render` 缺省为 `auto`。`enabled` 缺省为 `true`。
 
