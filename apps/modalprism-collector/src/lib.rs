@@ -106,8 +106,9 @@ pub async fn boot(
         assembly::serve_push(push_services, push_listener).await;
     }));
     let http_gateway = Arc::clone(&gateway);
+    let http_services = Arc::clone(&services);
     tasks.push(tokio::spawn(async move {
-        serve_ops(http, http_gateway).await;
+        serve_ops(http, http_gateway, http_services).await;
     }));
     wait_http(http).await?;
     tasks.extend(spawn_loops(
@@ -369,8 +370,25 @@ pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {
     Ok(true)
 }
 
-async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>) {
-    let app = HttpPort::router(gateway).layer(axum::middleware::map_response(strip_cors));
+async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>, services: Arc<Services>) {
+    use std::path::PathBuf;
+    use tower_http::services::ServeDir;
+
+    let state = console_api::ConsoleState {
+        services,
+        http_addr: addr.to_string(),
+    };
+    let dist = std::env::var("MODALPRISM_CONSOLE_DIST")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../console-web/dist")
+        });
+    let static_files = ServeDir::new(dist).append_index_html_on_directories(true);
+    let app = axum::Router::new()
+        .merge(console_api::router(state))
+        .nest_service("/console", static_files)
+        .merge(HttpPort::router(gateway))
+        .layer(axum::middleware::map_response(strip_cors));
     let Ok(listener) = TcpListener::bind(addr).await else {
         return;
     };

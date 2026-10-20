@@ -1,3 +1,5 @@
 /target
+apps/console-web/node_modules/
+apps/console-web/dist/
 
 .reference/
