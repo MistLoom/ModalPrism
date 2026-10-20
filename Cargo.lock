@@ -16,6 +16,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "accessors-builtin"
+version = "0.1.0"
+dependencies = [
+ "accessors",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "flate2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "strata-model",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "ulid",
+ "url",
+]
+
+[[package]]
 name = "adapters"
 version = "0.1.0"
 dependencies = [

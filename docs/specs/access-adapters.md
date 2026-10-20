@@ -28,7 +28,7 @@ access(request, context) -> Vec<RawEnvelope>
 
 `redact_envelope` 只改写 `transport.headers`。名称来自 `policy.raw.redact_headers`，按 ASCII 大小写不敏感匹配，值替换为 `***`。顺序和未列出的头保持不变。
 
-本阶段不实现 `http`、`rss`、`api`、`paid-api`、`search`、`push`、`file`、`browser`。
+内置访问器的行为见 `docs/specs/builtin-accessors.md`。
 
 ## 适配器输出
 

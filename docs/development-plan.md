@@ -85,7 +85,7 @@
 
 **目标**　设计中的访问器接到已实现的出站与付费端口。
 
-**范围**　`http`、`rss`、`api`、`paid-api`、`search`、`push`、`file`、`browser`。
+**范围**　`http`、`rss`、`api`、`paid-api`、`search`、`push`、`file`、`browser`。规则见 `docs/specs/builtin-accessors.md`。
 
 **交付**　各访问器实现与协议级测试。
 
