@@ -58,9 +58,9 @@
 
 两个数组都空时不写该 facet。已有 `struct:hotlist.delta` 与新结构值相同时，变更集不含这条 `putFacet`。
 
-变更集的 `producer.module` 是 `type_hotlist`，`producer.version` 是 `1`，`config_generation` 取已打开配置快照的代际号。`lineage.params_hash` 是 `hotlist.delta`。`idempotency_key` 是这些操作 JSON 的内容哈希。没有任何操作时返回 `null`。
+变更集的 `producer.module` 是 `type_hotlist`，`producer.version` 是 `1`，`config_generation` 取已生效配置快照的代际号。`lineage.params_hash` 是 `hotlist.delta`。`idempotency_key` 是这些操作 JSON 的内容哈希。没有任何操作时返回 `null`。
 
-采集进程在 `committer.flush` 得到可见快照之后调用 `HotList::on_commit`，把返回的变更集 `apply`，再 `flush`。类型实现不调用 `apply`。
+采集进程在 `committer.flush` 得到可见快照之后调用 `HotList::on_commit`，传入已生效配置快照，把返回的变更集 `apply`，再 `flush`。`on_commit` 读取该已生效快照。类型实现不调用 `apply`。
 
 `spec.keepSnapshots` 是正整数时，组内更早的快照用 `Tombstone` 收进同一个变更集，理由是 `keepSnapshots`。配置 schema 把 `spec.state` 保留为策略字段名，因此份数写在 `spec.keepSnapshots`，不写在 `spec.state`。缺省不裁剪。
 
@@ -74,7 +74,7 @@ modalprism-agent [--data DIR] [--config DIR]
 
 缺省 `--data` 是 `var`，`--config` 是 `config`。未知参数的消息是 `未知参数: <参数>`。缺少取值的消息是 `缺少参数值: <参数>`。
 
-打开数据目录的规则与采集进程相同：`strata.lance.uri` 非空、控制库后端为 `postgres`，或控制库、暂存路径不是该数据目录时，消息是 `存储位置未规定`，不创建数据目录。空目录仍得到 `control.db`、`lance/`、`staging/`。
+打开数据目录的规则与采集进程相同：`strata.lance.uri` 非空、控制库后端为 `postgres`，或控制库、暂存路径不是该数据目录时，消息是 `存储位置未规定`，不创建数据目录。`strata.blob.inline_size_threshold`、`strata.blob.dedicated_size_threshold` 和 `strata.staging.ttl` 取这次打开时的快照，缺省分别是 64KiB、16MiB、24h。空目录仍得到 `control.db`、`lance/`、`staging/`。
 
 进程只 `install` 并 `load` 这些实例：`strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist`。
 
@@ -99,7 +99,7 @@ modalprism-agent [--data DIR] [--config DIR]
 
 本进程打开 LEAF 的 MCP Port。该 Port 使用标准输入输出，把 Gateway 的目录列成工具。端口实现没有 TLS，也没有鉴权协议。
 
-`AccessKind::Tools` 在该 LEAF 提交里没有 Port，只作为运行时门控。上面五个实例登记 `fun`、`mcp`、`tools`。交给 MCP Port 的目录把每个方法展开成一个实例，实例 id 是 `instance.method`，工具名与之相同。进程内调用仍使用原来的实例 id 和方法名。
+`AccessKind::Tools` 在该 LEAF 提交里没有 Port，只作为运行时门控。上面五个实例登记 `fun`、`mcp`、`tools`。交给 MCP Port 的目录把每个方法展开成一个实例，实例 id 是 `instance.method`，工具名与之相同。只读方法的 `readOnlyHint` 为 true。`strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist` 的已登记方法都是只读，返回查询结果或变更集，不调用 `apply`。进程内调用仍使用原来的实例 id 和方法名。
 
 该提交没有 Skill Port。本进程不放置 `info.yml`，不运行 codegen，不另开 Skill 监听。
 

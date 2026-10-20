@@ -158,6 +158,17 @@ async fn mcp_catalog_names_are_instance_method() {
             .any(|entry| entry.instance.as_str() == "strata_read.kinds")
     );
     assert!(
+        catalog.iter().all(|entry| !entry.stateful),
+        "只读方法的目录项应为无状态，以便 readOnlyHint 为 true"
+    );
+    let kinds = tools
+        .get_entry(
+            &InstanceId::new("strata_read.kinds").unwrap(),
+            &MethodId::new("kinds").unwrap(),
+        )
+        .unwrap();
+    assert!(!kinds.stateful);
+    assert!(
         catalog
             .iter()
             .any(|entry| entry.instance.as_str() == "health.status")

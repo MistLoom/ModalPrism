@@ -331,11 +331,12 @@ fn spawn_loops(
 
 pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {
     let applied = services.config().applied();
-    let Some(changeset) =
-        types::HotList::changeset(services.strata().as_ref(), applied.as_ref()).await?
-    else {
+    let value = types::HotList::on_commit(services.strata().as_ref(), applied.as_ref()).await?;
+    if value.is_null() {
         return Ok(false);
-    };
+    }
+    let changeset = serde_json::from_value(value)
+        .map_err(|source| types::Error::with_source(source.to_string(), source))?;
     services
         .strata()
         .apply(changeset, strata_model::ApplyOpts::default())
