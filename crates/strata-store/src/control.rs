@@ -152,6 +152,14 @@ pub(crate) trait ControlStore {
 
     async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error>;
 
+    async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<AccessTask>, Error>;
+
     async fn accepted_state(&self, scope: &str, key: &str) -> Result<Option<(u64, String)>, Error>;
 
     async fn hot_get(&self, kind: &str, key: &str) -> Result<Option<String>, Error>;
@@ -632,25 +640,38 @@ impl ControlStore for SqliteControl {
     }
 
     async fn release_leases(&self) -> Result<Vec<AccessTask>, Error> {
-        let rows = sqlx::query("SELECT payload FROM tasks WHERE status = 'leased'")
-            .fetch_all(&self.pool)
+        let mut tx = self.pool.begin().await.map_err(|source| Error::Sql {
+            context: "开始释放租约",
+            source,
+        })?;
+        let rows = sqlx::query("SELECT task_id, payload FROM tasks WHERE status = 'leased'")
+            .fetch_all(&mut *tx)
             .await
             .map_err(|source| Error::Sql {
                 context: "读取租约",
                 source,
             })?;
         let mut tasks = Vec::new();
+        let released_at = Timestamp::now();
         for row in rows {
-            let task: AccessTask = serde_json::from_str(row.get::<String, _>(0).as_str())?;
-            tasks.push(task);
+            let task_id: String = row.get(0);
+            let mut task: AccessTask = serde_json::from_str(row.get::<String, _>(1).as_str())?;
+            tasks.push(task.clone());
+            task.lease_until = released_at;
+            sqlx::query(
+                "UPDATE tasks SET payload = ?, status = 'queued', lease_until = NULL WHERE task_id = ?",
+            )
+            .bind(serde_json::to_string(&task)?)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|source| Error::Sql {
+                context: "释放租约",
+                source,
+            })?;
         }
-        sqlx::query(
-            "UPDATE tasks SET status = 'queued', lease_until = NULL WHERE status = 'leased'",
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|source| Error::Sql {
-            context: "释放租约",
+        tx.commit().await.map_err(|source| Error::Sql {
+            context: "提交释放租约",
             source,
         })?;
         Ok(tasks)
@@ -676,6 +697,35 @@ impl ControlStore for SqliteControl {
             }
         }
         Ok(count)
+    }
+
+    async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<AccessTask>, Error> {
+        let row = sqlx::query(
+            "SELECT task_id FROM tasks WHERE source_id = ? AND locator_key = ? AND status != 'done' LIMIT 1",
+        )
+        .bind(source)
+        .bind(locator_key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "查找可领任务",
+            source,
+        })?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let task_id = TaskId::new(row.get::<String, _>(0))?;
+        match self.lease_id(&task_id, lease_for, now).await {
+            Ok(task) => Ok(Some(task)),
+            Err(Error::TaskState(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error> {

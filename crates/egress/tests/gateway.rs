@@ -113,6 +113,10 @@ fn registrable_domain_and_blocked_ranges() {
     assert!(is_blocked("192.168.1.1".parse().unwrap()));
     assert!(is_blocked("::1".parse().unwrap()));
     assert!(is_blocked("::ffff:10.0.0.1".parse().unwrap()));
+    assert!(is_blocked("::10.0.0.1".parse().unwrap()));
+    assert!(is_blocked("2002:0a00:0001::".parse().unwrap()));
+    assert!(is_blocked("64:ff9b::a00:1".parse().unwrap()));
+    assert!(!is_blocked("2002:5db8:d822::".parse().unwrap()));
     assert!(!is_blocked(public()));
 }
 
@@ -151,6 +155,29 @@ async fn ssrf_rejects_private_and_allows_when_configured() {
         .await
         .unwrap();
     assert_eq!(response.status, 200);
+}
+
+#[tokio::test]
+async fn mixed_lookup_with_a_private_address_is_ssrf() {
+    let transport = SeqTransport {
+        hits: AtomicUsize::new(0),
+        urls: Mutex::new(Vec::new()),
+        responses: Mutex::new(vec![Ok(ok_body(200, "x"))]),
+    };
+    let resolver = MapResolver {
+        ips: vec![
+            ("evil.test".into(), public()),
+            ("evil.test".into(), "10.1.1.1".parse().unwrap()),
+        ],
+    };
+    let gate = gateway(transport, resolver, policy());
+    let error = gate
+        .request(&policy(), request("http://evil.test/a"), 1_000, 1_000)
+        .await
+        .unwrap_err();
+    assert_eq!(error.class, ErrorClass::Permanent);
+    assert_eq!(error.message, "ssrf");
+    assert_eq!(gate.transport().hits.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -324,6 +351,41 @@ async fn robots_disallow_exemption_and_unreachable() {
         .await
         .unwrap();
     assert_eq!(response.status, 200);
+}
+
+#[tokio::test]
+async fn robots_redirect_is_followed_before_the_verdict() {
+    let mut redirect = ok_body(301, "");
+    redirect.headers.push((
+        "Location".into(),
+        "https://example.com/robots-real.txt".into(),
+    ));
+    let body = "User-agent: *\nDisallow: /secret\n";
+    let transport = SeqTransport {
+        hits: AtomicUsize::new(0),
+        urls: Mutex::new(Vec::new()),
+        responses: Mutex::new(vec![Ok(redirect), Ok(ok_body(200, body))]),
+    };
+    let resolver = MapResolver {
+        ips: vec![("example.com".into(), public())],
+    };
+    let mut policy = policy();
+    policy.check_robots = true;
+    policy.robots = RobotsMode::Obey;
+    let gate = gateway(transport, resolver, policy.clone());
+    let denied = gate
+        .request(&policy, request("http://example.com/secret"), 9_000, 9_000)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.message, "robots");
+    let urls = gate.transport().urls.lock().await.clone();
+    assert_eq!(
+        urls,
+        vec![
+            "http://example.com:80/robots.txt".to_string(),
+            "https://example.com/robots-real.txt".to_string(),
+        ]
+    );
 }
 
 #[tokio::test]

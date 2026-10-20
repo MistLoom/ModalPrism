@@ -319,6 +319,20 @@ impl Engine {
         inner.control.task_active(source, locator_key).await
     }
 
+    pub async fn lease_ready(
+        &self,
+        source: &str,
+        locator_key: &str,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Option<strata_model::AccessTask>, Error> {
+        let inner = self.inner.lock().await;
+        inner
+            .control
+            .lease_ready(source, locator_key, lease_for, now)
+            .await
+    }
+
     pub async fn accepted_state(
         &self,
         scope: &str,
