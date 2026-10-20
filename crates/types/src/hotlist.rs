@@ -29,7 +29,14 @@ impl HotList {
     }
 
     pub async fn project(root: &ReadRoot, rid: &Rid) -> Result<Value, Error> {
-        let Some(structure) = facet(root, rid, FacetKind::Struct, Some("hotlist.snapshot")).await?
+        let Some(structure) = facet(
+            root.strata(),
+            rid,
+            FacetKind::Struct,
+            Some("hotlist.snapshot"),
+            true,
+        )
+        .await?
         else {
             return Ok(Value::Null);
         };
@@ -48,7 +55,15 @@ impl HotList {
             }));
         }
         entries.sort_by(cmp_entry);
-        let delta = match facet(root, rid, FacetKind::Struct, Some("hotlist.delta")).await? {
+        let delta = match facet(
+            root.strata(),
+            rid,
+            FacetKind::Struct,
+            Some("hotlist.delta"),
+            true,
+        )
+        .await?
+        {
             Some(facet) => facet.value.unwrap_or(Value::Null),
             None => Value::Null,
         };
@@ -62,7 +77,18 @@ impl HotList {
     }
 
     pub async fn on_commit(root: &ReadRoot) -> Result<Value, Error> {
-        let page = root.strata().query(Self::selector()).await?;
+        match Self::changeset(root.strata(), &root.config().snapshot()).await? {
+            Some(changeset) => serde_json::to_value(changeset)
+                .map_err(|source| Error::with_source(source.to_string(), source)),
+            None => Ok(Value::Null),
+        }
+    }
+
+    pub async fn changeset(
+        strata: &strata_client::Strata,
+        snapshot: &config::Snapshot,
+    ) -> Result<Option<ChangeSet>, Error> {
+        let page = strata.query(Self::selector()).await?;
         let mut groups: BTreeMap<String, Vec<Snapshot>> = BTreeMap::new();
         for row in page.rows {
             if row.get("tombstone").and_then(Value::as_bool) == Some(true) {
@@ -73,10 +99,7 @@ impl HotList {
             };
             let rid = Rid::parse(rid_text)
                 .map_err(|source| Error::with_source(source.to_string(), source))?;
-            let relations = root
-                .strata()
-                .related(&rid, Some("part_of"), EdgeDir::Out)
-                .await?;
+            let relations = strata.related(&rid, Some("part_of"), EdgeDir::Out).await?;
             let key = part_of_target(&relations).unwrap_or_else(|| rid.to_string());
             groups.entry(key).or_default().push(Snapshot {
                 rid,
@@ -87,19 +110,18 @@ impl HotList {
                     .to_string(),
             });
         }
-        let keep = keep_snapshots(root);
+        let keep = keep_snapshots(snapshot);
         let mut ops = Vec::new();
         for group in groups.values_mut() {
             group.sort_by(|left, right| {
-                left.created_at
-                    .cmp(&right.created_at)
+                cmp_created(&left.created_at, &right.created_at)
                     .then_with(|| left.rid.as_str().cmp(right.rid.as_str()))
             });
             if group.len() >= 2 {
                 let previous_rid = group[group.len() - 2].rid.clone();
                 let current_rid = group[group.len() - 1].rid.clone();
-                let previous = entries_of(root, &previous_rid).await?;
-                let current = entries_of(root, &current_rid).await?;
+                let previous = entries_of(strata, &previous_rid).await?;
+                let current = entries_of(strata, &current_rid).await?;
                 let delta = delta_value(&previous, &current);
                 let changed = delta["rankDelta"]
                     .as_array()
@@ -108,8 +130,14 @@ impl HotList {
                         .as_array()
                         .is_some_and(|items| !items.is_empty());
                 if changed {
-                    let existing =
-                        facet(root, &current_rid, FacetKind::Struct, Some("hotlist.delta")).await?;
+                    let existing = facet(
+                        strata,
+                        &current_rid,
+                        FacetKind::Struct,
+                        Some("hotlist.delta"),
+                        true,
+                    )
+                    .await?;
                     let same = existing
                         .as_ref()
                         .and_then(|facet| facet.value.as_ref())
@@ -132,9 +160,9 @@ impl HotList {
             if let Some(keep) = keep {
                 if group.len() > keep {
                     let end = group.len() - keep;
-                    for snapshot in &group[..end] {
+                    for older in &group[..end] {
                         ops.push(Op::Tombstone {
-                            target: Target::Rid(snapshot.rid.clone()),
+                            target: Target::Rid(older.rid.clone()),
                             reason: "keepSnapshots".into(),
                         });
                     }
@@ -142,22 +170,20 @@ impl HotList {
             }
         }
         if ops.is_empty() {
-            return Ok(Value::Null);
+            return Ok(None);
         }
         let encoded = serde_json::to_vec(&ops)
             .map_err(|source| Error::with_source(source.to_string(), source))?;
-        let changeset = ChangeSet {
+        Ok(Some(ChangeSet {
             producer: Producer {
                 module: "type_hotlist".into(),
                 version: "1".into(),
-                config_generation: root.config().snapshot().generation,
+                config_generation: snapshot.generation,
             },
             idempotency_key: Some(content_hash(&encoded)),
             ack: None,
             ops,
-        };
-        serde_json::to_value(changeset)
-            .map_err(|source| Error::with_source(source.to_string(), source))
+        }))
     }
 }
 
@@ -185,8 +211,7 @@ pub(crate) async fn on_commit_call(root: &ReadRoot, args: &Value) -> Result<Valu
     HotList::on_commit(root).await
 }
 
-fn keep_snapshots(root: &ReadRoot) -> Option<usize> {
-    let snapshot = root.config().snapshot();
+fn keep_snapshots(snapshot: &config::Snapshot) -> Option<usize> {
     let value = snapshot
         .modules
         .get("type/hotlist")?
@@ -219,11 +244,8 @@ fn rank_of(attrs: Option<&Value>) -> Option<i64> {
         .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
 }
 
-async fn entries_of(root: &ReadRoot, rid: &Rid) -> Result<Vec<Entry>, Error> {
-    let relations = root
-        .strata()
-        .related(rid, Some("entry"), EdgeDir::Out)
-        .await?;
+async fn entries_of(strata: &strata_client::Strata, rid: &Rid) -> Result<Vec<Entry>, Error> {
+    let relations = strata.related(rid, Some("entry"), EdgeDir::Out).await?;
     let mut entries: Vec<Entry> = relations
         .into_iter()
         .map(|relation| Entry {
@@ -288,6 +310,16 @@ fn ranks(entries: &[Entry]) -> BTreeMap<String, i64> {
     map
 }
 
+fn cmp_created(left: &str, right: &str) -> std::cmp::Ordering {
+    match (
+        strata_model::Timestamp::parse(left),
+        strata_model::Timestamp::parse(right),
+    ) {
+        (Ok(left_time), Ok(right_time)) => left_time.cmp(&right_time),
+        _ => left.cmp(right),
+    }
+}
+
 fn cmp_entry(left: &Value, right: &Value) -> std::cmp::Ordering {
     let left_rank = left.get("rank").and_then(Value::as_i64);
     let right_rank = right.get("rank").and_then(Value::as_i64);
@@ -303,4 +335,21 @@ fn cmp_entry(left: &Value, right: &Value) -> std::cmp::Ordering {
             .unwrap_or_default()
             .cmp(right.get("dst").and_then(Value::as_str).unwrap_or_default())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cmp_created;
+
+    #[test]
+    fn fractional_timestamps_sort_by_instant() {
+        assert_eq!(
+            cmp_created("2020-01-01T00:00:00.9Z", "2020-01-01T00:00:00.95Z"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            cmp_created("2020-01-01T00:00:00.95Z", "2020-01-01T00:00:00.9Z"),
+            std::cmp::Ordering::Greater
+        );
+    }
 }

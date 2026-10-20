@@ -100,9 +100,62 @@ pub async fn boot(data: &Path, config_dir: &Path) -> Result<Running, types::Erro
 
 pub async fn serve(gateway: Arc<dyn Gateway>) -> Result<(), types::Error> {
     Box::new(McpPort::new("modalprism-agent", "0.1.0"))
-        .serve(gateway)
+        .serve(mcp_gateway(gateway))
         .await
         .map_err(|error| types::Error::new(error.to_string()))
+}
+
+pub fn mcp_gateway(inner: Arc<dyn Gateway>) -> Arc<dyn Gateway> {
+    Arc::new(MethodTools { inner })
+}
+
+struct MethodTools {
+    inner: Arc<dyn Gateway>,
+}
+
+#[async_trait]
+impl Gateway for MethodTools {
+    async fn invoke(&self, mut request: InvokeRequest) -> ability_support::Result<InvokeResponse> {
+        let (instance, method) = split_tool(request.instance.as_str())?;
+        request.instance = instance;
+        request.method = method;
+        self.inner.invoke(request).await
+    }
+
+    fn catalog(&self) -> Vec<CatalogEntry> {
+        self.inner
+            .catalog()
+            .into_iter()
+            .filter_map(|mut entry| {
+                let name = format!("{}.{}", entry.instance.as_str(), entry.method.as_str());
+                entry.instance = InstanceId::new(&name).ok()?;
+                Some(entry)
+            })
+            .collect()
+    }
+
+    fn get_entry(&self, instance: &InstanceId, method: &MethodId) -> Option<CatalogEntry> {
+        let (real_instance, real_method) = split_tool(instance.as_str()).ok()?;
+        if real_method.as_str() != method.as_str() {
+            return None;
+        }
+        let mut entry = self.inner.get_entry(&real_instance, &real_method)?;
+        entry.instance = instance.clone();
+        Some(entry)
+    }
+}
+
+fn split_tool(name: &str) -> ability_support::Result<(InstanceId, MethodId)> {
+    let Some((instance, method)) = name.rsplit_once('.') else {
+        return Err(ability_support::Error::not_found(name));
+    };
+    if instance.is_empty() || method.is_empty() {
+        return Err(ability_support::Error::not_found(name));
+    }
+    let instance =
+        InstanceId::new(instance).map_err(|_| ability_support::Error::not_found(name))?;
+    let method = MethodId::new(method).map_err(|_| ability_support::Error::not_found(name))?;
+    Ok((instance, method))
 }
 
 async fn link(root: Arc<ReadRoot>) -> Result<Arc<AbilityHost>, types::Error> {

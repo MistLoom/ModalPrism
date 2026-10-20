@@ -23,14 +23,16 @@ impl Article {
     }
 
     pub async fn project(root: &ReadRoot, rid: &Rid) -> Result<Value, Error> {
-        let Some(structure) = facet(root, rid, FacetKind::Struct, Some("article")).await? else {
+        let strata = root.strata();
+        let Some(structure) = facet(strata, rid, FacetKind::Struct, Some("article"), true).await?
+        else {
             return Ok(Value::Null);
         };
-        let readable = match facet(root, rid, FacetKind::Md, Some("readable")).await? {
-            Some(facet) => facet.text.map(Value::String).unwrap_or(Value::Null),
+        let readable = match facet(strata, rid, FacetKind::Md, Some("readable"), false).await? {
+            Some(facet) => readable_text(&facet),
             None => Value::Null,
         };
-        let cover = match facet(root, rid, FacetKind::Image, Some("cover")).await? {
+        let cover = match facet(strata, rid, FacetKind::Image, Some("cover"), true).await? {
             Some(facet) => match facet.blob {
                 Some(part) => json!({ "sha256": part.sha256(), "size": part.size() }),
                 None => Value::Null,
@@ -80,10 +82,11 @@ pub(crate) fn facet_query(variant: &str) -> Query {
 }
 
 pub(crate) async fn facet(
-    root: &ReadRoot,
+    strata: &strata_client::Strata,
     rid: &Rid,
     kind: FacetKind,
     variant: Option<&str>,
+    lazy: bool,
 ) -> Result<Option<strata_client::Facet>, Error> {
     let reference = FacetRef::new(
         rid.clone(),
@@ -92,5 +95,19 @@ pub(crate) async fn facet(
         VersionSel::Latest,
     )
     .map_err(|source| Error::with_source(source.to_string(), source))?;
-    Ok(root.strata().get(&reference, true).await?)
+    Ok(strata.get(&reference, lazy).await?)
+}
+
+fn readable_text(facet: &strata_client::Facet) -> Value {
+    if let Some(text) = &facet.text {
+        return Value::String(text.clone());
+    }
+    match facet
+        .bytes
+        .as_ref()
+        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+    {
+        Some(text) => Value::String(text),
+        None => Value::Null,
+    }
 }

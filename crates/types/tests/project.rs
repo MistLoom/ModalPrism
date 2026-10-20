@@ -204,6 +204,54 @@ async fn article_projects_without_body_bytes() {
 }
 
 #[tokio::test]
+async fn article_reads_text_stored_only_as_blob() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path(), None);
+    let root = ReadRoot::open(data.path(), config.path()).await.unwrap();
+    let text = "a".repeat(strata_store::INLINE_TEXT_MAX as usize + 1);
+    apply(
+        &root,
+        vec![
+            ensure("ext:article:blob", "article"),
+            Op::PutFacet {
+                target: Target::Alias("article".into()),
+                kind: FacetKind::Struct,
+                variant: Some("article".into()),
+                body: Body::Struct {
+                    value: json!({ "title": "blob" }),
+                },
+                media_type: Some("application/json".into()),
+                lineage: lineage(),
+            },
+            Op::PutFacet {
+                target: Target::Alias("article".into()),
+                kind: FacetKind::Md,
+                variant: Some("readable".into()),
+                body: Body::Text { text: text.clone() },
+                media_type: Some("text/markdown".into()),
+                lineage: lineage(),
+            },
+        ],
+    )
+    .await;
+    let rid = resolve(&root, "ext:article:blob").await;
+    let lazy = root
+        .call(
+            "strata_read.get",
+            json!({ "facet": format!("{rid}@md:readable#latest"), "lazy": true }),
+        )
+        .await
+        .unwrap();
+    assert!(lazy["text"].is_null());
+    let projected = root
+        .call("type_article.project", json!({ "rid": rid }))
+        .await
+        .unwrap();
+    assert_eq!(projected["readable"], text);
+}
+
+#[tokio::test]
 async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
@@ -233,7 +281,8 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
         snapshot("ext:snap:1", "s1", &list, &[(&item_a, 1), (&item_b, 2)]),
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let first = resolve(&root, "ext:snap:1").await;
+    wait_past(&created_at(&root, &first).await).await;
     apply(
         &root,
         snapshot(
@@ -244,7 +293,6 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
         ),
     )
     .await;
-    let first = resolve(&root, "ext:snap:1").await;
     let second = resolve(&root, "ext:snap:2").await;
 
     let changeset = root
@@ -262,7 +310,7 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
     assert_eq!(ops[0]["variant"], "hotlist.delta");
     assert_eq!(ops[0]["target"]["rid"], second);
     assert_eq!(ops[0]["lineage"]["paramsHash"], "hotlist.delta");
-    assert_eq!(ops[0]["media_type"], "application/json");
+    assert_eq!(ops[0]["mediaType"], "application/json");
     let mut expected_delta = vec![
         json!({ "dst": item_a, "from": 1, "to": 2, "delta": -1 }),
         json!({ "dst": item_b, "from": 2, "to": 1, "delta": 1 }),
@@ -303,7 +351,7 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
             .is_null()
     );
 
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    wait_past(&created_at(&root, &second).await).await;
     apply(
         &root,
         snapshot(
@@ -344,6 +392,29 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
     let rows = page["rows"].as_array().unwrap();
     let marked = rows.iter().find(|row| row["rid"] == first).unwrap();
     assert_eq!(marked["tombstone"], true);
+}
+
+async fn created_at(root: &ReadRoot, rid: &str) -> String {
+    let page = root.strata().query(HotList::selector()).await.unwrap();
+    page.rows
+        .iter()
+        .find(|row| row.get("rid").and_then(Value::as_str) == Some(rid))
+        .unwrap()
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string()
+}
+
+async fn wait_past(stamp: &str) {
+    let parsed = strata_model::Timestamp::parse(stamp).unwrap();
+    for _ in 0..100 {
+        if strata_model::Timestamp::now() > parsed {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("时间没有前进");
 }
 
 fn snapshot(identity: &str, alias: &str, list: &str, entries: &[(&str, i64)]) -> Vec<Op> {

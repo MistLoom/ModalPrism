@@ -20,7 +20,7 @@
 
 ## 阶段 5　调度与治理
 
-`crates/egress`、`crates/paid` 与 `crates/planner` 提供出站网关、付费网关、Cadence、Health、Planner 和 Runner。对外请求只经过出站端口。预算错误不计入信源失败。回执与数据处于同一个变更集。租约到期前同一 `(source, locator)` 不重复派发，进程停止时释放租约。调度使用 accepted 游标，对外读取使用 visible 游标。规则见 `docs/specs/scheduling.md`。
+`crates/egress`、`crates/paid` 与 `crates/planner` 提供出站网关、付费网关、Cadence、Health、Planner 和 Runner。对外请求只经过出站端口。预算错误不计入信源失败。回执与数据处于同一个变更集。租约到期前同一 `(source, locator)` 不重复派发。原任务在 `retry_at` 已到或租约到期后，由下一次 `tick` 重新领取。进程停止时释放租约。调度使用 accepted 游标，对外读取使用 visible 游标。规则见 `docs/specs/scheduling.md`。
 
 ## 阶段 6　内置访问器
 
@@ -28,11 +28,11 @@
 
 ## 阶段 7　装配与一键启动
 
-`ability/` 下的采集 Ability 与 `apps/modalprism-collector` 组成采集进程。命令是 `modalprism-collector`。空目录启动后得到 `control.db`、`lance/`、`staging/`。再次启动沿用已发布的快照。配置校验失败时不替换当前快照。进程退出时释放任务租约。组合根直接依赖 `frame-core` 与 `ability-core` 链接 Ability，并依赖 `frame-port-http` 提供运维 HTTP。端口上没有 TLS 和鉴权协议。监听地址以外的访问控制未规定。链接与循环见 `docs/specs/leaf-integration.md` 和 `docs/specs/assembly.md`。
+`ability/` 下的采集 Ability 与 `apps/modalprism-collector` 组成采集进程。命令是 `modalprism-collector`。空目录启动后得到 `control.db`、`lance/`、`staging/`。再次启动沿用已发布的快照。配置校验失败时不替换当前快照。进程退出时释放任务租约。每次访问按已生效快照组装出站策略和付费策略。运维 HTTP 去掉响应里的 `Access-Control-*` 头。组合根直接依赖 `frame-core` 与 `ability-core` 链接 Ability，并依赖 `frame-port-http` 提供运维 HTTP。端口上没有 TLS 和鉴权协议。监听地址以外的访问控制未规定。链接与循环见 `docs/specs/leaf-integration.md` 和 `docs/specs/assembly.md`。
 
 ## 阶段 8　抽象类型与只读表面
 
-`crates/types` 实现 `Article` 与 `HotList`。`project` 只读。`on_commit` 返回变更集或 JSON `null`，类型实现不调用 `apply`。`ability/type_article` 与 `ability/type_hotlist` 把这两个类型挂到 Ability 上。`apps/modalprism-agent` 是只读进程，命令是 `modalprism-agent`。它只安装 `strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist`，不构造 Planner、Runner、出站网关、付费网关和访问器。工具面是 MCP 的标准输入输出。`AccessKind::Tools` 没有 Port。该 LEAF 提交没有 Skill Port，进程不放置 `info.yml`，不运行 codegen。规则见 `docs/specs/types.md`。
+`crates/types` 实现 `Article` 与 `HotList`。`project` 只读。超过内联上限的文章正文写入 `readable`。热榜按 `createdAt` 的时间点排序。`on_commit` 返回变更集或 JSON `null`，类型实现不调用 `apply`。采集进程在快照可见之后调用 `HotList::on_commit`，并把变更集交给 Strata。`ability/type_article` 与 `ability/type_hotlist` 把这两个类型挂到 Ability 上。`apps/modalprism-agent` 是只读进程，命令是 `modalprism-agent`。它只安装 `strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist`，不构造 Planner、Runner、出站网关、付费网关和访问器。工具面是 MCP 的标准输入输出，工具名是 `instance.method`。`AccessKind::Tools` 没有 Port。该 LEAF 提交没有 Skill Port，进程不放置 `info.yml`，不运行 codegen。规则见 `docs/specs/types.md`。
 
 ## 未闭合
 

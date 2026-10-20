@@ -36,7 +36,9 @@ serde_json.workspace = true
 strata_queue = { path = "../../ability/strata_queue" }
 strata_read = { path = "../../ability/strata_read" }
 strata_write = { path = "../../ability/strata_write" }
+strata-model = { path = "../../crates/strata-model" }
 tokio = { workspace = true, features = ["signal"] }
+types = { path = "../../crates/types" }
 
 [dev-dependencies]
 strata-client = { path = "../../crates/strata-client" }
