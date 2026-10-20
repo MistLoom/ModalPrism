@@ -16,6 +16,8 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
+mod console_static;
+
 const OPS: &[&str] = &["strata_read", "planner", "health"];
 
 pub struct Running {
@@ -378,15 +380,19 @@ async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>, services: Arc<Se
         services,
         http_addr: addr.to_string(),
     };
-    let dist = std::env::var("MODALPRISM_CONSOLE_DIST")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../console-web/dist")
-        });
-    let static_files = ServeDir::new(dist).append_index_html_on_directories(true);
+    let console = if let Ok(dist) = std::env::var("MODALPRISM_CONSOLE_DIST") {
+        axum::Router::new().nest_service("/", ServeDir::new(PathBuf::from(dist)))
+    } else {
+        let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../console-web/dist");
+        if dist.join("index.html").is_file() && !console_static::has_embedded_assets() {
+            axum::Router::new().nest_service("/", ServeDir::new(dist))
+        } else {
+            axum::Router::new().fallback(console_static::serve)
+        }
+    };
     let app = axum::Router::new()
         .merge(console_api::router(state))
-        .nest_service("/console", static_files)
+        .nest("/console", console)
         .merge(HttpPort::router(gateway))
         .layer(axum::middleware::map_response(strip_cors));
     let Ok(listener) = TcpListener::bind(addr).await else {

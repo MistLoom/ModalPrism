@@ -9,9 +9,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "screenshots": "node scripts/e2e-screenshots.mjs"
+    "screenshots": "node scripts/e2e-screenshots.mjs",
+    "e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.1",
     "jsdom": "^26.0.0",
     "playwright": "^1.49.1",
     "typescript": "^5.7.3",

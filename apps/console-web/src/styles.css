@@ -271,3 +271,81 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 4px;
 }
+.history-banner {
+  background: var(--amber);
+  color: var(--bg);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+.filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.filter-row input {
+  flex: 1;
+  min-width: 140px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+.cfg-editor {
+  width: 100%;
+  min-height: 320px;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+.config-layout select {
+  margin-bottom: 8px;
+  padding: 6px;
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(420px, 100vw);
+  height: 100vh;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  padding: 20px;
+  overflow: auto;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.15);
+  z-index: 40;
+}
+.drawer-close {
+  float: right;
+}
+.tech-details {
+  margin-top: 16px;
+  font-size: 12px;
+}
+.body-preview {
+  white-space: pre-wrap;
+  font-size: 13px;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--surface-2);
+  padding: 12px;
+  border-radius: 8px;
+}
+.detail-dl dt {
+  font-weight: 600;
+  margin-top: 8px;
+}
+.rec-row {
+  cursor: pointer;
+}
+.rec-row:hover {
+  background: var(--surface-2);
+}
