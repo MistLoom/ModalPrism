@@ -16,5 +16,3 @@ admission:
   initialBackfill:
     limit: 8
     maxAge: 365d
-
-# e2e-mark
