@@ -425,7 +425,12 @@ fn eval(expr: &Expr, row: &Value) -> Result<bool, Error> {
         }
         "eq" => {
             let (field_name, expected) = pair(value)?;
-            Ok(field(row, field_name)? == expected)
+            let actual = field(row, field_name)?;
+            if matches!(field_name, "createdAt" | "updatedAt" | "publishedAt") {
+                Ok(cmp_field(field_name, actual, expected)? == Ordering::Equal)
+            } else {
+                Ok(actual == expected)
+            }
         }
         "gte" => {
             let (field_name, expected) = pair(value)?;
@@ -481,4 +486,28 @@ fn cmp_number(left: &serde_json::Number, right: &serde_json::Number) -> Ordering
         .unwrap_or(0.0)
         .partial_cmp(&right.as_f64().unwrap_or(0.0))
         .unwrap_or(Ordering::Equal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eval;
+    use serde_json::json;
+    use strata_model::Expr;
+
+    #[test]
+    fn eq_matches_equivalent_timestamps() {
+        let row = json!({
+            "createdAt": "2020-01-01T00:00:00Z",
+            "ns": "data"
+        });
+        let same = Expr::try_from(json!({
+            "eq": ["createdAt", "2020-01-01T00:00:00+00:00"]
+        }))
+        .unwrap();
+        assert!(eval(&same, &row).unwrap());
+        let text = Expr::try_from(json!({"eq": ["ns", "data"]})).unwrap();
+        assert!(eval(&text, &row).unwrap());
+        let other = Expr::try_from(json!({"eq": ["ns", "other"]})).unwrap();
+        assert!(!eval(&other, &row).unwrap());
+    }
 }
