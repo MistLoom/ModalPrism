@@ -23,5 +23,6 @@ pub use error::{Diagnostic, Diagnostics, Error};
 pub use explain::{FieldOrigin, explain};
 pub use load::{EnvSource, LoadOptions, validate};
 pub use presets::{BuiltinPreset, builtin_presets};
+pub use scope::overlay_system_policy;
 pub use snapshot::Snapshot;
 pub use store::{ConfigStore, DEFAULT_DEBOUNCE, RestartChange, WatchHandle, watch, watch_hangup};
