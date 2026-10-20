@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use strata_model::{ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, Target};
+use strata_model::{
+    ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, Target, WaitFor,
+};
 
 use crate::{Engine, Options};
 
@@ -187,4 +190,57 @@ async fn read_stays_on_observed_snapshot_after_rewind() {
     assert_eq!(still.snapshot.unwrap().seq, 2);
     assert_eq!(still.resources.len(), 2);
     assert_eq!(still.facets.len(), 2);
+}
+
+#[tokio::test]
+async fn empty_flush_sweeps_expired_staging() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options {
+        staging_ttl: Duration::ZERO,
+        ..Options::default()
+    };
+    let engine = Engine::open(dir.path(), options).await.unwrap();
+    let part = engine.stage(b"orphan").await.unwrap();
+    let path = dir.path().join("staging").join(part.sha256());
+    assert!(path.is_file());
+    assert!(engine.flush().await.unwrap().is_none());
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn visible_timeout_leaves_flush_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = Engine::open(dir.path(), Options::default()).await.unwrap();
+    let hold = Arc::new(tokio::sync::Notify::new());
+    let done = Arc::new(tokio::sync::Notify::new());
+    engine
+        .testing_pause_flush(Arc::clone(&hold), Arc::clone(&done))
+        .await;
+    let error = engine
+        .apply(
+            ChangeSet {
+                producer: producer(),
+                idempotency_key: None,
+                ack: None,
+                ops: vec![
+                    ensure("ext:doi:visible-wait", "a"),
+                    text_facet("a", "later"),
+                ],
+            },
+            ApplyOpts {
+                wait: WaitFor::Visible,
+                timeout: Some(Duration::from_millis(200)),
+            },
+        )
+        .await
+        .unwrap_err();
+    let crate::Error::WaitTimeout(commit_id) = error else {
+        panic!("期望等待超时，得到 {error}");
+    };
+    assert!(!commit_id.is_empty());
+    assert!(engine.view_latest().await.unwrap().resources.is_empty());
+    hold.notify_one();
+    done.notified().await;
+    let view = engine.view_latest().await.unwrap();
+    assert_eq!(view.resources.len(), 1);
 }
