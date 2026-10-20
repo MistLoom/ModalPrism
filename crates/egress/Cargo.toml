@@ -1,0 +1,27 @@
+[package]
+name = "egress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "出站网关：限速、熔断、robots 与 SSRF"
+publish = false
+
+[dependencies]
+accessors = { path = "../accessors" }
+async-trait.workspace = true
+bytes.workspace = true
+psl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-model = { path = "../strata-model" }
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

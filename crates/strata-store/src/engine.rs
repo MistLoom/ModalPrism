@@ -277,6 +277,50 @@ impl Engine {
         inner.control.nack(task_id, retry_at, error).await
     }
 
+    pub async fn lease_id(
+        &self,
+        task_id: &TaskId,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<strata_model::AccessTask, Error> {
+        let inner = self.inner.lock().await;
+        inner.control.lease_id(task_id, lease_for, now).await
+    }
+
+    pub async fn release_leases(&self) -> Result<Vec<strata_model::AccessTask>, Error> {
+        let inner = self.inner.lock().await;
+        inner.control.release_leases().await
+    }
+
+    pub async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, Error> {
+        let inner = self.inner.lock().await;
+        inner.control.leased_count(queue, now).await
+    }
+
+    pub async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error> {
+        let inner = self.inner.lock().await;
+        inner.control.task_active(source, locator_key).await
+    }
+
+    pub async fn accepted_state(
+        &self,
+        scope: &str,
+        key: &str,
+    ) -> Result<Option<(u64, String)>, Error> {
+        let inner = self.inner.lock().await;
+        inner.control.accepted_state(scope, key).await
+    }
+
+    pub async fn hot_get(&self, kind: &str, key: &str) -> Result<Option<String>, Error> {
+        let inner = self.inner.lock().await;
+        inner.control.hot_get(kind, key).await
+    }
+
+    pub async fn hot_put(&self, kind: &str, key: &str, value: &str) -> Result<(), Error> {
+        let inner = self.inner.lock().await;
+        inner.control.hot_put(kind, key, value).await
+    }
+
     async fn flush_inner(&self, stop_before_snapshot: bool) -> Result<Option<u64>, Error> {
         let mut inner = self.inner.lock().await;
         recover(&mut inner).await?;

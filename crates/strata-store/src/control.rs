@@ -65,14 +65,23 @@ CREATE TABLE IF NOT EXISTS tasks (
   retry_at TEXT,
   last_error TEXT,
   priority INTEGER NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  source_id TEXT NOT NULL DEFAULT '',
+  locator_key TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS committer_lease (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   holder TEXT,
   until TEXT
 );
+CREATE TABLE IF NOT EXISTS hot (
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  PRIMARY KEY (kind, key)
+);
 CREATE INDEX IF NOT EXISTS tasks_queue ON tasks(queue, status);
+CREATE INDEX IF NOT EXISTS tasks_locator ON tasks(source_id, locator_key, status);
 ";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -130,6 +139,25 @@ pub(crate) trait ControlStore {
 
     async fn nack(&self, task_id: &TaskId, retry_at: Timestamp, error: &str) -> Result<(), Error>;
 
+    async fn lease_id(
+        &self,
+        task_id: &TaskId,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<AccessTask, Error>;
+
+    async fn release_leases(&self) -> Result<Vec<AccessTask>, Error>;
+
+    async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, Error>;
+
+    async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error>;
+
+    async fn accepted_state(&self, scope: &str, key: &str) -> Result<Option<(u64, String)>, Error>;
+
+    async fn hot_get(&self, kind: &str, key: &str) -> Result<Option<String>, Error>;
+
+    async fn hot_put(&self, kind: &str, key: &str, value: &str) -> Result<(), Error>;
+
     async fn staging_for(&self, commit_ids: &[String]) -> Result<Vec<String>, Error>;
 
     async fn accepted_staging(&self) -> Result<HashSet<String>, Error>;
@@ -180,6 +208,8 @@ impl SqliteControl {
                     source,
                 })?;
         }
+        ensure_task_column(&pool, "source_id", "TEXT NOT NULL DEFAULT ''").await?;
+        ensure_task_column(&pool, "locator_key", "TEXT NOT NULL DEFAULT ''").await?;
         Ok(Self { pool })
     }
 }
@@ -364,15 +394,32 @@ impl ControlStore for SqliteControl {
             if exists.is_some() {
                 return Err(Error::DuplicateTask(task.task_id.to_string()));
             }
+            let locator_key = serde_json::to_string(&task.locator)?;
+            let active = sqlx::query(
+                "SELECT 1 FROM tasks WHERE source_id = ? AND locator_key = ? AND status != 'done' LIMIT 1",
+            )
+            .bind(task.source_id.as_str())
+            .bind(&locator_key)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|source| Error::Sql {
+                context: "查找在途任务",
+                source,
+            })?;
+            if active.is_some() {
+                continue;
+            }
             sqlx::query(
-                "INSERT INTO tasks(task_id, queue, payload, status, priority, created_at)
-                 VALUES (?, ?, ?, 'queued', ?, ?)",
+                "INSERT INTO tasks(task_id, queue, payload, status, priority, created_at, source_id, locator_key)
+                 VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
             )
             .bind(task.task_id.as_str())
             .bind(queue_text(task.queue))
             .bind(serde_json::to_string(task)?)
             .bind(task.priority)
             .bind(&now_text)
+            .bind(task.source_id.as_str())
+            .bind(&locator_key)
             .execute(&mut *tx)
             .await
             .map_err(|source| Error::Sql {
@@ -532,6 +579,164 @@ impl ControlStore for SqliteControl {
         .execute(&self.pool)
         .await
         .map_err(|source| Error::Sql { context: "退回任务", source })?;
+        Ok(())
+    }
+
+    async fn lease_id(
+        &self,
+        task_id: &TaskId,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<AccessTask, Error> {
+        let until = now.checked_add(lease_for)?;
+        let until_text = until.to_rfc3339()?;
+        let row = sqlx::query(
+            "SELECT payload, status, lease_until, retry_at FROM tasks WHERE task_id = ?",
+        )
+        .bind(task_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "读取任务",
+            source,
+        })?;
+        let Some(row) = row else {
+            return Err(Error::UnknownTask(task_id.to_string()));
+        };
+        let status: String = row.get(1);
+        let lease_until: Option<String> = row.get(2);
+        let retry_at: Option<String> = row.get(3);
+        if status == "done" || !lease_due(&status, lease_until.as_deref(), now)? {
+            return Err(Error::TaskState(task_id.to_string()));
+        }
+        if let Some(retry_at) = retry_at.as_deref() {
+            if Timestamp::parse(retry_at)? > now {
+                return Err(Error::TaskState(task_id.to_string()));
+            }
+        }
+        let mut task: AccessTask = serde_json::from_str(row.get::<String, _>(0).as_str())?;
+        task.lease_until = until;
+        sqlx::query(
+            "UPDATE tasks SET payload = ?, status = 'leased', lease_until = ? WHERE task_id = ?",
+        )
+        .bind(serde_json::to_string(&task)?)
+        .bind(&until_text)
+        .bind(task_id.as_str())
+        .execute(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "更新租约",
+            source,
+        })?;
+        Ok(task)
+    }
+
+    async fn release_leases(&self) -> Result<Vec<AccessTask>, Error> {
+        let rows = sqlx::query("SELECT payload FROM tasks WHERE status = 'leased'")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|source| Error::Sql {
+                context: "读取租约",
+                source,
+            })?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            let task: AccessTask = serde_json::from_str(row.get::<String, _>(0).as_str())?;
+            tasks.push(task);
+        }
+        sqlx::query(
+            "UPDATE tasks SET status = 'queued', lease_until = NULL WHERE status = 'leased'",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "释放租约",
+            source,
+        })?;
+        Ok(tasks)
+    }
+
+    async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, Error> {
+        let rows =
+            sqlx::query("SELECT lease_until FROM tasks WHERE queue = ? AND status = 'leased'")
+                .bind(queue_text(queue))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|source| Error::Sql {
+                    context: "统计租约",
+                    source,
+                })?;
+        let mut count = 0usize;
+        for row in rows {
+            let until: Option<String> = row.get(0);
+            if let Some(until) = until {
+                if Timestamp::parse(&until)? > now {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error> {
+        let row = sqlx::query(
+            "SELECT 1 FROM tasks WHERE source_id = ? AND locator_key = ? AND status != 'done' LIMIT 1",
+        )
+        .bind(source)
+        .bind(locator_key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "查找在途任务",
+            source,
+        })?;
+        Ok(row.is_some())
+    }
+
+    async fn accepted_state(&self, scope: &str, key: &str) -> Result<Option<(u64, String)>, Error> {
+        let row = sqlx::query("SELECT version, value FROM state_head WHERE scope = ? AND key = ?")
+            .bind(scope)
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|source| Error::Sql {
+                context: "读取已接收状态",
+                source,
+            })?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let version: i64 = row.get(0);
+        Ok(Some((u64_from_i64(version)?, row.get(1))))
+    }
+
+    async fn hot_get(&self, kind: &str, key: &str) -> Result<Option<String>, Error> {
+        let row = sqlx::query("SELECT value FROM hot WHERE kind = ? AND key = ?")
+            .bind(kind)
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|source| Error::Sql {
+                context: "读取热数据",
+                source,
+            })?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    async fn hot_put(&self, kind: &str, key: &str, value: &str) -> Result<(), Error> {
+        sqlx::query(
+            "INSERT INTO hot(kind, key, value) VALUES (?, ?, ?)
+             ON CONFLICT(kind, key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(kind)
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "写入热数据",
+            source,
+        })?;
         Ok(())
     }
 
@@ -806,6 +1011,29 @@ async fn ack_task(
         .await
         .map_err(|source| Error::Sql {
             context: "确认任务",
+            source,
+        })?;
+    Ok(())
+}
+
+async fn ensure_task_column(pool: &SqlitePool, name: &str, decl: &str) -> Result<(), Error> {
+    let rows = sqlx::query("PRAGMA table_info(tasks)")
+        .fetch_all(pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "读取任务表结构",
+            source,
+        })?;
+    let exists = rows.iter().any(|row| row.get::<String, _>(1) == name);
+    if exists {
+        return Ok(());
+    }
+    let sql = format!("ALTER TABLE tasks ADD COLUMN {name} {decl}");
+    sqlx::query(&sql)
+        .execute(pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "补充任务列",
             source,
         })?;
     Ok(())

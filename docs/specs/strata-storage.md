@@ -22,7 +22,11 @@
 
 控制库保存 outbox、任务、已接收的身份与状态头、暂存引用、刷写批次和建表时的表版本。`committer_lease` 表保留给多实例租约；本阶段不写租约。同一进程的写者由句柄互斥保证。两个句柄打开同一目录时，没有额外的文件锁。
 
-已完成回执是 `state` 中 `scope=receipt` 的行。付费调用前的 pending 不在本阶段写入。
+已完成回执是 `state` 中 `scope=receipt` 的行。调用前的 `pending` 与 `unknown` 写在控制库 `hot`，不进入可见快照。
+
+`state` 读取已可见快照。`accepted_state` 读取 `state_head`。
+
+`hot` 的主键是 `(kind, key)`，值是 JSON 文本。`tasks` 含 `source_id` 与 `locator_key`。同一对在 `status` 不是 `done` 时至多一行；再次入队跳过该条。`release_leases` 把 `leased` 改回 `queued` 并清空 `lease_until`，不改 `attempt`，不写 `last_error`。
 
 ## 接收
 
