@@ -79,6 +79,14 @@ async fn budget_stops_the_second_send_and_replay_skips_transport() {
         .await
         .unwrap();
     assert_eq!(first.body.as_ref(), b"saved");
+    let id = first.receipt_id.as_ref().unwrap();
+    let (service, key) = gate.stored_receipt(id.as_str()).await.unwrap().unwrap();
+    assert_eq!(service, "search");
+    assert_eq!(
+        key,
+        paid::logical_key("search", "/v1", &serde_json::json!({"q": "a"}), 0)
+    );
+    assert_ne!(key, id.as_str());
     let replay = gate
         .call_at(call(serde_json::json!({"q": "a"})), 1_200)
         .await

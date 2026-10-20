@@ -16,5 +16,5 @@ pub use persist::{MemoryPersist, Persist};
 pub use policy::{
     CrawlDelayMode, Exempt, Policy, PrivateNetworks, RateLimit, RobotsMode, Unreachable,
 };
-pub use proxy::serve;
+pub use proxy::{serve, serve_each};
 pub use ssrf::is_blocked;

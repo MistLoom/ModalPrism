@@ -10,7 +10,7 @@ use ability_core::AbilityHost;
 use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
 use assembly::{Binds, Services, policy_of};
 use async_trait::async_trait;
-use frame_core::{AccessKind, CatalogEntry, Gateway, InvokeRequest, InvokeResponse, Port};
+use frame_core::{AccessKind, CatalogEntry, Gateway, InvokeRequest, InvokeResponse};
 use frame_port_http::HttpPort;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -94,9 +94,12 @@ pub async fn boot(
     let stop = Arc::new(AtomicBool::new(false));
     let mut tasks = Vec::new();
     let proxy_gateway = services.egress_gateway();
-    let proxy_policy = policy_of(&services.config().snapshot().system);
+    let proxy_services = Arc::clone(&services);
     tasks.push(tokio::spawn(async move {
-        assembly::serve_proxy(proxy_gateway, proxy_listener, proxy_policy).await;
+        assembly::serve_proxy(proxy_gateway, proxy_listener, move || {
+            policy_of(&proxy_services.config().applied().system)
+        })
+        .await;
     }));
     let push_services = Arc::clone(&services);
     tasks.push(tokio::spawn(async move {
@@ -104,7 +107,7 @@ pub async fn boot(
     }));
     let http_gateway = Arc::clone(&gateway);
     tasks.push(tokio::spawn(async move {
-        let _ = Box::new(HttpPort::new(http)).serve(http_gateway).await;
+        serve_ops(http, http_gateway).await;
     }));
     wait_http(http).await?;
     tasks.extend(spawn_loops(
@@ -299,7 +302,7 @@ fn spawn_loops(
     let stop_flush = Arc::clone(&stop);
     let flush = tokio::spawn(async move {
         loop {
-            let wait = assembly::flush_interval(&services_flush.config().snapshot());
+            let wait = assembly::flush_interval(&services_flush.config().applied());
             tokio::time::sleep(wait).await;
             if stop_flush.load(Ordering::Relaxed) {
                 break;
@@ -319,6 +322,50 @@ fn spawn_loops(
         }
     });
     vec![tick, flush, health]
+}
+
+async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>) {
+    let app = HttpPort::router(gateway).layer(axum::middleware::map_response(strip_cors));
+    let Ok(listener) = TcpListener::bind(addr).await else {
+        return;
+    };
+    let _ = axum::serve(listener, app).await;
+}
+
+async fn strip_cors(mut response: axum::response::Response) -> axum::response::Response {
+    let names: Vec<_> = response
+        .headers()
+        .keys()
+        .filter(|name| name.as_str().starts_with("access-control-"))
+        .cloned()
+        .collect();
+    for name in names {
+        response.headers_mut().remove(name);
+    }
+    let vary = response
+        .headers()
+        .get("vary")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if let Some(vary) = vary {
+        let kept: Vec<_> = vary
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty() && !cors_vary(token))
+            .collect();
+        if kept.is_empty() {
+            response.headers_mut().remove("vary");
+        } else if let Ok(value) = kept.join(", ").parse() {
+            response.headers_mut().insert("vary", value);
+        }
+    }
+    response
+}
+
+fn cors_vary(token: &str) -> bool {
+    token.eq_ignore_ascii_case("origin")
+        || token.eq_ignore_ascii_case("access-control-request-method")
+        || token.eq_ignore_ascii_case("access-control-request-headers")
 }
 
 async fn invoke(

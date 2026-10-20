@@ -154,6 +154,14 @@ pub fn capacities() -> planner::Capacities {
     }
 }
 
+pub fn snapshot_interval(snapshot: &Snapshot) -> Duration {
+    duration_at(
+        snapshot.system.pointer("/policy/state/snapshot_interval"),
+        Duration::from_secs(15 * 60),
+    )
+    .unwrap_or(Duration::from_secs(15 * 60))
+}
+
 pub fn flush_interval(snapshot: &Snapshot) -> Duration {
     duration_at(
         snapshot.system.pointer("/policy/commit/flush_interval"),

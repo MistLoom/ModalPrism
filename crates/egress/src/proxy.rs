@@ -18,11 +18,25 @@ where
     R: Resolver,
     D: Dial,
 {
+    serve_each(gateway, listener, move || policy.clone()).await;
+}
+
+pub async fn serve_each<P, T, R, D, F>(
+    gateway: &Gateway<P, T, R, D>,
+    listener: TcpListener,
+    policy_of: F,
+) where
+    P: Persist,
+    T: Transport,
+    R: Resolver,
+    D: Dial,
+    F: Fn() -> Policy,
+{
     loop {
         let Ok((socket, _)) = listener.accept().await else {
             continue;
         };
-        let policy = policy.clone();
+        let policy = policy_of();
         let _ = handle(gateway, socket, policy).await;
     }
 }

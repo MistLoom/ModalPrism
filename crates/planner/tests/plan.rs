@@ -158,12 +158,46 @@ async fn lease_blocks_a_second_dispatch_until_shutdown() {
         .tick(std::slice::from_ref(&plan()), &caps(), now())
         .await
         .unwrap();
-    assert!(again.is_empty());
-    planner
-        .queue()
-        .lease_id(&released[0].task_id, Duration::from_secs(45), now())
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].task_id, released[0].task_id);
+}
+
+#[tokio::test]
+async fn nack_is_leased_again_when_retry_is_due() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let first = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
         .await
         .unwrap();
+    let later = now().checked_add(Duration::from_secs(3600)).unwrap();
+    planner
+        .queue()
+        .nack(&first[0].task_id, later, "transport")
+        .await
+        .unwrap();
+    let mid = now().checked_add(Duration::from_secs(45)).unwrap();
+    let waiting = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), mid)
+        .await
+        .unwrap();
+    assert!(waiting.is_empty());
+    let mut due = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), later)
+        .await
+        .unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].task_id, first[0].task_id);
+    assert_eq!(due[0].attempt, 1);
+    let handler = Script {
+        hits: AtomicUsize::new(0),
+        error: None,
+        seen_cursor: std::sync::Mutex::new(None),
+    };
+    planner
+        .run(&plan(), due.remove(0), &handler, &(), later, later)
+        .await
+        .unwrap();
+    assert_eq!(handler.hits.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

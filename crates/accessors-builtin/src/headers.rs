@@ -196,9 +196,25 @@ pub fn body_next(body: &[u8]) -> Option<String> {
         .into_iter()
         .filter_map(|pattern| lower.find(pattern))
         .min()?;
-    let from = at.saturating_sub(300);
-    let to = (at + 300).min(text.len());
+    let from = char_floor(&text, at.saturating_sub(300));
+    let to = char_ceil(&text, (at + 300).min(text.len()));
     closest_href(&text[from..to], at - from)
+}
+
+fn char_floor(text: &str, index: usize) -> usize {
+    let mut at = index.min(text.len());
+    while at > 0 && !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+fn char_ceil(text: &str, index: usize) -> usize {
+    let mut at = index.min(text.len());
+    while at < text.len() && !text.is_char_boundary(at) {
+        at += 1;
+    }
+    at
 }
 
 fn closest_href(window: &str, anchor: usize) -> Option<String> {
@@ -247,4 +263,21 @@ pub fn is_http(url: &str) -> bool {
     url::Url::parse(url)
         .ok()
         .is_some_and(|url| url.scheme() == "http" || url.scheme() == "https")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::body_next;
+
+    #[test]
+    fn body_next_slices_on_char_boundaries() {
+        let mut body = "a".repeat(10);
+        body.push('你');
+        body.push_str(&"b".repeat(298));
+        body.push_str(r#"rel="next" href="https://example.com/n""#);
+        assert_eq!(
+            body_next(body.as_bytes()).as_deref(),
+            Some("https://example.com/n")
+        );
+    }
 }
