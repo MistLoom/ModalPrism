@@ -9,7 +9,7 @@ const routes = ["overview", "sources", "records", "governance", "config"];
 
 await mkdir(outDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
 
 for (const theme of ["light", "dark"]) {
   for (const hash of routes) {
@@ -20,35 +20,60 @@ for (const theme of ["light", "dark"]) {
     });
     await page.waitForFunction(() => !document.querySelector("#viewRoot .loading"));
     await page.screenshot({ path: path.join(outDir, `${hash}-${theme}.png`) });
-    if (hash === "records") {
-      await page.screenshot({ path: path.join(outDir, `records-empty-${theme}.png`) });
-    }
     await page.close();
   }
-  const page = await context.newPage();
-  await page.goto(`${base}/console?theme=${theme}#records`, { waitUntil: "networkidle" });
-  await page.waitForSelector("#viewRoot .page-title, #viewRoot .empty, #viewRoot .error", {
-    timeout: 120000,
-  });
-  const row = page.locator(".rec-row").first();
+
+  const rec = await context.newPage();
+  await rec.goto(`${base}/console?theme=${theme}#records`, { waitUntil: "networkidle" });
+  await rec.waitForSelector("#viewRoot .page-title", { timeout: 120000 });
+  const row = rec.locator(".rec-row").first();
   if (await row.count()) {
     await row.click();
-    await page.waitForSelector(".drawer:not([hidden])");
-    await page.screenshot({ path: path.join(outDir, `record-drawer-${theme}.png`) });
+    await rec.waitForSelector(".drawer-head .drawer-title", { timeout: 60000 });
+    await rec.waitForFunction(() => !document.querySelector(".drawer-body .loading"));
+    await rec.screenshot({ path: path.join(outDir, `record-drawer-${theme}.png`) });
+  } else {
+    await rec.screenshot({ path: path.join(outDir, `records-empty-${theme}.png`) });
   }
-  await page.close();
+  await rec.close();
+
   const cfg = await context.newPage();
   await cfg.goto(`${base}/console?theme=${theme}#config`, { waitUntil: "networkidle" });
-  await cfg.waitForSelector("#cfgEditor", { timeout: 120000 });
-  await cfg.screenshot({ path: path.join(outDir, `config-editor-${theme}.png`) });
+  await cfg.waitForSelector(".cfg-textarea", { timeout: 120000 });
+  const ta = cfg.locator(".cfg-textarea");
+  const original = await ta.inputValue();
+  await ta.fill(`${original}\n# screenshot-diff\n`);
+  await cfg.locator("#cfgToggleDiff").click();
+  await cfg.waitForSelector(".cfg-diff-view:not([hidden])");
+  await cfg.screenshot({ path: path.join(outDir, `config-editor-diff-${theme}.png`) });
   await cfg.close();
-  const src = await context.newPage();
-  await src.goto(`${base}/console?theme=${theme}#sources`, { waitUntil: "networkidle" });
-  await src.waitForSelector("[data-act='toggle']");
-  await src.locator("[data-act='toggle']").first().click();
-  await src.waitForSelector(".confirm:not([hidden])");
-  await src.screenshot({ path: path.join(outDir, `confirm-dialog-${theme}.png`) });
-  await src.close();
+
+  const confirm = await context.newPage();
+  await confirm.goto(`${base}/console?theme=${theme}#sources`, { waitUntil: "networkidle" });
+  await confirm.waitForSelector("[data-act='toggle']");
+  await confirm.locator("[data-act='toggle']").first().click();
+  await confirm.waitForSelector(".confirm:not([hidden])");
+  await confirm.screenshot({ path: path.join(outDir, `confirm-dialog-${theme}.png`) });
+  await confirm.close();
+
+  const palette = await context.newPage();
+  await palette.goto(`${base}/console?theme=${theme}#overview`, { waitUntil: "networkidle" });
+  await palette.locator("#paletteBtn").click();
+  await palette.waitForSelector(".palette:not([hidden])");
+  await palette.screenshot({ path: path.join(outDir, `command-palette-${theme}.png`) });
+  await palette.close();
+
+  const hist = await context.newPage();
+  await hist.goto(`${base}/console?theme=${theme}#overview`, { waitUntil: "networkidle" });
+  await hist.waitForSelector(".custom-select-trigger");
+  await hist.locator(".sidebar-foot .custom-select-trigger").click();
+  const opt = hist.locator(".sidebar-foot .custom-select-menu li").nth(1);
+  if (await opt.count()) {
+    await opt.click();
+    await hist.waitForSelector("#historyBanner:not([hidden])");
+    await hist.screenshot({ path: path.join(outDir, `history-mode-${theme}.png`) });
+  }
+  await hist.close();
 }
 
 await browser.close();

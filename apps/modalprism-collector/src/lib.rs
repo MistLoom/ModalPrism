@@ -374,27 +374,38 @@ pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {
 
 async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>, services: Arc<Services>) {
     use std::path::PathBuf;
-    use tower_http::services::ServeDir;
+    use axum::response::Redirect;
+    use tower_http::services::{ServeDir, ServeFile};
 
     let state = console_api::ConsoleState {
         services,
         http_addr: addr.to_string(),
     };
-    fn dir_service(path: PathBuf) -> ServeDir {
-        ServeDir::new(path).append_index_html_on_directories(true)
-    }
     let console = if let Ok(dist) = std::env::var("MODALPRISM_CONSOLE_DIST") {
-        axum::Router::new().fallback_service(dir_service(PathBuf::from(dist)))
+        let dist = PathBuf::from(dist);
+        let index = dist.join("index.html");
+        let service = ServeDir::new(dist)
+            .append_index_html_on_directories(true)
+            .not_found_service(ServeFile::new(index));
+        axum::Router::new().fallback_service(service)
     } else {
         let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../console-web/dist");
         if dist.join("index.html").is_file() && !console_static::has_embedded_assets() {
-            axum::Router::new().fallback_service(dir_service(dist))
+            let index = dist.join("index.html");
+            let service = ServeDir::new(dist)
+                .append_index_html_on_directories(true)
+                .not_found_service(ServeFile::new(index));
+            axum::Router::new().fallback_service(service)
         } else {
             axum::Router::new().fallback(console_static::serve)
         }
     };
     let app = axum::Router::new()
         .merge(console_api::router(state))
+        .route(
+            "/console/",
+            axum::routing::get(|| async { Redirect::permanent("/console") }),
+        )
         .nest("/console", console)
         .merge(HttpPort::router(gateway))
         .layer(axum::middleware::map_response(strip_cors));

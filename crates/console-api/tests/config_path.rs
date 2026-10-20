@@ -4,7 +4,8 @@ use console_api::normalize_rel_path;
 fn allows_whitelist() {
     assert!(normalize_rel_path("sources/a.yaml").is_ok());
     assert!(normalize_rel_path("presets/minimal.yaml").is_ok());
-    assert!(normalize_rel_path("system.yaml").is_ok());
+    assert!(normalize_rel_path("accessors/api.yaml").is_err());
+    assert!(normalize_rel_path("system.yaml").is_err());
 }
 
 #[test]

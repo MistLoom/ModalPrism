@@ -7,8 +7,40 @@ pub fn health_label(status: &str, alert: bool) -> String {
         "ok" if !alert => "正常".into(),
         "ok" => "正常（有提醒）".into(),
         "degraded" => "下降".into(),
+        "failing" => "异常".into(),
         "failed" => "异常".into(),
+        "misconfigured" => "配置有误".into(),
         _ => status.into(),
+    }
+}
+
+/// 状态标签 CSS 类名（`status-*`）。
+pub fn health_chip_class(status: &str, enabled: bool, skip_reason: Option<&str>) -> String {
+    if !enabled {
+        return "status-muted".into();
+    }
+    if skip_reason == Some("robots") {
+        return "status-warn".into();
+    }
+    if skip_reason == Some("budget") {
+        return "status-warn".into();
+    }
+    match status {
+        "ok" => "status-ok".into(),
+        "degraded" => "status-warn".into(),
+        "failing" | "failed" => "status-bad".into(),
+        "misconfigured" => "status-bad".into(),
+        _ => "status-muted".into(),
+    }
+}
+
+pub fn skip_reason_label(skip: Option<&str>) -> Option<String> {
+    match skip {
+        Some("budget") => Some("付费额度已用尽".into()),
+        Some("robots") => Some("robots 禁止抓取".into()),
+        Some("missing_secret") | Some("secret") => Some("缺少密钥".into()),
+        Some(other) if !other.is_empty() => Some(other.to_string()),
+        _ => None,
     }
 }
 

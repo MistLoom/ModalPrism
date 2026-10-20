@@ -46,6 +46,9 @@ pub struct SourceStatus {
     pub alert: bool,
     pub skip_reason: Option<String>,
     pub budget_used: u64,
+    pub last_yield_at: Option<String>,
+    pub today_yield_count: u64,
+    pub last_error: Option<String>,
 }
 
 pub struct Capacities {
@@ -197,6 +200,13 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         let db = load_db(&self.persist).await?;
         let row = db.sources.get(source);
         let health = db.health.get(&format!("source/{source}"));
+        let today = day_of(Timestamp::now());
+        let today_yield_count = db
+            .yields
+            .get(source)
+            .and_then(|by_day| by_day.get(&today))
+            .copied()
+            .unwrap_or(0);
         Ok(SourceStatus {
             next_at: row.and_then(|row| row.next_at.clone()),
             interval_ms: row.map(|row| row.interval_ms).unwrap_or(0),
@@ -206,6 +216,9 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             alert: health.is_some_and(|item| item.alert),
             skip_reason: row.and_then(|row| row.skip_reason.clone()),
             budget_used: row.map(|row| row.paid_used).unwrap_or(0),
+            last_yield_at: row.and_then(|row| row.last_yield_at.clone()),
+            today_yield_count,
+            last_error: health.and_then(|item| item.last_error.clone()),
         })
     }
 

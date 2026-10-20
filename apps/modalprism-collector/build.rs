@@ -19,6 +19,9 @@ fn main() {
         return;
     }
     if which_npm().is_none() {
+        if dist.is_file() {
+            return;
+        }
         write_minimal_dist(&web.join("dist"));
         return;
     }
@@ -41,7 +44,7 @@ fn main() {
         .current_dir(&web)
         .status()
         .expect("npm run build");
-    if !status.success() || !dist.is_file() {
+    if !status.success() && !dist.is_file() {
         write_minimal_dist(&web.join("dist"));
     }
 }

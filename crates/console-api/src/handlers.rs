@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use strata_model::{AsOf, Expr, FacetKind, FacetRef, Query as StrataQuery, QueryFrom, VersionSel};
 
 use crate::config_path::{list_whitelist_files, normalize_rel_path, resolve_config_file};
-use crate::copy::{change_summary, circuit_label, health_label, schedule_note};
+use crate::copy::{
+    change_summary, circuit_label, health_chip_class, health_label, schedule_note, skip_reason_label,
+};
 use crate::error::{ApiError, ApiResult};
 use crate::ConsoleState;
 
@@ -62,9 +64,7 @@ pub async fn overview(
     State(state): State<ConsoleState>,
     Query(q): Query<AsOfQuery>,
 ) -> ApiResult<Json<Value>> {
-    if q.as_of_snapshot.is_some() {
-        return Err(ApiError::bad_request("总览仅支持实时数据"));
-    }
+    let historical = q.as_of_snapshot.is_some();
     let sources = source_summaries(&state).await?;
     let healthy = sources
         .iter()
@@ -100,6 +100,9 @@ pub async fn overview(
         },
         "recentUpdates": recent,
         "sources": sources,
+        "historicalMode": historical,
+        "viewNote": historical.then_some("该视图显示实时状态"),
+        "readOnly": historical,
     })))
 }
 
@@ -107,21 +110,21 @@ pub async fn sources_list(
     State(state): State<ConsoleState>,
     Query(q): Query<AsOfQuery>,
 ) -> ApiResult<Json<Value>> {
-    if q.as_of_snapshot.is_some() {
-        return Err(ApiError::bad_request("信源状态仅支持实时数据"));
-    }
+    let historical = q.as_of_snapshot.is_some();
     let items = source_summaries(&state).await?;
-    Ok(Json(json!({ "items": items })))
+    Ok(Json(json!({
+        "items": items,
+        "historicalMode": historical,
+        "viewNote": historical.then_some("该视图显示实时状态"),
+        "readOnly": historical,
+    })))
 }
 
 pub async fn source_get(
     State(state): State<ConsoleState>,
     AxPath(id): AxPath<String>,
-    Query(q): Query<AsOfQuery>,
+    Query(_q): Query<AsOfQuery>,
 ) -> ApiResult<Json<Value>> {
-    if q.as_of_snapshot.is_some() {
-        return Err(ApiError::bad_request("信源状态仅支持实时数据"));
-    }
     let key = normalize_source_id(&id)?;
     let items = source_summaries(&state).await?;
     let Some(item) = items
@@ -226,9 +229,7 @@ pub async fn records_list(
         where_expr = Some(Expr::try_from(json!({ "eq": { "field": "sourceId", "value": sid } }))
             .map_err(|_| ApiError::bad_request("信源筛选无效"))?);
     }
-    let as_of = q
-        .as_of_snapshot
-        .map(AsOf::Snapshot);
+    let as_of = q.as_of_snapshot.map(AsOf::Snapshot);
     let query = StrataQuery {
         from: QueryFrom::Resources,
         r#where: where_expr,
@@ -239,7 +240,7 @@ pub async fn records_list(
         cursor: q.cursor.clone(),
         search: None,
         select: vec![],
-        as_of,
+        as_of: as_of.clone(),
     };
     let page = state
         .services
@@ -247,26 +248,22 @@ pub async fn records_list(
         .query(query)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let needle = q.q.as_deref().map(|s| s.to_lowercase());
-    let items: Vec<Value> = page
+    let needle = q.q.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let mut items: Vec<Value> = page
         .rows
         .into_iter()
-        .filter(|row| {
-            if let Some(needle) = &needle {
-                let rid = row.get("rid").and_then(Value::as_str).unwrap_or("");
-                let sid = row.get("sourceId").and_then(Value::as_str).unwrap_or("");
-                rid.to_lowercase().contains(needle) || sid.to_lowercase().contains(needle)
-            } else {
-                true
-            }
-        })
         .take(limit as usize)
         .map(|row| record_summary(&row))
         .collect();
+    enrich_record_summaries(&state, &mut items, as_of.clone()).await?;
+    if let Some(needle) = &needle {
+        items.retain(|row| record_matches_query(row, needle));
+    }
     Ok(Json(json!({
         "items": items,
         "nextCursor": page.next_cursor,
         "readOnly": q.as_of_snapshot.is_some(),
+        "sourceOptions": source_filter_options(&state),
     })))
 }
 
@@ -289,9 +286,7 @@ pub async fn governance_egress(
     State(state): State<ConsoleState>,
     Query(q): Query<AsOfQuery>,
 ) -> ApiResult<Json<Value>> {
-    if q.as_of_snapshot.is_some() {
-        return Err(ApiError::bad_request("治理状态仅支持实时数据"));
-    }
+    let historical = q.as_of_snapshot.is_some();
     let db = state
         .services
         .egress_gateway()
@@ -326,6 +321,9 @@ pub async fn governance_egress(
     Ok(Json(json!({
         "domains": domains,
         "proxy": state.services.proxy_url(),
+        "historicalMode": historical,
+        "viewNote": historical.then_some("该视图显示实时状态"),
+        "readOnly": historical,
     })))
 }
 
@@ -390,7 +388,9 @@ pub async fn config_reload(State(state): State<ConsoleState>) -> ApiResult<Json<
 
 pub async fn config_files_list(State(state): State<ConsoleState>) -> ApiResult<Json<Value>> {
     let paths = list_whitelist_files(&state)?;
-    Ok(Json(json!({ "items": paths })))
+    let snapshot = state.services.config().applied();
+    let groups = config_file_groups(&paths, snapshot.as_ref());
+    Ok(Json(json!({ "items": paths, "groups": groups })))
 }
 
 pub async fn config_file_get(
@@ -448,7 +448,15 @@ pub async fn config_file_validate_text(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     match result {
         Ok(_) => Ok(Json(json!({ "ok": true }))),
-        Err(e) => Err(ApiError::bad_request(e.to_string())),
+        Err(e) => {
+            let msg = e.to_string();
+            let line = validation_line_hint(&msg);
+            Err(ApiError::bad_request(if let Some(line) = line {
+                format!("第 {line} 行：{msg}")
+            } else {
+                msg
+            }))
+        }
     }
 }
 
@@ -598,6 +606,7 @@ async fn source_summaries(state: &ConsoleState) -> ApiResult<Vec<Value>> {
             budget_used,
             status.get("nextAt"),
         );
+        let chip = health_chip_class(health_status, enabled, skip);
         out.push(json!({
             "id": id,
             "name": name,
@@ -605,8 +614,13 @@ async fn source_summaries(state: &ConsoleState) -> ApiResult<Vec<Value>> {
             "accessor": accessor,
             "healthStatus": health_status,
             "healthLabel": health_label(health_status, alert),
+            "statusChipClass": chip,
+            "skipReasonLabel": skip_reason_label(skip),
             "scheduleNote": note,
             "nextAt": status.get("nextAt"),
+            "lastYieldAt": status.get("lastYieldAt"),
+            "todayYieldCount": status.get("todayYieldCount"),
+            "lastError": status.get("lastError"),
         }));
     }
     out.sort_by(|a, b| {
@@ -624,7 +638,165 @@ fn record_summary(row: &Value) -> Value {
         "sourceId": row.get("sourceId"),
         "updatedAt": row.get("updatedAt"),
         "tombstone": row.get("tombstone"),
+        "title": Value::Null,
+        "sourceName": Value::Null,
+        "publishedAt": Value::Null,
+        "collectedAt": row.get("updatedAt"),
     })
+}
+
+fn record_matches_query(row: &Value, needle: &str) -> bool {
+    let rid = row.get("id").and_then(Value::as_str).unwrap_or("");
+    let sid = row.get("sourceId").and_then(Value::as_str).unwrap_or("");
+    let title = row.get("title").and_then(Value::as_str).unwrap_or("");
+    let source_name = row.get("sourceName").and_then(Value::as_str).unwrap_or("");
+    rid.to_lowercase().contains(needle)
+        || sid.to_lowercase().contains(needle)
+        || title.to_lowercase().contains(needle)
+        || source_name.to_lowercase().contains(needle)
+}
+
+fn source_name_map(state: &ConsoleState) -> std::collections::HashMap<String, String> {
+    let snapshot = state.services.config().applied();
+    let mut out = std::collections::HashMap::new();
+    for (id, module) in &snapshot.modules {
+        if module.get("kind").and_then(Value::as_str) != Some("source") {
+            continue;
+        }
+        let name = module
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(id)
+            .to_string();
+        out.insert(id.clone(), name);
+    }
+    out
+}
+
+fn source_filter_options(state: &ConsoleState) -> Vec<Value> {
+    source_name_map(state)
+        .into_iter()
+        .map(|(id, name)| json!({ "id": id, "name": name }))
+        .collect()
+}
+
+async fn enrich_record_summaries(
+    state: &ConsoleState,
+    items: &mut [Value],
+    as_of: Option<AsOf>,
+) -> ApiResult<()> {
+    let names = source_name_map(state);
+    let strata = state.services.strata();
+    for item in items {
+        let rid = item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if rid.is_empty() {
+            continue;
+        }
+        let parsed = strata_model::Rid::parse(&rid).map_err(|_| ApiError::bad_request("记录无效"))?;
+        let discovery = facet_get_at(
+            strata.as_ref(),
+            &parsed,
+            FacetKind::Struct,
+            Some("discovery"),
+            as_of.clone(),
+        )
+        .await?;
+        let fields = parse_discovery(&discovery);
+        if let Some(title) = fields.title {
+            item["title"] = json!(title);
+        }
+        if let Some(published) = fields.published_at {
+            item["publishedAt"] = json!(published);
+        }
+        let sid = discovery
+            .as_ref()
+            .and_then(|f| f.value.as_ref())
+            .and_then(|v| v.pointer("/sourceId"))
+            .and_then(Value::as_str)
+            .or_else(|| item.get("sourceId").and_then(Value::as_str))
+            .map(str::to_string);
+        if let Some(sid) = sid {
+            let label = names.get(&sid).cloned().unwrap_or_else(|| sid.clone());
+            item["sourceId"] = json!(sid);
+            item["sourceName"] = json!(label);
+        }
+    }
+    Ok(())
+}
+
+fn config_file_groups(paths: &[String], snapshot: &config::Snapshot) -> Vec<Value> {
+    let mut sources = Vec::new();
+    let mut presets = Vec::new();
+    for path in paths {
+        let label = file_display_name(path, snapshot);
+        let entry = json!({ "path": path, "label": label });
+        if path.starts_with("sources/") {
+            sources.push(entry);
+        } else if path.starts_with("presets/") {
+            presets.push(entry);
+        }
+    }
+    sources.sort_by(|a, b| {
+        a["label"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["label"].as_str().unwrap_or(""))
+    });
+    presets.sort_by(|a, b| {
+        a["label"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["label"].as_str().unwrap_or(""))
+    });
+    vec![
+        json!({ "id": "sources", "label": "信源", "items": sources }),
+        json!({ "id": "presets", "label": "策略预设", "items": presets }),
+    ]
+}
+
+fn file_display_name(path: &str, snapshot: &config::Snapshot) -> String {
+    if let Some(stem) = path
+        .strip_prefix("sources/")
+        .and_then(|p| p.strip_suffix(".yaml").or_else(|| p.strip_suffix(".yml")))
+    {
+        let id = format!("source/{stem}");
+        if let Some(module) = snapshot.modules.get(&id) {
+            return module
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(stem)
+                .to_string();
+        }
+        return stem.to_string();
+    }
+    if let Some(name) = path.strip_prefix("presets/") {
+        return name
+            .strip_suffix(".yaml")
+            .or_else(|| name.strip_suffix(".yml"))
+            .unwrap_or(name)
+            .to_string();
+    }
+    path.to_string()
+}
+
+fn validation_line_hint(message: &str) -> Option<u32> {
+    for token in message.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("line:") {
+            if let Ok(line) = rest.parse::<u32>() {
+                return Some(line);
+            }
+        }
+        if let Some(rest) = token.strip_prefix("line") {
+            if let Ok(line) = rest.trim_matches(':').parse::<u32>() {
+                return Some(line);
+            }
+        }
+    }
+    None
 }
 
 async fn load_record_detail(
@@ -632,23 +804,25 @@ async fn load_record_detail(
     rid_text: &str,
     as_of: Option<AsOf>,
 ) -> ApiResult<Value> {
-    if as_of.is_some() {
-        return Err(ApiError::bad_request("历史快照下暂不支持记录详情，请切回实时"));
-    }
     let rid = strata_model::Rid::parse(rid_text)
         .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
-    let discovery_ref = FacetRef::new(
-        rid.clone(),
-        FacetKind::Struct,
-        Some("discovery".into()),
-        VersionSel::Latest,
-    )
-        .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
-    let page_ref = FacetRef::new(rid.clone(), FacetKind::Struct, Some("page".into()), VersionSel::Latest)
-        .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
     let strata = state.services.strata();
-    let discovery = facet_get(strata.as_ref(), &discovery_ref).await?;
-    let page = facet_get(strata.as_ref(), &page_ref).await?;
+    let discovery = facet_get_at(
+        strata.as_ref(),
+        &rid,
+        FacetKind::Struct,
+        Some("discovery"),
+        as_of.clone(),
+    )
+    .await?;
+    let page = facet_get_at(
+        strata.as_ref(),
+        &rid,
+        FacetKind::Struct,
+        Some("page"),
+        as_of.clone(),
+    )
+    .await?;
     let fields = parse_discovery(&discovery);
     let body_preview = page
         .as_ref()
@@ -670,6 +844,13 @@ async fn load_record_detail(
         )
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let names = source_name_map(state);
+    let source_id = discovery
+        .as_ref()
+        .and_then(|f| f.value.as_ref())
+        .and_then(|v| v.pointer("/sourceId"))
+        .and_then(Value::as_str);
+    let source_name = source_id.and_then(|sid| names.get(sid).cloned());
     Ok(json!({
         "id": rid_text,
         "title": fields.title,
@@ -677,8 +858,11 @@ async fn load_record_detail(
         "publishedAt": fields.published_at,
         "summary": fields.summary,
         "author": fields.author,
-        "sourceId": discovery.as_ref().and_then(|f| f.value.as_ref()).and_then(|v| v.pointer("/sourceId")),
+        "sourceId": source_id,
+        "sourceName": source_name,
+        "collectedAt": discovery.as_ref().and_then(|f| f.value.as_ref()).and_then(|v| v.get("updatedAt")).or_else(|| page.as_ref().and_then(|f| f.value.as_ref()).and_then(|v| v.get("updatedAt"))),
         "bodyPreview": body_preview,
+        "readOnly": as_of.is_some(),
         "structured": discovery.as_ref().and_then(|f| f.value.clone()),
         "technical": {
             "rid": rid_text,
@@ -703,6 +887,40 @@ async fn facet_get(
             }
         }
     }
+}
+
+async fn facet_get_at(
+    strata: &strata_client::Strata,
+    rid: &strata_model::Rid,
+    kind: FacetKind,
+    variant: Option<&str>,
+    as_of: Option<AsOf>,
+) -> ApiResult<Option<strata_client::Facet>> {
+    let variant_owned = variant.map(str::to_string);
+    let version = match as_of {
+        None => VersionSel::Latest,
+        Some(AsOf::Snapshot(seq)) => {
+            let facet_latest = FacetRef::new(
+                rid.clone(),
+                kind.clone(),
+                variant_owned.clone(),
+                VersionSel::Latest,
+            )
+            .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
+            let history = strata.history(&facet_latest).await.map_err(|e| ApiError::internal(e.to_string()))?;
+            let picked = history
+                .iter()
+                .filter(|item| item.seq <= seq)
+                .max_by_key(|item| item.seq);
+            picked
+                .map(|item| VersionSel::Exact(item.version))
+                .unwrap_or(VersionSel::Latest)
+        }
+        Some(_) => VersionSel::Latest,
+    };
+    let reference = FacetRef::new(rid.clone(), kind.clone(), variant_owned, version)
+        .map_err(|_| ApiError::bad_request("记录 ID 无效"))?;
+    facet_get(strata, &reference).await
 }
 
 struct DiscoveryFields {

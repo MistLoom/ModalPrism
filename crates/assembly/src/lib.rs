@@ -716,6 +716,9 @@ async fn planner_next(services: &Services, args: &Value) -> Result<Value, Error>
         "alert": status.alert,
         "skipReason": status.skip_reason,
         "budgetUsed": status.budget_used,
+        "lastYieldAt": status.last_yield_at,
+        "todayYieldCount": status.today_yield_count,
+        "lastError": status.last_error,
     }))
 }
 
@@ -792,6 +795,9 @@ async fn health_status(services: &Services, args: &Value) -> Result<Value, Error
         "key": format!("source/{source}"),
         "status": status.health_status,
         "alert": status.alert,
+        "lastError": status.last_error,
+        "lastYieldAt": status.last_yield_at,
+        "todayYieldCount": status.today_yield_count,
     }))
 }
 

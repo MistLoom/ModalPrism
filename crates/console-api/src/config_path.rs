@@ -5,13 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::{ApiError, ApiResult};
 use crate::ConsoleState;
 
-const ALLOWED_ROOTS: &[&str] = &[
-    "sources",
-    "presets",
-    "accessors",
-    "adapters",
-    "types",
-];
+const ALLOWED_ROOTS: &[&str] = &["sources", "presets"];
 
 /// 相对路径（使用 `/`），必须在白名单内。
 pub fn normalize_rel_path(path: &str) -> ApiResult<PathBuf> {
@@ -25,9 +19,6 @@ pub fn normalize_rel_path(path: &str) -> ApiResult<PathBuf> {
             Component::Normal(_) | Component::CurDir => {}
             _ => return Err(ApiError::bad_request("路径无效")),
         }
-    }
-    if rel == Path::new("system.yaml") {
-        return Ok(rel.to_path_buf());
     }
     let first = rel
         .components()
@@ -80,10 +71,6 @@ pub fn resolve_config_file(state: &ConsoleState, rel: &Path) -> ApiResult<PathBu
 pub fn list_whitelist_files(state: &ConsoleState) -> ApiResult<Vec<String>> {
     let root = state.services.config_dir();
     let mut paths = Vec::new();
-    let system = root.join("system.yaml");
-    if system.is_file() {
-        paths.push("system.yaml".into());
-    }
     for dir in ALLOWED_ROOTS {
         collect_yaml(root, Path::new(dir), &mut paths)?;
     }

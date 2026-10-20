@@ -4,7 +4,7 @@
 
 ## 访问方式
 
-启动 `modalprism-collector` 后打开 `http://<http 监听>/console/`。编译采集进程时会自动构建并嵌入 `apps/console-web` 产物；也可设置 `MODALPRISM_CONSOLE_DIST` 指向已有 `dist` 目录。若嵌入产物缺失，访问 `/console/` 会返回说明页而非 404。
+启动 `modalprism-collector` 后打开 `http://<http 监听>/console` 或 `/console/`（二者等价）。**一键启动**：仓库内提交可复现的 `apps/console-web/dist` 产物；`cargo build` / `cargo run` 在无 Node 环境下仍嵌入完整 UI。若本地有 Node 且源码比产物新，编译时会自动 `npm run build` 刷新 `dist`；也可设置 `MODALPRISM_CONSOLE_DIST` 指向已有目录。CI 或发布前可执行 `cd apps/console-web && npm ci && npm run build` 并校验 `dist` 与源码一致。
 
 | 端口 | 默认 | 用途 |
 |------|------|------|
@@ -25,7 +25,7 @@
 | POST | `/sources/{id}/trigger` | 立即调度（`confirm: true`） |
 | PATCH | `/sources/{id}` | 写 YAML `enabled` 并校验、加载 |
 | GET | `/records` | 列表：筛选、搜索、分页、`asOfSnapshot` |
-| GET | `/records/{id}` | 详情（实时；历史模式返回错误提示） |
+| GET | `/records/{id}` | 详情（支持 `asOfSnapshot` 按沉积点读取） |
 | GET | `/governance/egress` | 域熔断状态 |
 | POST | `/governance/egress/{host}/reset-circuit` | 重置熔断 |
 | GET | `/config/summary` | 代际与磁盘 diff 计数 |
@@ -35,7 +35,7 @@
 | POST | `/config/file-rollback` | 回滚到写入前备份并加载 |
 | POST | `/config/validate`、`/config/reload` | 全目录校验、重新加载 |
 
-配置写入白名单：`sources/`、`presets/`、`accessors/`、`adapters/`、`types/`、`system.yaml`。拒绝 `..`、绝对路径与解析后越出配置根目录的路径（含符号链接）。
+配置写入白名单：仅 `sources/` 与 `presets/`。拒绝 `..`、绝对路径与解析后越出配置根目录的路径（含符号链接）。
 
 备份文件位于数据目录 `.console-config-backups/`。
 

@@ -1,4 +1,5 @@
 id: source/ars-technica-ai
+enabled: true
 kind: source
 name: "Ars Technica · AI"
 labels:

@@ -22,7 +22,13 @@ export const api = {
   meta: (asOf: number | null) => request<Record<string, unknown>>(`/meta${querySuffix(asOf)}`),
   timeline: () => request<{ items: Record<string, unknown>[] }>("/timeline"),
   overview: () => request<Record<string, unknown>>("/overview"),
-  sources: () => request<{ items: Record<string, unknown>[] }>("/sources"),
+  sources: () =>
+    request<{
+      items: Record<string, unknown>[];
+      readOnly?: boolean;
+      viewNote?: string;
+      historicalMode?: boolean;
+    }>("/sources"),
   trigger: (id: string) =>
     request(`/sources/${encodeURIComponent(id)}/trigger`, {
       method: "POST",
@@ -47,20 +53,30 @@ export const api = {
     if (opts.q) p.set("q", opts.q);
     if (opts.asOf != null) p.set("asOfSnapshot", String(opts.asOf));
     const q = p.toString();
-    return request<{ items: Record<string, unknown>[]; nextCursor?: string; readOnly?: boolean }>(
-      `/records${q ? `?${q}` : ""}`,
-    );
+    return request<{
+      items: Record<string, unknown>[];
+      nextCursor?: string;
+      readOnly?: boolean;
+      sourceOptions?: { id: string; name: string }[];
+    }>(`/records${q ? `?${q}` : ""}`);
   },
   record: (id: string, asOf: number | null) =>
     request<Record<string, unknown>>(`/records/${encodeURIComponent(id)}${querySuffix(asOf)}`),
-  governance: () => request<Record<string, unknown>>("/governance/egress"),
+  governance: () =>
+    request<Record<string, unknown> & { readOnly?: boolean; viewNote?: string }>(
+      "/governance/egress",
+    ),
   resetCircuit: (host: string) =>
     request(`/governance/egress/${encodeURIComponent(host)}/reset-circuit`, {
       method: "POST",
       body: JSON.stringify({ confirm: true }),
     }),
   configSummary: () => request<Record<string, unknown>>("/config/summary"),
-  configFiles: () => request<{ items: string[] }>("/config/files"),
+  configFiles: () =>
+    request<{
+      items: string[];
+      groups: { id: string; label: string; items: { path: string; label: string }[] }[];
+    }>("/config/files"),
   configFile: (path: string) =>
     request<{ path: string; text: string; canRollback: boolean }>(
       `/config/files/${encodeURIComponent(path)}`,

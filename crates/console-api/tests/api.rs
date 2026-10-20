@@ -149,12 +149,20 @@ async fn config_files_whitelist_and_traversal() {
     let app = app(services);
     let (status, json) = get_json(app.clone(), "/console/api/v1/config/files").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(json["items"].as_array().unwrap().iter().any(|p| p == "system.yaml"));
+    assert!(json["items"].as_array().unwrap().iter().any(|p| p.as_str().unwrap_or("").starts_with("presets/")));
+    assert!(json.get("groups").is_some());
     let (status, _) = get_json(app.clone(), "/console/api/v1/config/files/../system.yaml").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, _) = put_json(
-        app,
+        app.clone(),
         "/console/api/v1/config/files/evil.yaml",
+        r#"{"text":"x","confirm":true}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = put_json(
+        app,
+        "/console/api/v1/config/files/accessors/api.yaml",
         r#"{"text":"x","confirm":true}"#,
     )
     .await;
@@ -165,8 +173,16 @@ async fn config_files_whitelist_and_traversal() {
 async fn config_write_validate_rollback() {
     let (_d, config, services) = fixture().await;
     let app = app(services);
-    let path = "/console/api/v1/config/files/system.yaml";
-    let (status, file) = get_json(app.clone(), path).await;
+    let (_status, json) = get_json(app.clone(), "/console/api/v1/config/files").await;
+    let preset_path = json["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p.as_str().unwrap_or("").starts_with("presets/"))
+        .and_then(|p| p.as_str())
+        .unwrap();
+    let path = format!("/console/api/v1/config/files/{preset_path}");
+    let (status, file) = get_json(app.clone(), &path).await;
     assert_eq!(status, StatusCode::OK);
     let original = file["text"].as_str().unwrap();
     let bad = "::: not yaml";
@@ -174,19 +190,19 @@ async fn config_write_validate_rollback() {
         app.clone(),
         "/console/api/v1/config/file-validate",
         &format!(
-            r#"{{"path":"system.yaml","text":{}}}"#,
+            r#"{{"path":"{preset_path}","text":{}}}"#,
             serde_json::to_string(bad).unwrap()
         ),
         &[],
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let disk = std::fs::read_to_string(config.path().join("system.yaml")).unwrap();
+    let disk = std::fs::read_to_string(config.path().join(preset_path)).unwrap();
     assert_eq!(disk, original);
     let patched = format!("{}\n# console test\n", original.trim_end());
     let (status, _) = put_json(
         app.clone(),
-        path,
+        &path,
         &format!(
             r#"{{"text":{},"confirm":true}}"#,
             serde_json::to_string(&patched).unwrap()
@@ -197,12 +213,12 @@ async fn config_write_validate_rollback() {
     let (status, _) = post_json(
         app,
         "/console/api/v1/config/file-rollback",
-        r#"{"path":"system.yaml","confirm":true}"#,
+        &format!(r#"{{"path":"{preset_path}","confirm":true}}"#),
         &[],
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let disk = std::fs::read_to_string(config.path().join("system.yaml")).unwrap();
+    let disk = std::fs::read_to_string(config.path().join(preset_path)).unwrap();
     assert_eq!(disk, original);
 }
 
