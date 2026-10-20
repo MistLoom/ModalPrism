@@ -260,6 +260,7 @@ fn discovery_from(
                 accessor: input.source.accessor.clone(),
                 render: input.source.render,
                 priority: 0,
+                needs: Vec::new(),
             },
         )
     };

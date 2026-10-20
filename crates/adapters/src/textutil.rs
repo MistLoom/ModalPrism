@@ -39,6 +39,22 @@ pub fn absolute_http(base: &str, href: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+/// 配置里的日期模式。使用第 1 个捕获组；模式无法编译或没有捕获组时返回空。
+pub fn first_capture(pattern: &str, text: &str) -> Option<String> {
+    let expression = regex::Regex::new(pattern).ok()?;
+    let groups = expression.captures(text)?;
+    let raw = groups.get(1)?.as_str().trim();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw.to_string())
+    }
+}
+
+pub fn capture_pattern(pattern: &str) -> Result<(), regex::Error> {
+    regex::Regex::new(pattern).map(|_| ())
+}
+
 pub fn url_identity(absolute: &str) -> Option<String> {
     if absolute.is_empty() || absolute.chars().any(char::is_whitespace) {
         None

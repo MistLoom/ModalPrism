@@ -97,6 +97,8 @@ pub enum Follow {
         accessor: String,
         render: RenderMode,
         priority: i32,
+        /// 详情页要补的字段。空列表表示这条跟进不入队。
+        needs: Vec<String>,
     },
 }
 

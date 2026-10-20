@@ -43,6 +43,7 @@ fn call(params: serde_json::Value) -> PaidCall {
         endpoint: "/v1".into(),
         params,
         body: Bytes::new(),
+        headers: Vec::new(),
     }
 }
 

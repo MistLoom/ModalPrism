@@ -1,0 +1,17 @@
+id: adapter/page-fields
+kind: adapter
+name: 页面字段
+implementation: builtin:page-fields
+role: content
+consumes:
+  - {kind: raw, part_role: document, media_type: text/html}
+produces:
+  - {kind: struct, variant: page}
+limits:
+  timeout: 30s
+  concurrency: 1
+  retry:
+    attempts: 0
+    backoff: exponential
+    base: 1s
+    max: 30s

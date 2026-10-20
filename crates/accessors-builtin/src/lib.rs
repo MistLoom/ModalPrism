@@ -2,6 +2,7 @@
 
 mod api;
 mod browser;
+mod bundle;
 mod envelope;
 mod file;
 mod headers;
@@ -19,6 +20,7 @@ pub use browser::{
     BrowserAccessor, BrowserEngine, EngineOutput, EngineRequest, MatchedBody, MoliCommand,
     moli_args, parse_dump,
 };
+pub use bundle::BundleListAccessor;
 pub use file::FileAccessor;
 pub use http::HttpAccessor;
 pub use paid::PaidApiAccessor;
@@ -32,6 +34,7 @@ use accessors::Accessor;
 pub fn by_id(id: &str) -> Option<Box<dyn Accessor>> {
     match id {
         "http" => Some(Box::new(HttpAccessor)),
+        "bundle-list" => Some(Box::new(BundleListAccessor)),
         "rss" => Some(Box::new(RssAccessor)),
         "api" => Some(Box::new(ApiAccessor)),
         "paid-api" => Some(Box::new(PaidApiAccessor)),

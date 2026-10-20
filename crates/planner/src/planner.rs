@@ -159,6 +159,23 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             }
             tasks.push(leased);
         }
+        let follow_occupied = self.queue.leased_count(QueueName::Free, now).await?;
+        let follow_room = capacities
+            .room(QueueName::Free)
+            .saturating_sub(follow_occupied);
+        if follow_room > 0 {
+            let lease_for = plans
+                .iter()
+                .filter(|plan| plan.enabled && plan.queue == QueueName::Free)
+                .map(|plan| lease_span(plan.timeout))
+                .max()
+                .unwrap_or_else(|| lease_span(Duration::from_secs(45)));
+            let follows = self
+                .queue
+                .lease_follows(QueueName::Free, follow_room, lease_for, now)
+                .await?;
+            tasks.extend(follows);
+        }
         save_db(&self.persist, &db).await?;
         Ok(tasks)
     }

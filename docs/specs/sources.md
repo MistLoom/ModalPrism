@@ -10,20 +10,24 @@
 |---|---|---|
 | RSS / Atom | `accessor/rss` | `adapter/feed-items` |
 | 网页列表、Markdown 列表、更新日志 | `accessor/http` | `adapter/html-list` |
+| 详情页字段 | `accessor/http` | `adapter/page-fields` |
+| 页面内嵌脚本中的列表 | `accessor/bundle-list` | `adapter/json-list` |
 | JSON 接口 | `accessor/api` | `adapter/json-list` |
 | 带 `{query}` 的查询地址 | `accessor/search` | `adapter/json-list` |
 | 按次计费的 JSON 接口 | `accessor/paid-api` | `adapter/json-list` |
 | 外部推送 | `accessor/push` | `adapter/json-list` |
 
-`html-list` 的 `parseMode` 取 `html`、`markdown`、`docusaurus_changelog`、`intercom_changelog`。需要阅读器渲染页面时，把列表地址写成 `https://r.jina.ai/` 加上目标 URL，并在该信源的访问 spec 里写鉴权头。采集不会在抓取失败后自行改走阅读器。
+`html-list` 的 `parseMode` 取 `html`、`markdown`、`docusaurus_changelog`、`intercom_changelog`。`publishedAtRegex` 写在条目 HTML 上，取第一个捕获组，再按日期规则解析。需要阅读器渲染页面时，把列表地址写成 `https://r.jina.ai/` 加上目标 URL，并在该信源的访问 spec 里写鉴权头。采集不会在抓取失败后自行改走阅读器。
 
-付费传输把 `params` 写成查询参数，不附加鉴权头。密钥放在信源 `access.spec` 的查询参数或正文里，用 `${env:NAME}` 引用环境变量。`paid.budget` 的计量单位未规定，装配不把它换成次数或金额。付费访问器上的 `paid.service` 与 `paid.budget` 只满足非空要求。
+列表 spec 可以写 `detail`。`maxFetches` 为 0 到 50，`fields` 取 `publishedAt`、`title`、`summary`。请求的字段在列表里缺失，且摘要没有作为正文时，产出 `Follow::Yes`，`needs` 列出缺失字段，访问器是 `accessor/http`。`maxFetches` 大于 0 时这些跟进入队，每轮不超过该上限。已经写入 `struct:page` 且所需字段非空的资源不占名额。跟进任务不改写信源的下次时间和游标。详情页由 `adapter/page-fields` 读取，结果写入 `struct:page`。
+
+付费请求的 `headers` 写在信源 `access.spec`，格式与 HTTP 访问器相同，原样进入 `PaidCall`。密钥用 `${env:NAME}` 写在头或正文里。`enabled: false` 的模块保留 `${env:NAME}` 字面量，加载不因变量缺失失败。启用后变量缺失则整次加载失败。`paid.budget` 的计量单位未规定，装配不把它换成次数或金额。付费访问器上的 `paid.service` 与 `paid.budget` 只满足非空要求。
 
 信源模块没有 `paid` 字段，因此使用 `accessor/paid-api` 的信源进入免费队列。付费队列只在信源写出 `paid` 时选用；当前模块字段表不接受该键。
 
 `policy.robots.mode` 可以写在单个信源上。`ignore` 必须同时写 `robots_reason`，并且不写 `exempt_as`。
 
-发现结果里的 `Follow` 不入队。列表没有自带正文、且 `summaryIsBody` 不为真时，不另发详情请求。
+脚本里的列表用 `accessor/bundle-list`。它先读页面，抽不出条目时再取页面里的脚本地址。`extract` 按顺序尝试 `quoted-fields` 与 `route-record`，命中的第一份脚本停止。抽出的 JSON 交给 `adapter/json-list`。
 
 ## 目录中的信源
 
@@ -54,6 +58,8 @@
 
 `source/inbound-items` 监听推送通道 `items`。令牌写在该信源的 `access.spec.token`，缺省值只用于环回监听。正文是 JSON：`items` 数组，元素含 `title`、`url`，可选 `publishedAt` 与 `summary`。
 
-`source/html-listing` 与 `source/json-listing` 的 `enabled` 为 false。它们声明网页列表和 JSON 列表的字段，地址是 `https://example.com/` 下的示例路径，不作为线上目标。
+`source/deepseek-updates` 读取 `https://api-docs.deepseek.com/zh-cn/updates/`。访问器是 `accessor/http`，适配器是 `adapter/html-list`，`parseMode` 为 `docusaurus_changelog`，`publishedAtUtcOffset` 为 `+08:00`。间隔 2 小时。首次导入保留 30 条、365 天以内的条目。
 
-`source/status-search` 与 `source/wechat-account` 的 `enabled` 为 false。前者请求 `https://api.socialdata.tools/twitter/search`，查询参数为 `query` 与 `type`，条目取 `tweets`，标题和摘要取 `full_text`，地址由 `user.screen_name` 与 `id_str` 组成。 `summaryIsBody` 为真，摘要写入 `text` facet。后者向 `https://www.dajiala.com/fbmain/monitor/v3/post_history` 发送 POST，条目取 `data`，时间字段 `post_time` 的单位是 `epoch_s`。两份声明都不含密钥。
+`source/mimo-blog` 读取 `https://mimo.xiaomi.com/`。访问器是 `accessor/bundle-list`。先按 `sectionTitle:"Blog"` 到下一个 `sectionTitle:` 抽取 `title`、`link`、`desc`；没有结果时再读 `routePath` 以 `/blog/` 开头、`lang` 为 `en` 的记录，跳过 `/blog/`、`/blog/index`、`/blog/blog1`。脚本最多 8 个，每个不超过 1048576 字节。抽出的条目交给 `adapter/json-list`。缺标题或缺发布时间时跟进详情页，每轮最多 30 次。详情选择器是 `time.hero-date` 的 `datetime`、`h1.hero-title` 和 `p.hero-subtitle`。间隔 2 小时。首次导入保留 30 条、365 天以内的条目。
+
+`source/status-search` 与 `source/wechat-account` 的 `enabled` 为 false。前者请求 `https://api.socialdata.tools/twitter/search`，查询参数为 `query` 与 `type`，条目取 `tweets`，标题和摘要取 `full_text`，地址由 `user.screen_name` 与 `id_str` 组成。`summaryIsBody` 为真，摘要写入 `text` facet。请求头是 `Authorization: Bearer ${env:SOCIALDATA_API_KEY}`。启用时设置该环境变量，把 `query` 里的 `from:example` 换成目标账号，再把 `enabled` 改为 true。后者向 `https://www.dajiala.com/fbmain/monitor/v3/post_history` 发送 POST，正文是 `{"ghid":"gh_example","key":"${env:DAJIALA_KEY}","verifycode":""}`。条目取 `data`，时间字段 `post_time` 的单位是 `epoch_s`。启用时设置 `DAJIALA_KEY`，把 `ghid` 换成目标账号，再把 `enabled` 改为 true。密钥留在环境里，不写入配置文件。

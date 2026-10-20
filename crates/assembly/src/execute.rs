@@ -8,8 +8,8 @@ use std::time::Instant;
 use accessors::{AccessContext, AccessHints, AccessRequest, Accessor, Session, SessionPool};
 use accessors_builtin::{BrowserAccessor, MoliCommand, by_id};
 use adapters::{
-    Admission, DetectorChoice, PartBytes, Registry, empty_identities, parse_pipeline, run,
-    source_view,
+    Admission, DetectorChoice, FollowRequest, PartBytes, Registry, empty_identities,
+    parse_pipeline, run, source_view,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -17,8 +17,8 @@ use config::Snapshot;
 use planner::{Classified, Quality, ReceiptBody, TaskSuccess};
 use serde_json::{Map, Value};
 use strata_model::{
-    Body, ErrorClass, FacetKind, IdentityKey, LineageInput, Locator, Op, PartRole, Producer,
-    QueueName, RawEnvelope, SourceId, Target, TaskId, TaskReason, Timestamp,
+    AccessTask, Body, ErrorClass, FacetKind, IdentityKey, LineageInput, Locator, Op, PartRole,
+    Producer, QueueName, RawEnvelope, Rid, SourceId, Target, TaskId, TaskReason, Timestamp,
 };
 
 use crate::stage::{DiskStaging, read_part};
@@ -43,21 +43,38 @@ impl SessionPool for NoSession {
     }
 }
 
+pub(crate) struct FollowWork {
+    pub task: AccessTask,
+    pub identity: String,
+    pub needs: Vec<String>,
+}
+
+pub(crate) struct Fetched {
+    pub success: TaskSuccess,
+    pub follows: Vec<FollowWork>,
+    pub max_fetches: usize,
+}
+
 pub async fn fetch(
     state: &FetchState,
     task: &strata_model::AccessTask,
     cursor: Option<Value>,
-) -> Result<TaskSuccess, Classified> {
+    resource: Option<Rid>,
+) -> Result<Fetched, Classified> {
     let module = state
         .snapshot
         .modules
         .get(task.source_id.as_str())
         .cloned()
         .ok_or_else(|| classified(ErrorClass::Config, "config"))?;
-    let accessor_id = module
-        .pointer("/access/accessor")
-        .and_then(Value::as_str)
-        .unwrap_or(task.accessor.as_str());
+    let accessor_id = if task.reason == TaskReason::Follow {
+        task.accessor.as_str()
+    } else {
+        module
+            .pointer("/access/accessor")
+            .and_then(Value::as_str)
+            .unwrap_or(task.accessor.as_str())
+    };
     let implementation = state
         .snapshot
         .modules
@@ -124,17 +141,33 @@ pub async fn fetch(
         .get("pipeline")
         .cloned()
         .unwrap_or(Value::Array(Vec::new()));
-    let ops = if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
-        raw_ops(&envelopes)?
+    let (ops, follow_requests) =
+        if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
+            (raw_ops(&envelopes)?, Vec::new())
+        } else {
+            adapted_ops(
+                state,
+                task,
+                &module,
+                &envelopes,
+                &pipeline,
+                initial,
+                resource.as_ref(),
+            )
+            .await?
+        };
+    let max_fetches = detail_budget(&module);
+    let follows = if task.reason == TaskReason::Schedule && max_fetches > 0 {
+        follow_tasks(task, &follow_requests)?
     } else {
-        adapted_ops(state, task, &module, &envelopes, &pipeline, initial).await?
+        Vec::new()
     };
     let new_resources = ops
         .iter()
         .filter(|op| matches!(op, Op::Ensure { .. }))
         .count() as u64;
     let last = envelopes.last();
-    Ok(TaskSuccess {
+    let success = TaskSuccess {
         ops,
         cursor: last.and_then(|item| item.cursor_candidate.clone()),
         receipt: match last {
@@ -155,6 +188,12 @@ pub async fn fetch(
             .map(str::to_string),
         cost: 0,
         adapters: Vec::new(),
+        follows: Vec::new(),
+    };
+    Ok(Fetched {
+        success,
+        follows,
+        max_fetches,
     })
 }
 
@@ -227,7 +266,9 @@ pub(crate) async fn inbound_ops(
     if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
         raw_ops(envelopes)
     } else {
-        adapted_ops(state, &task, module, envelopes, &pipeline, false).await
+        adapted_ops(state, &task, module, envelopes, &pipeline, false, None)
+            .await
+            .map(|(ops, _)| ops)
     }
 }
 
@@ -284,7 +325,8 @@ async fn adapted_ops(
     envelopes: &[RawEnvelope],
     pipeline: &Value,
     initial: bool,
-) -> Result<Vec<Op>, Classified> {
+    resource: Option<&Rid>,
+) -> Result<(Vec<Op>, Vec<FollowRequest>), Classified> {
     let rules =
         parse_pipeline(pipeline).map_err(|error| classified(error.class(), error.to_string()))?;
     let mut parts = Vec::new();
@@ -316,10 +358,10 @@ async fn adapted_ops(
         adapters::RunRequest {
             parts,
             pipeline: rules,
-            reason: TaskReason::Schedule,
-            source: source_view(task.source_id.as_str(), task.accessor.as_str())
+            reason: task.reason,
+            source: source_view(task.source_id.as_str(), accessor_of(task, module).as_str())
                 .map_err(|error| classified(error.class(), error.to_string()))?,
-            resource: None,
+            resource: resource.cloned(),
             origin: None,
             locator: task.locator.clone(),
             detector: DetectorChoice::Basic,
@@ -337,8 +379,73 @@ async fn adapted_ops(
     )
     .await
     .map_err(|error| classified(error.class(), error.to_string()))?;
-    Ok(output.changeset.ops)
+    Ok((output.changeset.ops, output.follows))
 }
+
+fn accessor_of(task: &AccessTask, module: &Value) -> String {
+    if task.reason == TaskReason::Follow {
+        return task.accessor.clone();
+    }
+    module
+        .pointer("/access/accessor")
+        .and_then(Value::as_str)
+        .unwrap_or(task.accessor.as_str())
+        .to_string()
+}
+
+fn detail_budget(module: &Value) -> usize {
+    let Some(steps) = module.get("pipeline").and_then(Value::as_array) else {
+        return 0;
+    };
+    let mut max = 0u64;
+    for step in steps {
+        let Some(spec) = step.get("spec").and_then(Value::as_object) else {
+            continue;
+        };
+        for value in spec.values() {
+            if let Some(count) = value.pointer("/detail/maxFetches").and_then(Value::as_u64) {
+                max = max.max(count);
+            }
+        }
+    }
+    usize::try_from(max).unwrap_or(0)
+}
+
+fn follow_tasks(
+    task: &AccessTask,
+    follows: &[FollowRequest],
+) -> Result<Vec<FollowWork>, Classified> {
+    let mut out = Vec::new();
+    for follow in follows {
+        if follow.needs.is_empty() {
+            continue;
+        }
+        let seq = FOLLOW_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let task_id = TaskId::new(format!("t_follow_{seq}"))
+            .map_err(|_| classified(ErrorClass::Permanent, "identity"))?;
+        out.push(FollowWork {
+            task: AccessTask {
+                task_id,
+                source_id: task.source_id.clone(),
+                accessor: follow.accessor.clone(),
+                locator: follow.locator.clone(),
+                spec: Value::Object(Map::new()),
+                reason: TaskReason::Follow,
+                priority: 20,
+                queue: QueueName::Free,
+                lease_until: Timestamp::now(),
+                attempt: 0,
+                batch_key: None,
+                generation: task.generation,
+            },
+            identity: follow.identity.clone(),
+            needs: follow.needs.clone(),
+        });
+    }
+    Ok(out)
+}
+
+static FOLLOW_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 async fn receipt_of(
     paid: &PaidGw,

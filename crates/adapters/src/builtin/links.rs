@@ -92,6 +92,7 @@ impl SearchAdapter for LinkDiscovery {
                     accessor: input.source.accessor.clone(),
                     render: input.source.render,
                     priority: 0,
+                    needs: Vec::new(),
                 },
                 materialize: Vec::new(),
             });

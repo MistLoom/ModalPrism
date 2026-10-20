@@ -136,13 +136,17 @@ fn locator_of(module: &Value) -> Locator {
 
 fn fixture(id: &str, name: &str) -> (&'static str, String) {
     match id {
-        "source/html-listing" => (
+        "source/deepseek-updates" => (
             "text/html",
-            r#"<div class="news-list"><div class="news-item"><h2><a href="https://example.com/posts/first">第一条示例新闻</a></h2><time datetime="2026-10-01T09:00:00+08:00">10 月 1 日</time></div><div class="news-item"><h2><a href="/news">列表自身</a></h2></div></div>"#.into(),
+            format!(
+                r#"<article><h2 id="day">时间: 2026-10-17</h2><h3 id="ship">{name}</h3></article>"#
+            ),
         ),
-        "source/json-listing" => (
+        "source/mimo-blog" => (
             "application/json",
-            r#"{"data":{"items":[{"id":"first","title":"第一条示例新闻","summary":"摘要","published_at":"2026-10-01T09:00:00+08:00"}]}}"#.into(),
+            format!(
+                r#"{{"items":[{{"url":"https://mimo.xiaomi.com/blog/post","title":"{name}","summary":"摘要","publishedAt":"2026-09-27"}}]}}"#
+            ),
         ),
         "source/status-search" => (
             "application/json",
@@ -186,9 +190,6 @@ async fn every_declared_source_maps_its_fixture() {
         let found = titles(&output.changeset.ops);
         assert!(!found.is_empty(), "{id} 没有映射出条目");
         match id.as_str() {
-            "source/html-listing" | "source/json-listing" => {
-                assert_eq!(found, ["第一条示例新闻"]);
-            }
             "source/status-search" => {
                 assert_eq!(found, ["Hello & world"]);
                 assert!(
@@ -324,6 +325,101 @@ async fn json_list_reads_units_and_templates() {
         "{keys:?}"
     );
     assert!(keys.iter().any(|key| key == "ext:20261001"), "{keys:?}");
+}
+
+#[tokio::test]
+async fn html_list_reads_a_configured_date_pattern() {
+    let registry = Registry::builtins();
+    let html = r#"<article class="card"><a href="https://example.com/posts/a">标题</a><span>发布于 2026-09-27</span></article>"#;
+    let pipeline = json!([{
+        "run": ["adapter/html-list"],
+        "spec": {"adapter/html-list": {
+            "item": "article.card",
+            "link": "a",
+            "title": "a",
+            "publishedAtRegex": "发布于 (\\d{4}-\\d{2}-\\d{2})",
+            "detail": {"maxFetches": 2, "fields": ["publishedAt"]}
+        }}
+    }]);
+    let output = run(&registry, bare(html, "text/html", pipeline))
+        .await
+        .unwrap();
+    assert_eq!(titles(&output.changeset.ops), ["标题"]);
+    assert!(output.follows.is_empty());
+    let stamp = output.changeset.ops.iter().find_map(|op| match op {
+        Op::PutFacet {
+            kind: FacetKind::Struct,
+            variant: Some(variant),
+            body: Body::Struct { value },
+            ..
+        } if variant == "discovery" => value
+            .pointer("/hints/publishedAt")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        _ => None,
+    });
+    assert_eq!(stamp.as_deref(), Some("2026-09-27T00:00:00Z"));
+}
+
+#[tokio::test]
+async fn missing_detail_field_requests_one_follow() {
+    let registry = Registry::builtins();
+    let body = r#"{"items":[{"url":"https://example.com/a","title":"甲"},{"url":"https://example.com/b","title":"乙","publishedAt":"2026-10-01T00:00:00Z"}]}"#;
+    let pipeline = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "items": "/items",
+            "url": "url",
+            "title": "title",
+            "publishedAt": "publishedAt",
+            "detail": {"maxFetches": 4, "fields": ["publishedAt"]}
+        }}
+    }]);
+    let output = run(&registry, bare(body, "application/json", pipeline))
+        .await
+        .unwrap();
+    assert_eq!(output.follows.len(), 1);
+    assert_eq!(output.follows[0].accessor, "accessor/http");
+    assert_eq!(output.follows[0].needs, ["publishedAt"]);
+}
+
+#[tokio::test]
+async fn page_fields_reads_the_detail_date() {
+    let registry = Registry::builtins();
+    let html = r#"<time class="hero-date" datetime="2026-09-27">September 27, 2026</time><h1 class="hero-title">文章标题</h1><p class="hero-subtitle">一句摘要</p>"#;
+    let pipeline = json!([{
+        "for": "follow",
+        "run": ["adapter/page-fields"],
+        "spec": {"adapter/page-fields": {
+            "publishedAt": "time.hero-date",
+            "publishedAtAttr": "datetime",
+            "title": "h1.hero-title",
+            "summary": "p.hero-subtitle"
+        }}
+    }]);
+    let mut request = bare(html, "text/html", pipeline);
+    request.reason = TaskReason::Follow;
+    request.resource = Some(strata_model::Rid::parse("r_01JAF3K8Z2X7Q9M4T6V0B5N1CE").unwrap());
+    let output = run(&registry, request).await.unwrap();
+    let page = output.changeset.ops.iter().find_map(|op| match op {
+        Op::PutFacet {
+            kind: FacetKind::Struct,
+            variant: Some(variant),
+            body: Body::Struct { value },
+            ..
+        } if variant == "page" => Some(value),
+        _ => None,
+    });
+    let page = page.unwrap();
+    assert_eq!(
+        page.get("publishedAt").and_then(Value::as_str),
+        Some("2026-09-27T00:00:00Z")
+    );
+    assert_eq!(page.get("title").and_then(Value::as_str), Some("文章标题"));
+    assert_eq!(
+        page.get("summary").and_then(Value::as_str),
+        Some("一句摘要")
+    );
 }
 
 fn bare(body: &str, media: &str, pipeline: Value) -> RunRequest {

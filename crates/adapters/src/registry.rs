@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::builtin::{
-    BasicDetector, FeedFulltext, FeedItems, HtmlList, JsonLd, JsonList, LinkDiscovery, Readability,
+    BasicDetector, FeedFulltext, FeedItems, HtmlList, JsonLd, JsonList, LinkDiscovery, PageFields,
+    Readability,
 };
 use crate::error::AdapterError;
 use crate::model::AdapterRole;
@@ -44,6 +45,9 @@ impl Registry {
             .expect("内置内容适配器");
         registry
             .register_content(Arc::new(Readability::new()))
+            .expect("内置内容适配器");
+        registry
+            .register_content(Arc::new(PageFields::new()))
             .expect("内置内容适配器");
         registry
             .register_content(Arc::new(JsonLd::new()))

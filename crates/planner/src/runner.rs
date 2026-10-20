@@ -44,6 +44,7 @@ pub struct TaskSuccess {
     pub render_level: Option<String>,
     pub cost: u64,
     pub adapters: Vec<String>,
+    pub follows: Vec<strata_model::AccessTask>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,7 +85,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         receipts: &R,
         now: Timestamp,
         deadline: Timestamp,
-    ) -> Result<(), PlannerError> {
+    ) -> Result<Vec<strata_model::AccessTask>, PlannerError> {
         let _guard = self.lock().await;
         let cursor = self
             .queue()
@@ -104,7 +105,10 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         };
         match outcome {
             Ok(success) => self.succeed(plan, &task, success, receipts, now).await,
-            Err(error) => self.fail(plan, &task, error, now).await,
+            Err(error) => {
+                self.fail(plan, &task, error, now).await?;
+                Ok(Vec::new())
+            }
         }
     }
 
@@ -115,7 +119,14 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         success: TaskSuccess,
         receipts: &R,
         now: Timestamp,
-    ) -> Result<(), PlannerError> {
+    ) -> Result<Vec<strata_model::AccessTask>, PlannerError> {
+        if task.reason != strata_model::TaskReason::Schedule {
+            self.queue()
+                .apply(changeset(plan, Some(task.task_id.clone()), success.ops))
+                .await?;
+            return Ok(Vec::new());
+        }
+        let follows = success.follows.clone();
         let mut db = self.load().await?;
         let signal = signal_of(&[
             success.ttl,
@@ -158,7 +169,10 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         if let Some(receipt) = &success.receipt {
             receipts.complete(&receipt.id).await?;
         }
-        Ok(())
+        if !follows.is_empty() {
+            self.queue().enqueue(&follows).await?;
+        }
+        Ok(follows)
     }
 
     async fn fail(
@@ -168,6 +182,13 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         error: Classified,
         now: Timestamp,
     ) -> Result<(), PlannerError> {
+        if task.reason != strata_model::TaskReason::Schedule {
+            let retry_at = error.retry_at.unwrap_or(now);
+            return self
+                .queue()
+                .nack(&task.task_id, retry_at, &error.message)
+                .await;
+        }
         let mut db = self.load().await?;
         let soft = matches!(error.message.as_str(), "robots" | "unknown-receipt");
         let wait = error.message == "unknown-wait";

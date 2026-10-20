@@ -1033,3 +1033,130 @@ async fn concurrent_identical_push_keys_store_one_envelope() {
     assert!(ids.iter().all(|id| id == &ids[0]));
     assert_eq!(puts.load(Ordering::SeqCst), 1);
 }
+
+struct KeepStaging(std::sync::Mutex<Vec<Vec<u8>>>);
+
+impl Staging for KeepStaging {
+    fn put(&self, bytes: &[u8]) -> Result<strata_model::PartRef, accessors::AccessError> {
+        self.0.lock().expect("暂存").push(bytes.to_vec());
+        Ok(strata_model::PartRef::from_bytes(bytes))
+    }
+}
+
+struct HeaderPaid(Mutex<Vec<(String, String)>>);
+
+#[async_trait]
+impl PaidGateway for HeaderPaid {
+    async fn call(&self, request: PaidCall) -> Result<PaidResponse, accessors::AccessError> {
+        self.0.lock().await.extend(request.headers);
+        Ok(PaidResponse {
+            status: 200,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: Bytes::from_static(br#"{"tweets":[]}"#),
+            receipt_id: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn bundle_list_reads_route_records_from_a_script() {
+    let html = r#"<script src="https://cdn.example/app.js"></script>"#;
+    let script = r#"pages:[{title:"",routePath:"/blog/post",lang:"en",frontmatter:{title:"Hello Post",description:"Desc",date:"2026-09-27"},version:""}]"#;
+    let kept = Arc::new(KeepStaging(std::sync::Mutex::new(Vec::new())));
+    let egress = Arc::new(ScriptEgress {
+        hits: AtomicUsize::new(0),
+        responses: Mutex::new(vec![
+            HttpResponse {
+                status: 200,
+                headers: vec![("content-type".into(), "text/html".into())],
+                body: Bytes::from(html),
+                final_url: "https://mimo.example/".into(),
+            },
+            HttpResponse {
+                status: 200,
+                headers: vec![("content-type".into(), "application/javascript".into())],
+                body: Bytes::from(script),
+                final_url: "https://cdn.example/app.js".into(),
+            },
+        ]),
+        seen: Mutex::new(Vec::new()),
+    });
+    let context = AccessContext {
+        egress: egress.clone(),
+        paid: Arc::new(ScriptPaid {
+            hits: AtomicUsize::new(0),
+            fail_budget: false,
+        }),
+        sessions: Arc::new(ScriptSessions),
+        staging: kept.clone(),
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+    let accessor = by_id("bundle-list").unwrap();
+    accessor
+        .access(
+            request(
+                Locator::Url {
+                    url: "https://mimo.example/".into(),
+                },
+                json!({
+                    "extract": [{
+                        "type": "route-record",
+                        "routePrefix": "/blog/",
+                        "lang": "en",
+                        "skip": ["/blog/"]
+                    }]
+                }),
+            ),
+            &context,
+        )
+        .await
+        .unwrap();
+    let body = {
+        let stored = kept.0.lock().expect("暂存");
+        String::from_utf8(stored.last().unwrap().clone()).unwrap()
+    };
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["items"][0]["title"], "Hello Post");
+    assert_eq!(value["items"][0]["url"], "https://mimo.example/blog/post");
+    assert_eq!(value["items"][0]["publishedAt"], "2026-09-27");
+    let seen = egress.seen.lock().await;
+    assert_eq!(seen[1].url, "https://cdn.example/app.js");
+}
+
+#[tokio::test]
+async fn paid_api_sends_configured_headers() {
+    let headers = Arc::new(HeaderPaid(Mutex::new(Vec::new())));
+    let context = AccessContext {
+        egress: Arc::new(ScriptEgress {
+            hits: AtomicUsize::new(0),
+            responses: Mutex::new(Vec::new()),
+            seen: Mutex::new(Vec::new()),
+        }),
+        paid: headers.clone(),
+        sessions: Arc::new(ScriptSessions),
+        staging: Arc::new(MemStaging {
+            puts: Arc::new(AtomicUsize::new(0)),
+        }),
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+    let accessor = by_id("paid-api").unwrap();
+    accessor
+        .access(
+            request(
+                Locator::ApiEndpoint {
+                    endpoint: "https://api.example/search".into(),
+                },
+                json!({
+                    "service": "socialdata",
+                    "headers": [["Authorization", "Bearer test-key"]]
+                }),
+            ),
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        headers.0.lock().await.as_slice(),
+        [("Authorization".into(), "Bearer test-key".into())]
+    );
+}

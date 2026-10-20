@@ -7,7 +7,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use strata_model::{
-    AccessTask, ChangeSet, CommitId, CommitResult, QueueName, TaskId, Timestamp, WaitFor,
+    AccessTask, ChangeSet, CommitId, CommitResult, QueueName, TaskId, TaskReason, Timestamp,
+    WaitFor,
 };
 
 use crate::error::Error;
@@ -159,6 +160,14 @@ pub(crate) trait ControlStore {
         lease_for: Duration,
         now: Timestamp,
     ) -> Result<Option<AccessTask>, Error>;
+
+    async fn lease_follows(
+        &self,
+        queue: QueueName,
+        count: usize,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Vec<AccessTask>, Error>;
 
     async fn accepted_state(&self, scope: &str, key: &str) -> Result<Option<(u64, String)>, Error>;
 
@@ -726,6 +735,72 @@ impl ControlStore for SqliteControl {
             Err(Error::TaskState(_)) => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    async fn lease_follows(
+        &self,
+        queue: QueueName,
+        count: usize,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Vec<AccessTask>, Error> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT task_id, payload, status, lease_until, retry_at, priority, created_at
+             FROM tasks WHERE queue = ? AND status IN ('queued', 'leased')",
+        )
+        .bind(queue_text(queue))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "读取跟进任务",
+            source,
+        })?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let payload: String = row.get(1);
+            let task: AccessTask = serde_json::from_str(&payload)?;
+            if task.reason != TaskReason::Follow {
+                continue;
+            }
+            let status: String = row.get(2);
+            let lease_until: Option<String> = row.get(3);
+            let retry_at: Option<String> = row.get(4);
+            let created_at: String = row.get(6);
+            if !lease_due(&status, lease_until.as_deref(), now)? {
+                continue;
+            }
+            if let Some(retry_at) = retry_at.as_deref() {
+                if Timestamp::parse(retry_at)? > now {
+                    continue;
+                }
+            }
+            candidates.push(Candidate {
+                task_id: row.get(0),
+                payload,
+                priority: row.get(5),
+                created_at: Timestamp::parse(&created_at)?,
+            });
+        }
+        candidates.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.created_at.cmp(&right.created_at))
+        });
+        candidates.truncate(count);
+        let mut leased = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let task_id = TaskId::new(candidate.task_id)?;
+            match self.lease_id(&task_id, lease_for, now).await {
+                Ok(task) => leased.push(task),
+                Err(Error::TaskState(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(leased)
     }
 
     async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error> {

@@ -155,6 +155,19 @@ impl Queue for StrataQueue {
             .map_err(plan_err)
     }
 
+    async fn lease_follows(
+        &self,
+        queue: QueueName,
+        count: usize,
+        lease_for: Duration,
+        now: Timestamp,
+    ) -> Result<Vec<AccessTask>, PlannerError> {
+        self.0
+            .lease_follows(queue, count, lease_for, now)
+            .await
+            .map_err(plan_err)
+    }
+
     async fn active(&self, source: &str, locator_key: &str) -> Result<bool, PlannerError> {
         self.0
             .task_active(source, locator_key)
@@ -261,6 +274,7 @@ impl Handler for Write {
             render_level: None,
             cost: 0,
             adapters: Vec::new(),
+            follows: Vec::new(),
         })
     }
 }
@@ -322,6 +336,7 @@ async fn control_store_keeps_lease_cursor_and_receipt() {
                 endpoint: "/v1".into(),
                 params,
                 body: Bytes::new(),
+                headers: Vec::new(),
             },
             1_000,
         )

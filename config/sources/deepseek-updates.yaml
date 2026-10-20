@@ -1,0 +1,23 @@
+id: source/deepseek-updates
+kind: source
+name: DeepSeek API 更新
+labels:
+  tier: T1
+  topic: "官方"
+access:
+  accessor: accessor/http
+  locator:
+    url: https://api-docs.deepseek.com/zh-cn/updates/
+pipeline:
+  - run: [adapter/html-list]
+    spec:
+      adapter/html-list:
+        parseMode: docusaurus_changelog
+        publishedAtUtcOffset: "+08:00"
+schedule:
+  interval: 2h
+admission:
+  allowUrlPrefixes: ["https://api-docs.deepseek.com/zh-cn/updates"]
+  initialBackfill:
+    limit: 30
+    maxAge: 365d

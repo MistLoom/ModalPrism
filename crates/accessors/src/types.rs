@@ -81,6 +81,7 @@ pub struct PaidCall {
     pub endpoint: String,
     pub params: Value,
     pub body: Bytes,
+    pub headers: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

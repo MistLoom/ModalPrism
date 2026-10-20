@@ -562,3 +562,56 @@ fn effective_policy_includes_system_redact_headers() {
 fn debounce_constant_is_two_seconds() {
     assert_eq!(config::DEFAULT_DEBOUNCE, Duration::from_secs(2));
 }
+
+#[test]
+fn disabled_module_keeps_an_unset_env_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "sources/keyed.yaml",
+        r#"
+id: source/keyed
+kind: source
+name: Keyed
+enabled: false
+access:
+  accessor: accessor/http
+  locator:
+    url: https://example.com/keyed
+  spec:
+    token: ${env:MISSING_PAID_KEY}
+pipeline: []
+schedule:
+  interval: 1h
+admission: {}
+"#,
+    );
+    let snapshot = validate(dir.path(), &options()).unwrap();
+    assert_eq!(
+        snapshot.modules["source/keyed"].pointer("/access/spec/token"),
+        Some(&json!("${env:MISSING_PAID_KEY}"))
+    );
+    write(
+        dir.path(),
+        "sources/keyed.yaml",
+        r#"
+id: source/keyed
+kind: source
+name: Keyed
+enabled: true
+access:
+  accessor: accessor/http
+  locator:
+    url: https://example.com/keyed
+  spec:
+    token: ${env:MISSING_PAID_KEY}
+pipeline: []
+schedule:
+  interval: 1h
+admission: {}
+"#,
+    );
+    let error = validate(dir.path(), &options()).unwrap_err();
+    assert!(error.to_string().contains("环境变量不存在"), "{error}");
+}

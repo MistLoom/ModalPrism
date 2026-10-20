@@ -31,5 +31,6 @@ pub use run::{
 pub use traits::{ContentAdapter, Detector, SearchAdapter};
 
 pub use builtin::{
-    BasicDetector, FeedFulltext, FeedItems, HtmlList, JsonLd, JsonList, LinkDiscovery, Readability,
+    BasicDetector, FeedFulltext, FeedItems, HtmlList, JsonLd, JsonList, LinkDiscovery, PageFields,
+    Readability,
 };

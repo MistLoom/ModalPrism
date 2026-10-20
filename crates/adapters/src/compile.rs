@@ -9,7 +9,7 @@ use strata_model::{
 };
 
 use crate::error::AdapterError;
-use crate::model::{Discovery, DraftBody, FacetDraft, Follow, LinkDraft, LinkTarget, RenderMode};
+use crate::model::{Discovery, DraftBody, FacetDraft, LinkDraft, LinkTarget, RenderMode};
 use crate::textutil::locator_text;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,6 +101,7 @@ pub struct FollowRequest {
     pub render: RenderMode,
     pub priority: i32,
     pub identity: String,
+    pub needs: Vec<String>,
 }
 
 pub struct Compiled {
@@ -162,6 +163,7 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
                         attrs: None,
                     });
                 }
+                record_follow(&mut follows, discovery);
             }
             Class::New => {
                 kept += 1;
@@ -198,20 +200,7 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
                         attrs: None,
                     });
                 }
-                if let Follow::Yes {
-                    accessor,
-                    render,
-                    priority,
-                } = &discovery.follow
-                {
-                    follows.push(FollowRequest {
-                        locator: discovery.locator.clone(),
-                        accessor: accessor.clone(),
-                        render: *render,
-                        priority: *priority,
-                        identity: discovery.identity[0].clone(),
-                    });
-                }
+                record_follow(&mut follows, discovery);
             }
         }
     }
@@ -274,6 +263,29 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
     };
     changeset.validate()?;
     Ok(Compiled { changeset, follows })
+}
+
+fn record_follow(follows: &mut Vec<FollowRequest>, discovery: &crate::model::Discovery) {
+    let crate::model::Follow::Yes {
+        accessor,
+        render,
+        priority,
+        needs,
+    } = &discovery.follow
+    else {
+        return;
+    };
+    let Some(identity) = discovery.identity.first() else {
+        return;
+    };
+    follows.push(FollowRequest {
+        locator: discovery.locator.clone(),
+        accessor: accessor.clone(),
+        render: *render,
+        priority: *priority,
+        identity: identity.clone(),
+        needs: needs.clone(),
+    });
 }
 
 enum Class {
