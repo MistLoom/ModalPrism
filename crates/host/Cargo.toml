@@ -1,13 +1,14 @@
 [package]
-name = "assembly"
+name = "host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "采集进程的存储、配置、调度和监听装配"
+description = "组合根运行时资源（存储、配置、调度）"
 publish = false
 
 [dependencies]
+ability-support.workspace = true
 accessors = { path = "../accessors" }
 accessors-builtin = { path = "../accessors-builtin" }
 adapters = { path = "../adapters" }

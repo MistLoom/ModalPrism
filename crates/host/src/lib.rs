@@ -1,4 +1,6 @@
-//! 采集进程的存储、配置、调度和监听装配。
+//! 组合根持有的运行时资源（存储、配置、调度引擎）。仅供组合根与各 Ability 工厂注入，不是 LEAF Gateway 本身。
+
+pub mod api;
 
 mod error;
 mod execute;
@@ -49,7 +51,7 @@ pub fn require_loopback(addr: SocketAddr) -> Result<(), Error> {
     }
 }
 
-pub struct Services {
+pub struct HostResources {
     data_dir: PathBuf,
     config_dir: PathBuf,
     load_options: LoadOptions,
@@ -63,7 +65,7 @@ pub struct Services {
     browser_program: Mutex<PathBuf>,
 }
 
-impl Services {
+impl HostResources {
     pub async fn open(data: &Path, config_dir: &Path, binds: Binds) -> Result<Arc<Self>, Error> {
         let load_options = LoadOptions::from_process();
         let snapshot = config::validate(config_dir, &load_options)?;
@@ -211,9 +213,14 @@ impl Services {
         Arc::clone(&self.egress)
     }
 
+    /// 组合根与控制台接入层使用的统一方法名（`ability.method`）。Ability 实现应调用 `api::invoke`。
     pub async fn call(&self, method: &str, args: Value) -> Result<Value, Error> {
-        dispatch(self, method, args).await
+        dispatch_impl(self, method, args).await
     }
+}
+
+pub(crate) async fn dispatch(host: &HostResources, method: &str, args: Value) -> Result<Value, Error> {
+    dispatch_impl(host, method, args).await
 }
 
 struct TaskHandler {
@@ -305,7 +312,7 @@ impl Receipts for PaidReceipts {
     }
 }
 
-async fn dispatch(services: &Services, method: &str, args: Value) -> Result<Value, Error> {
+async fn dispatch_impl(services: &HostResources, method: &str, args: Value) -> Result<Value, Error> {
     let args = match args {
         Value::Null => Value::Object(Default::default()),
         Value::Object(_) => args,
@@ -371,7 +378,7 @@ fn text_field(args: &Value, key: &str) -> Result<String, Error> {
         .ok_or_else(|| Error::new("spec 无效"))
 }
 
-async fn strata_kinds(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_kinds(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -385,7 +392,7 @@ async fn strata_kinds(services: &Services, args: &Value) -> Result<Value, Error>
     serde_json::to_value(kinds).map_err(|source| Error::with_source("spec 无效", source))
 }
 
-async fn strata_has(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_has(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -403,7 +410,7 @@ async fn strata_has(services: &Services, args: &Value) -> Result<Value, Error> {
     Ok(Value::Bool(found))
 }
 
-async fn strata_get(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_get(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -431,7 +438,7 @@ async fn strata_get(services: &Services, args: &Value) -> Result<Value, Error> {
     }))
 }
 
-async fn strata_slice(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_slice(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {
@@ -450,7 +457,7 @@ async fn strata_slice(services: &Services, args: &Value) -> Result<Value, Error>
     Ok(Value::String(text))
 }
 
-async fn strata_resolve(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_resolve(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let identity = text_field(args, "identity")?;
     let rid = services.strata.resolve(&identity).await?;
     Ok(match rid {
@@ -459,7 +466,7 @@ async fn strata_resolve(services: &Services, args: &Value) -> Result<Value, Erro
     })
 }
 
-async fn strata_history(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_history(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let facet = text_field(args, "facet")?;
     let reference = strata_model::FacetRef::parse(&facet).map_err(|_| Error::new("spec 无效"))?;
     let versions = services.strata.history(&reference).await?;
@@ -477,7 +484,7 @@ async fn strata_history(services: &Services, args: &Value) -> Result<Value, Erro
     Ok(Value::Array(items))
 }
 
-async fn strata_lineage(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_lineage(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -516,7 +523,7 @@ async fn strata_lineage(services: &Services, args: &Value) -> Result<Value, Erro
     }))
 }
 
-async fn strata_related(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_related(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -555,7 +562,7 @@ async fn strata_related(services: &Services, args: &Value) -> Result<Value, Erro
     Ok(Value::Array(items))
 }
 
-async fn strata_query(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_query(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {
@@ -569,7 +576,7 @@ async fn strata_query(services: &Services, args: &Value) -> Result<Value, Error>
     }))
 }
 
-async fn strata_changes(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_changes(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -592,7 +599,7 @@ async fn strata_changes(services: &Services, args: &Value) -> Result<Value, Erro
     Ok(Value::Array(items))
 }
 
-async fn strata_apply(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_apply(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {
@@ -606,7 +613,7 @@ async fn strata_apply(services: &Services, args: &Value) -> Result<Value, Error>
     serde_json::to_value(result).map_err(|source| Error::with_source("spec 无效", source))
 }
 
-async fn strata_enqueue(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_enqueue(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {
@@ -617,7 +624,7 @@ async fn strata_enqueue(services: &Services, args: &Value) -> Result<Value, Erro
     Ok(json!({}))
 }
 
-async fn strata_lease(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_lease(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -634,7 +641,7 @@ async fn strata_lease(services: &Services, args: &Value) -> Result<Value, Error>
     serde_json::to_value(tasks).map_err(|source| Error::with_source("spec 无效", source))
 }
 
-async fn strata_extend(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_extend(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -650,7 +657,7 @@ async fn strata_extend(services: &Services, args: &Value) -> Result<Value, Error
     Ok(json!({}))
 }
 
-async fn strata_nack(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn strata_nack(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -668,12 +675,12 @@ async fn strata_nack(services: &Services, args: &Value) -> Result<Value, Error> 
     Ok(json!({}))
 }
 
-async fn committer_flush(services: &Services) -> Result<Value, Error> {
+async fn committer_flush(services: &HostResources) -> Result<Value, Error> {
     let snapshot = services.strata.flush().await?;
     Ok(json!({ "snapshot": snapshot }))
 }
 
-fn status_paths(services: &Services) -> Value {
+fn status_paths(services: &HostResources) -> Value {
     json!({
         "control": services.data_dir.join("control.db"),
         "lance": services.data_dir.join("lance"),
@@ -681,17 +688,17 @@ fn status_paths(services: &Services) -> Value {
     })
 }
 
-async fn committer_maintain(services: &Services) -> Result<Value, Error> {
+async fn committer_maintain(services: &HostResources) -> Result<Value, Error> {
     services.strata.recover().await?;
     Ok(status_paths(services))
 }
 
-async fn committer_recover(services: &Services) -> Result<Value, Error> {
+async fn committer_recover(services: &HostResources) -> Result<Value, Error> {
     services.strata.recover().await?;
     Ok(json!({}))
 }
 
-async fn planner_tick(services: &Services) -> Result<Value, Error> {
+async fn planner_tick(services: &HostResources) -> Result<Value, Error> {
     let plans = plans::plans_of(&services.config.applied());
     let tasks = services
         .planner
@@ -700,13 +707,13 @@ async fn planner_tick(services: &Services) -> Result<Value, Error> {
     serde_json::to_value(tasks).map_err(|source| Error::with_source("spec 无效", source))
 }
 
-async fn planner_trigger(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn planner_trigger(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let source = text_field(args, "source")?;
     services.planner.make_due(&source, Timestamp::now()).await?;
     planner_tick(services).await
 }
 
-async fn planner_next(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn planner_next(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let source = text_field(args, "source")?;
     let status = services.planner.source_status(&source).await?;
     Ok(json!({
@@ -722,7 +729,7 @@ async fn planner_next(services: &Services, args: &Value) -> Result<Value, Error>
     }))
 }
 
-async fn runner_run(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn runner_run(services: &HostResources, args: &Value) -> Result<Value, Error> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {
@@ -761,7 +768,7 @@ async fn runner_run(services: &Services, args: &Value) -> Result<Value, Error> {
     Ok(json!({ "ok": true, "follows": follows }))
 }
 
-async fn health_evaluate(services: &Services) -> Result<Value, Error> {
+async fn health_evaluate(services: &HostResources) -> Result<Value, Error> {
     let now = Timestamp::now();
     let applied = services.config.applied();
     let ops = services
@@ -788,7 +795,7 @@ async fn health_evaluate(services: &Services) -> Result<Value, Error> {
     Ok(json!({}))
 }
 
-async fn health_status(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn health_status(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let source = text_field(args, "source")?;
     let status = services.planner.source_status(&source).await?;
     Ok(json!({
@@ -805,17 +812,17 @@ fn generation_of(snapshot: &Snapshot) -> Value {
     json!({ "generation": snapshot.generation })
 }
 
-async fn config_load(services: &Services) -> Result<Value, Error> {
+async fn config_load(services: &HostResources) -> Result<Value, Error> {
     services.config.reload()?;
     Ok(generation_of(&services.config.snapshot()))
 }
 
-async fn config_validate(services: &Services) -> Result<Value, Error> {
+async fn config_validate(services: &HostResources) -> Result<Value, Error> {
     config::validate(&services.config_dir, &services.load_options)?;
     Ok(json!({ "ok": true }))
 }
 
-async fn config_diff(services: &Services) -> Result<Value, Error> {
+async fn config_diff(services: &HostResources) -> Result<Value, Error> {
     let fresh = config::validate(&services.config_dir, &services.load_options)?;
     let changes = config::diff(&services.config.snapshot(), &fresh);
     let items = changes
@@ -831,7 +838,7 @@ async fn config_diff(services: &Services) -> Result<Value, Error> {
     Ok(Value::Array(items))
 }
 
-async fn config_explain(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn config_explain(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let module = text_field(args, "module")?;
     let fields = config::explain(&services.config.snapshot(), &module)?;
     let items = fields
@@ -851,7 +858,7 @@ async fn config_explain(services: &Services, args: &Value) -> Result<Value, Erro
     Ok(Value::Array(items))
 }
 
-async fn egress_check(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn egress_check(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let raw = text_field(args, "url")?;
     let url = url::Url::parse(&raw).map_err(|_| Error::new("gateway"))?;
     let host = url.host_str().ok_or_else(|| Error::new("gateway"))?;
@@ -869,7 +876,7 @@ async fn egress_check(services: &Services, args: &Value) -> Result<Value, Error>
     Ok(json!({ "blocked": blocked, "addresses": rendered }))
 }
 
-async fn paid_complete(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn paid_complete(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let receipt = text_field(args, "receiptId")?;
     services
         .paid
@@ -879,7 +886,7 @@ async fn paid_complete(services: &Services, args: &Value) -> Result<Value, Error
     Ok(json!({}))
 }
 
-async fn paid_status(services: &Services, args: &Value) -> Result<Value, Error> {
+async fn paid_status(services: &HostResources, args: &Value) -> Result<Value, Error> {
     let receipt = text_field(args, "receiptId")?;
     let status = services
         .paid
@@ -890,7 +897,7 @@ async fn paid_status(services: &Services, args: &Value) -> Result<Value, Error> 
 }
 
 async fn accessor_call(
-    services: &Services,
+    services: &HostResources,
     builtin: &str,
     name: &str,
     args: &Value,
@@ -918,7 +925,7 @@ async fn accessor_call(
 }
 
 async fn accessor_access(
-    services: &Services,
+    services: &HostResources,
     accessor: Box<dyn accessors::Accessor>,
     args: &Value,
 ) -> Result<Value, Error> {

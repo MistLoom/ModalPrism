@@ -8,7 +8,7 @@ description = "Web 控制台业务逻辑（无 HTTP）"
 publish = false
 
 [dependencies]
-assembly = { path = "../assembly" }
+host = { path = "../host" }
 config = { path = "../config" }
 egress = { path = "../egress" }
 serde = { workspace = true }

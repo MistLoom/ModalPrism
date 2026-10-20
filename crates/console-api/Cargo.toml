@@ -8,7 +8,7 @@ description = "ModalPrism Web 控制台 HTTP API"
 publish = false
 
 [dependencies]
-assembly = { path = "../assembly" }
+host = { path = "../host" }
 axum = { version = "0.8", features = ["json"] }
 console = { path = "../console" }
 serde = { workspace = true }
@@ -17,7 +17,7 @@ tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 
 [dev-dependencies]
-assembly = { path = "../assembly" }
+host = { path = "../host" }
 axum = "0.8"
 config = { path = "../config" }
 tempfile.workspace = true

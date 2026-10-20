@@ -11,10 +11,9 @@ members = [
     "crates/paid",
     "crates/planner",
     "crates/accessors-builtin",
-    "crates/assembly",
+    "crates/host",
     "crates/console",
     "crates/console-api",
-    "ability/console",  # package name console_ability
     "crates/types",
     "ability/strata_read",
     "ability/strata_write",

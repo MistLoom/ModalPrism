@@ -19,9 +19,8 @@ accessor_paid_api = { path = "../../ability/accessor_paid_api" }
 accessor_push = { path = "../../ability/accessor_push" }
 accessor_rss = { path = "../../ability/accessor_rss" }
 accessor_search = { path = "../../ability/accessor_search" }
-assembly = { path = "../../crates/assembly" }
+host = { path = "../../crates/host" }
 console-api = { path = "../../crates/console-api" }
-console_ability = { path = "../../ability/console" }
 async-trait.workspace = true
 axum = "0.8"
 mime_guess = "2"

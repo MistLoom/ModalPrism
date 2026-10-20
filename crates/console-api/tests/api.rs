@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode};
 use console_api::{ConsoleState, router};
 use tower::ServiceExt;
 
-async fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<assembly::Services>) {
+async fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<host::HostResources>) {
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     for preset in config::builtin_presets() {
@@ -18,10 +18,10 @@ async fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<assembly::Servi
         "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\n",
     )
     .unwrap();
-    let services = assembly::Services::open(
+    let services = host::HostResources::open(
         data.path(),
         config.path(),
-        assembly::Binds {
+        host::Binds {
             http: "127.0.0.1:0".parse().unwrap(),
             proxy: "127.0.0.1:0".parse().unwrap(),
             push: "127.0.0.1:0".parse().unwrap(),
@@ -32,7 +32,7 @@ async fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Arc<assembly::Servi
     (data, config, services)
 }
 
-fn app(services: Arc<assembly::Services>) -> axum::Router {
+fn app(services: Arc<host::HostResources>) -> axum::Router {
     router(ConsoleState {
         services,
         http_addr: "127.0.0.1:17880".into(),

@@ -2,6 +2,8 @@
 
 采集进程在环回地址上提供 Web 控制台，用于观察采集状态、浏览已沉积数据、管理出站治理，并在确认后修改 YAML 配置。控制台通过 `/console/api/v1/*` 访问后端，不暴露 `/v1/abilities` 协议。
 
+控制台不是 LEAF Ability：`crates/console` 与 `crates/console-api` 为接入层，在进程内调用 `HostResources::call` 上登记的 `ability.method` 字符串（与 `docs/specs/assembly.md` 方法表一致的部分子集），不直接依赖 Ability crate 实现细节。
+
 ## 访问方式
 
 启动 `modalprism-collector` 后打开 `http://<http 监听>/console` 或 `/console/`（二者等价）。**一键启动**：仓库内提交可复现的 `apps/console-web/dist` 产物；`cargo build` / `cargo run` 在无 Node 环境下仍嵌入完整 UI。若本地有 Node 且源码比产物新，编译时会自动 `npm run build` 刷新 `dist`；也可设置 `MODALPRISM_CONSOLE_DIST` 指向已有目录。CI 或发布前可执行 `cd apps/console-web && npm ci && npm run build` 并校验 `dist` 与源码一致。

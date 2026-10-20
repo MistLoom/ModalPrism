@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use assembly::{Binds, Services};
+use host::{Binds, HostResources};
 use config::builtin_presets;
 use serde_json::json;
 use strata_model::{
@@ -56,7 +56,7 @@ async fn empty_dir_creates_storage_and_keeps_snapshot() {
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
-    let services = Services::open(data.path(), config.path(), binds())
+    let services = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
     assert!(data.path().join("control.db").is_file());
@@ -94,7 +94,7 @@ async fn empty_dir_creates_storage_and_keeps_snapshot() {
         .await
         .unwrap();
     assert!(applied.snapshot.is_none());
-    services.call("committer.flush", json!({})).await.unwrap();
+    host::api::invoke(&services, "committer", "flush", json!({})).await.unwrap();
     let rid = services
         .strata()
         .resolve("ext:doi:10.1000/a")
@@ -102,7 +102,7 @@ async fn empty_dir_creates_storage_and_keeps_snapshot() {
         .unwrap()
         .unwrap();
     drop(services);
-    let again = Services::open(data.path(), config.path(), binds())
+    let again = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
     assert_eq!(
@@ -121,17 +121,16 @@ async fn failed_reload_keeps_generation() {
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
-    let services = Services::open(data.path(), config.path(), binds())
+    let services = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
-    let before = services.call("config.generation", json!({})).await.unwrap();
+    let before = host::api::invoke(&services, "config", "generation", json!({})).await.unwrap();
     fs::write(config.path().join("system.yaml"), "kind: [\n").unwrap();
-    assert!(services.call("config.load", json!({})).await.is_err());
-    let after = services.call("config.generation", json!({})).await.unwrap();
+    assert!(host::api::invoke(&services, "config", "load", json!({})).await.is_err());
+    let after = host::api::invoke(&services, "config", "generation", json!({})).await.unwrap();
     assert_eq!(before, after);
     assert!(
-        services
-            .call("config_inspect.validate", json!({}))
+        host::api::invoke(&services, "config_inspect", "validate", json!({}))
             .await
             .is_err()
     );
@@ -148,7 +147,7 @@ async fn remote_store_and_foreign_address_do_not_create_data() {
         "system.yaml",
         "id: system\nkind: system\nname: ModalPrism\nstrata:\n  control_store:\n    backend: postgres\npolicy:\n  preset: standard\n",
     );
-    let Err(error) = Services::open(&nested, config.path(), binds()).await else {
+    let Err(error) = HostResources::open(&nested, config.path(), binds()).await else {
         panic!("远程存储应当拒绝启动");
     };
     assert_eq!(error.to_string(), "存储位置未规定");
@@ -160,7 +159,7 @@ async fn remote_store_and_foreign_address_do_not_create_data() {
         proxy: "127.0.0.1:0".parse().unwrap(),
         push: "127.0.0.1:0".parse().unwrap(),
     };
-    let Err(error) = Services::open(&nested, config.path(), bad).await else {
+    let Err(error) = HostResources::open(&nested, config.path(), bad).await else {
         panic!("非环回地址应当拒绝启动");
     };
     assert_eq!(error.to_string(), "监听地址不是环回地址");
@@ -172,7 +171,7 @@ async fn shutdown_releases_leases() {
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
-    let services = Services::open(data.path(), config.path(), binds())
+    let services = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
     let task_id = TaskId::new("task-1").unwrap();
@@ -276,12 +275,12 @@ async fn standard_preset_redacts_headers_before_they_reach_staging() {
     let mut permissions = std::fs::metadata(&script).unwrap().permissions();
     std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
     std::fs::set_permissions(&script, permissions).unwrap();
-    let services = Services::open(data.path(), config.path(), binds())
+    let services = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
     services.set_browser_program(&script);
     assert_eq!(
-        assembly::snapshot_interval(&services.config().applied()),
+        host::snapshot_interval(&services.config().applied()),
         Duration::from_secs(15 * 60)
     );
     let task = AccessTask {
@@ -408,11 +407,11 @@ async fn run_slow(
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
     http_limit(config.path(), timeout_text, addr);
-    let services = Services::open(data.path(), config.path(), binds())
+    let services = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
     let before = Timestamp::now();
-    let tasks = services.call("planner.tick", json!({})).await.unwrap();
+    let tasks = host::api::invoke(&services, "planner", "tick", json!({})).await.unwrap();
     let after = Timestamp::now();
     assert_eq!(tasks.as_array().map(Vec::len), Some(1));
     assert_lease(&tasks, before, after, timeout);
@@ -422,7 +421,7 @@ async fn run_slow(
         .await
         .unwrap();
     let elapsed = started.elapsed();
-    services.call("committer.flush", json!({})).await.unwrap();
+    host::api::invoke(&services, "committer", "flush", json!({})).await.unwrap();
     let stored = services
         .strata()
         .resolve(&format!("url:http://{addr}/slow"))
@@ -461,14 +460,14 @@ async fn push_stores_items_that_can_be_read_back() {
         "sources/inbound.yaml",
         "id: source/inbound-items\nkind: source\nname: Inbound\naccess:\n  accessor: accessor/push\n  locator:\n    channel: items\n  spec:\n    token: local-inbound-token\npipeline:\n  - run: [adapter/json-list]\n    spec:\n      adapter/json-list:\n        items: /items\n        url: url\n        title: title\nschedule:\n  interval: 1h\nadmission: {}\n",
     );
-    let services = Services::open(data.path(), config.path(), binds())
+    let services = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let background = Arc::clone(&services);
     tokio::spawn(async move {
-        assembly::serve_push(background, listener).await;
+        host::serve_push(background, listener).await;
     });
     let body = r#"{"items":[{"title":"推送标题","url":"https://example.com/pushed"}]}"#;
     let request = format!(
@@ -564,10 +563,10 @@ async fn detail_follow_stores_the_missing_date_and_skips_the_filled_item() {
             "id: source/detail\nkind: source\nname: Detail\npolicy:\n  robots:\n    mode: ignore\n    robots_reason: local-detail-server\naccess:\n  accessor: accessor/http\n  locator:\n    url: http://{addr}/list\npipeline:\n  - run: [adapter/json-list]\n    spec:\n      adapter/json-list:\n        items: /items\n        url: url\n        title: title\n        publishedAt: publishedAt\n        detail:\n          maxFetches: 1\n          fields: [publishedAt]\n  - for: follow\n    run: [adapter/page-fields]\n    spec:\n      adapter/page-fields:\n        publishedAt: time.hero-date\n        publishedAtAttr: datetime\n        title: h1.hero-title\nschedule:\n  interval: 1h\nadmission:\n  allowUrlPrefixes: [\"http://{addr}/\"]\n  initialBackfill:\n    limit: 10\n    maxAge: 365d\n"
         ),
     );
-    let services = Services::open(data.path(), config.path(), binds())
+    let services = HostResources::open(data.path(), config.path(), binds())
         .await
         .unwrap();
-    let tasks = services.call("planner.tick", json!({})).await.unwrap();
+    let tasks = host::api::invoke(&services, "planner", "tick", json!({})).await.unwrap();
     assert_eq!(tasks.as_array().map(Vec::len), Some(1));
     let ran = services
         .call("runner.run_task", json!({ "task": &tasks[0] }))
@@ -577,12 +576,12 @@ async fn detail_follow_stores_the_missing_date_and_skips_the_filled_item() {
     assert_eq!(follows.len(), 1);
     let locator = follows[0]["locator"]["url"].as_str().unwrap();
     assert!(locator.ends_with("/a"), "{locator}");
-    services.call("committer.flush", json!({})).await.unwrap();
+    host::api::invoke(&services, "committer", "flush", json!({})).await.unwrap();
     services
         .call("runner.run_task", json!({ "task": &follows[0] }))
         .await
         .unwrap();
-    services.call("committer.flush", json!({})).await.unwrap();
+    host::api::invoke(&services, "committer", "flush", json!({})).await.unwrap();
     assert_eq!(detail_b.load(Ordering::SeqCst), 0);
     let rid = services
         .strata()

@@ -1,8 +1,0 @@
-id: console
-name: 控制台
-version: "1"
-stateful: true
-methods:
-  - name: dispatch
-    summary: 执行控制台操作
-    readOnlyHint: false

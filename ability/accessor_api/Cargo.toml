@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 ability-support.workspace = true
-assembly = { path = "../../crates/assembly" }
+host = { path = "../../crates/host" }
 serde_json.workspace = true
 
 [lints]

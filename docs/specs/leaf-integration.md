@@ -118,6 +118,10 @@ LEAF 的范围是能力层运行时，应用主循环由使用方持有。生命
 
 配置热加载继续由组合根完成：校验通过后切换快照指针，在途任务保持派发时的代际。Expose 中的实例集合、绑定期配置、控制存储后端、暂存区目录、Lance 建表参数和访问器实现标识变更时，重启进程。
 
+## Web 控制台（非 LEAF 表面）
+
+`docs/console.md` 描述的 Web UI 与 `/console/api/v1/*` 不属于 LEAF Ability 清单。实现为普通 HTTP 适配层（`console-api` → `console`），在采集进程内持有 `Arc<HostResources>`，通过文档化的 `HostResources::call("ability.method", …)` 调用采集后端，不实现 `AbilityProvider`，也不经 `/v1/abilities` 目录。LEAF 对齐范围仅覆盖 `ability/` 与组合根对 Ability 的 install/load、Gateway 循环与受限 ops 目录。
+
 ## 未决项
 
 1. **端口访问控制。** LEAF 端口没有 TLS 与鉴权。端口访问控制（TLS、鉴权，以及环回地址以外的绑定）未规定。端口上不增加自定的鉴权协议。

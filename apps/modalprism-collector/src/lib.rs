@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use ability_core::AbilityHost;
 use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
-use assembly::{Binds, Services, policy_of};
+use host::{Binds, HostResources, policy_of};
 use async_trait::async_trait;
 use frame_core::{AccessKind, CatalogEntry, Gateway, InvokeRequest, InvokeResponse};
 use frame_port_http::HttpPort;
@@ -21,7 +21,7 @@ mod console_static;
 const OPS: &[&str] = &["strata_read", "planner", "health"];
 
 pub struct Running {
-    services: Arc<Services>,
+    services: Arc<HostResources>,
     host: Arc<AbilityHost>,
     gateway: Arc<dyn Gateway>,
     http: SocketAddr,
@@ -33,7 +33,7 @@ pub struct Running {
 }
 
 impl Running {
-    pub fn services(&self) -> &Services {
+    pub fn services(&self) -> &HostResources {
         &self.services
     }
 
@@ -57,7 +57,7 @@ impl Running {
         self.push
     }
 
-    pub async fn shutdown(self) -> Result<(), assembly::Error> {
+    pub async fn shutdown(self) -> Result<(), host::Error> {
         self.stop.store(true, Ordering::Relaxed);
         for task in &self.tasks {
             task.abort();
@@ -70,24 +70,24 @@ pub async fn boot(
     data: &Path,
     config_dir: &Path,
     binds: Binds,
-) -> Result<Running, assembly::Error> {
+) -> Result<Running, host::Error> {
     let http_addr = binds.http;
     let proxy_addr = binds.proxy;
     let push_addr = binds.push;
-    let services = Services::open(data, config_dir, binds).await?;
+    let services = HostResources::open(data, config_dir, binds).await?;
     let proxy_listener = TcpListener::bind(proxy_addr)
         .await
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
+        .map_err(|source| host::Error::with_source("监听", source))?;
     let proxy = proxy_listener
         .local_addr()
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
+        .map_err(|source| host::Error::with_source("监听", source))?;
     services.set_proxy(format!("http://{proxy}"));
     let push_listener = TcpListener::bind(push_addr)
         .await
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
+        .map_err(|source| host::Error::with_source("监听", source))?;
     let push = push_listener
         .local_addr()
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
+        .map_err(|source| host::Error::with_source("监听", source))?;
     let http = reserved_http(http_addr).await?;
     let host = link(Arc::clone(&services)).await?;
     let gateway: Arc<dyn Gateway> = Arc::new(OpsGateway {
@@ -98,14 +98,14 @@ pub async fn boot(
     let proxy_gateway = services.egress_gateway();
     let proxy_services = Arc::clone(&services);
     tasks.push(tokio::spawn(async move {
-        assembly::serve_proxy(proxy_gateway, proxy_listener, move || {
+        host::serve_proxy(proxy_gateway, proxy_listener, move || {
             policy_of(&proxy_services.config().applied().system)
         })
         .await;
     }));
     let push_services = Arc::clone(&services);
     tasks.push(tokio::spawn(async move {
-        assembly::serve_push(push_services, push_listener).await;
+        host::serve_push(push_services, push_listener).await;
     }));
     let http_gateway = Arc::clone(&gateway);
     let http_services = Arc::clone(&services);
@@ -132,34 +132,34 @@ pub async fn boot(
     })
 }
 
-async fn reserved_http(addr: SocketAddr) -> Result<SocketAddr, assembly::Error> {
+async fn reserved_http(addr: SocketAddr) -> Result<SocketAddr, host::Error> {
     if addr.port() != 0 {
         return Ok(addr);
     }
     let probe = TcpListener::bind(addr)
         .await
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
+        .map_err(|source| host::Error::with_source("监听", source))?;
     let local = probe
         .local_addr()
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
+        .map_err(|source| host::Error::with_source("监听", source))?;
     drop(probe);
     Ok(local)
 }
 
-async fn wait_http(addr: SocketAddr) -> Result<(), assembly::Error> {
+async fn wait_http(addr: SocketAddr) -> Result<(), host::Error> {
     for _ in 0..50 {
         if tokio::net::TcpStream::connect(addr).await.is_ok() {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    Err(assembly::Error::with_source(
+    Err(host::Error::with_source(
         "监听",
         std::io::Error::other("监听"),
     ))
 }
 
-async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Error> {
+async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
     let providers: Vec<(
@@ -215,11 +215,6 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
             false,
         ),
         (
-            "console",
-            console_ability::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
             "accessor_http",
             accessor_http::provider(Arc::clone(&services)),
             false,
@@ -263,26 +258,26 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
     for (id, provider, http) in providers {
         host.install_str(id, provider)
             .await
-            .map_err(|error| assembly::Error::new(error.to_string()))?;
+            .map_err(|error| host::Error::new(error.to_string()))?;
         let kinds = if http {
             vec![AccessKind::Fun, AccessKind::Http]
         } else {
             vec![AccessKind::Fun]
         };
         host.set_protocol_support(id, kinds);
-        let source = SourceId::new(id).map_err(|error| assembly::Error::new(error.to_string()))?;
+        let source = SourceId::new(id).map_err(|error| host::Error::new(error.to_string()))?;
         let instance =
-            InstanceId::new(id).map_err(|error| assembly::Error::new(error.to_string()))?;
+            InstanceId::new(id).map_err(|error| host::Error::new(error.to_string()))?;
         host.load(LoadSpec::new(source, instance))
             .await
-            .map_err(|error| assembly::Error::new(error.to_string()))?;
+            .map_err(|error| host::Error::new(error.to_string()))?;
     }
     Ok(host)
 }
 
 fn spawn_loops(
     host: Arc<AbilityHost>,
-    services: Arc<Services>,
+    services: Arc<HostResources>,
     stop: Arc<AtomicBool>,
 ) -> Vec<JoinHandle<()>> {
     let host_tick = Arc::clone(&host);
@@ -329,7 +324,7 @@ fn spawn_loops(
     let stop_flush = Arc::clone(&stop);
     let flush = tokio::spawn(async move {
         loop {
-            let wait = assembly::flush_interval(&services_flush.config().applied());
+            let wait = host::flush_interval(&services_flush.config().applied());
             tokio::time::sleep(wait).await;
             if stop_flush.load(Ordering::Relaxed) {
                 break;
@@ -356,7 +351,7 @@ fn spawn_loops(
     vec![tick, flush, health]
 }
 
-pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {
+pub async fn apply_hotlist(services: &HostResources) -> Result<bool, types::Error> {
     let applied = services.config().applied();
     let value = types::HotList::on_commit(services.strata().as_ref(), applied.as_ref()).await?;
     if value.is_null() {
@@ -377,7 +372,7 @@ pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {
     Ok(true)
 }
 
-async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>, services: Arc<Services>) {
+async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>, services: Arc<HostResources>) {
     use std::path::PathBuf;
     use axum::response::Redirect;
     use tower_http::services::{ServeDir, ServeFile};

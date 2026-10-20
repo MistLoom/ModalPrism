@@ -2,6 +2,14 @@
 
 本文固定采集进程的启动、Ability 链接和循环。存储见 `docs/specs/strata-storage.md`，配置见 `docs/specs/config.md`，调度见 `docs/specs/scheduling.md`，LEAF 链接见 `docs/specs/leaf-integration.md`。
 
+## 组合根资源（`crates/host`）
+
+采集进程在 `AbilityHost` 之外持有 `HostResources`：已打开的数据目录、配置快照、Strata、Planner、出站与付费网关、push 访问器等。组合根与 Ability 工厂通过 `Arc<HostResources>` 注入共享状态；进程内调度循环与 `host::api::invoke(host, ability, method, args)` 经 Gateway 调用各 Ability 方法。
+
+`HostResources::call("ability.method", args)` 是面向运维适配层的稳定字符串契约（例如 `config.generation`、`planner.trigger`），实现上路由到同一套 Ability 方法。它不属于 LEAF 的跨 Ability `ctx.call` 图，也不向 `/v1/abilities` 暴露。
+
+Web 控制台（`crates/console`、`crates/console-api`）不是 Ability，不进入 `ability/` 链接表。HTTP 处理在 ops 端口挂载 `/console/`，业务逻辑通过上述 `call` 契约读状态与触发操作，见 `docs/console.md`。
+
 ## 命令
 
 可执行文件是 `modalprism-collector`。

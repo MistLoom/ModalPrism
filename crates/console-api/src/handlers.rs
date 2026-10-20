@@ -1,4 +1,4 @@
-//! HTTP 适配：业务逻辑在 `console` crate 与 `console` Ability。
+//! HTTP 适配：业务逻辑在 `console` crate。
 
 use axum::Json;
 use axum::extract::{Path as AxPath, Query, State};

@@ -1004,7 +1004,7 @@ pipeline:
 
 ### 11.1 LEAF 概览
 
-[LEAF](https://github.com/MistLoom/LEAF) 是以 Rust 构建的 AI 能力层运行时。ModalPrism 钉死提交 `3dcd9c9d29a342ee9cb11411d96cbaf506269e46`。使用的概念如下：
+[LEAF](https://github.com/MistLoom/LEAF) 是以 Rust 构建的 AI 能力层运行时。ModalPrism 钉死提交 `ffabb6128ae6e006c6c3cee3a706532501f26219`。使用的概念如下：
 
 | 概念 | 内容 | 来源 |
 |---|---|---|
@@ -1055,7 +1055,7 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 
 | 事项 | 要求 |
 |---|---|
-| 工程接入方式 | Ability 放在本仓库 `ability/`。组合根在进程内 `install` 再 `load`。`WorkspaceCatalog::discover` 只扫描 LEAF 工作区的 `common/ability` 与 `apps/*/ability`，不承载本仓库的 Ability。LEAF 提交固定为 `3dcd9c9d29a342ee9cb11411d96cbaf506269e46`。领域库不依赖 `frame-core`、`ability-core` 与 port。Ability crate 只依赖 `ability-support`。组合根依赖 `frame-core` 与 `ability-core`。 |
+| 工程接入方式 | Ability 放在本仓库 `ability/`。组合根在进程内 `install` 再 `load`。`WorkspaceCatalog::discover` 只扫描 LEAF 工作区的 `common/ability` 与 `apps/*/ability`，不承载本仓库的 Ability。LEAF 提交固定为 `ffabb6128ae6e006c6c3cee3a706532501f26219`。领域库不依赖 `frame-core`、`ability-core` 与 port。Ability crate 只依赖 `ability-support`。组合根依赖 `frame-core` 与 `ability-core`。 |
 | 二进制与大数据传递 | Gateway 的 `args` 为 JSON 值。原始部件与大文本以暂存引用传递。引用它的变更集可见之后才删除暂存文件。 |
 | 流式结果 | 访问器在一次调用中返回 `Vec<RawEnvelope>`。同一进程内传递，不经 Gateway 分帧。 |
 | 后台循环 | 调度节拍、任务执行、刷写、健康评估和配置监听由组合根驱动。进程收到中断或 `SIGTERM` 时调用 `Planner::shutdown`，释放租约。 |

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use ability_support::{InstanceId, MethodId};
-use assembly::Binds;
+use host::Binds;
 use config::builtin_presets;
 use frame_core::{Gateway, InvokeRequest};
 use modalprism_collector::{apply_hotlist, boot};

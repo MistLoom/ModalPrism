@@ -6,7 +6,7 @@ mod security;
 
 use std::sync::Arc;
 
-use assembly::Services;
+use host::HostResources;
 use axum::Router;
 use axum::middleware::from_fn;
 use axum::routing::{get, patch, post};
@@ -16,7 +16,7 @@ pub use error::ApiError;
 
 #[derive(Clone)]
 pub struct ConsoleState {
-    pub services: Arc<Services>,
+    pub services: Arc<HostResources>,
     pub http_addr: String,
 }
 

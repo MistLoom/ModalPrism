@@ -9,7 +9,7 @@ use strata_model::{ErrorClass, Locator, Timestamp};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::Services;
+use crate::HostResources;
 use crate::transport::EgressGw;
 
 const HEADER_CAP: usize = 16 * 1024;
@@ -22,7 +22,7 @@ where
     egress::serve_each(gateway.as_ref(), listener, policy_of).await;
 }
 
-pub async fn serve_push(services: Arc<Services>, listener: TcpListener) {
+pub async fn serve_push(services: Arc<HostResources>, listener: TcpListener) {
     loop {
         let Ok((socket, _)) = listener.accept().await else {
             continue;
@@ -34,7 +34,7 @@ pub async fn serve_push(services: Arc<Services>, listener: TcpListener) {
     }
 }
 
-async fn handle_push(services: Arc<Services>, mut socket: TcpStream) -> std::io::Result<()> {
+async fn handle_push(services: Arc<HostResources>, mut socket: TcpStream) -> std::io::Result<()> {
     let (header, leftover) = match read_headers(&mut socket).await {
         Ok(parts) => parts,
         Err(status) => {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use ability_support::{AbilityProvider, AbilitySpec};
 
-pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
+pub fn provider(services: Arc<host::HostResources>) -> Arc<dyn AbilityProvider> {
     let mut spec = AbilitySpec::must("strata_read").stateful();
     spec = spec.on(
         "kinds",
@@ -15,7 +15,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.kinds", args).await)
+                    map(host::api::invoke(&services, "strata_read", "kinds", args).await)
                 })
             }
         },
@@ -29,7 +29,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.has", args).await)
+                    map(host::api::invoke(&services, "strata_read", "has", args).await)
                 })
             }
         },
@@ -43,7 +43,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.get", args).await)
+                    map(host::api::invoke(&services, "strata_read", "get", args).await)
                 })
             }
         },
@@ -57,7 +57,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.slice", args).await)
+                    map(host::api::invoke(&services, "strata_read", "slice", args).await)
                 })
             }
         },
@@ -71,7 +71,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.resolve", args).await)
+                    map(host::api::invoke(&services, "strata_read", "resolve", args).await)
                 })
             }
         },
@@ -85,7 +85,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.history", args).await)
+                    map(host::api::invoke(&services, "strata_read", "history", args).await)
                 })
             }
         },
@@ -99,7 +99,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.lineage", args).await)
+                    map(host::api::invoke(&services, "strata_read", "lineage", args).await)
                 })
             }
         },
@@ -113,7 +113,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.related", args).await)
+                    map(host::api::invoke(&services, "strata_read", "related", args).await)
                 })
             }
         },
@@ -127,7 +127,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.query", args).await)
+                    map(host::api::invoke(&services, "strata_read", "query", args).await)
                 })
             }
         },
@@ -141,7 +141,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = std::sync::Arc::clone(&services);
                 ability_support::box_fut(async move {
-                    map(services.call("strata_read.changes", args).await)
+                    map(host::api::invoke(&services, "strata_read", "changes", args).await)
                 })
             }
         },
@@ -149,14 +149,6 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
     spec.into_provider()
 }
 
-fn map(
-    result: Result<serde_json::Value, assembly::Error>,
-) -> ability_support::Result<serde_json::Value> {
-    result.map_err(|error| {
-        if assembly::invalid_input(&error.message) {
-            ability_support::Error::invalid_args(error.message)
-        } else {
-            ability_support::Error::failed(error.to_string())
-        }
-    })
+fn map(result: Result<serde_json::Value, host::Error>) -> ability_support::Result<serde_json::Value> {
+    host::api::map_ability(result)
 }

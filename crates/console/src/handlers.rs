@@ -1,4 +1,4 @@
-use assembly::capacities;
+use host::capacities;
 use egress::circuit_open;
 use serde::Deserialize;
 use serde_json::{Value, json};
