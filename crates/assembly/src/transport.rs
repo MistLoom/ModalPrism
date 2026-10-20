@@ -3,7 +3,7 @@
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use accessors::EgressGateway;
 use async_trait::async_trait;
@@ -31,6 +31,7 @@ pub struct PaidBridge {
 
 tokio::task_local! {
     pub static EGRESS_POLICY: Policy;
+    pub static REQUEST_DEADLINE: Instant;
 }
 
 pub type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, TcpDial>;
@@ -38,6 +39,18 @@ pub type PaidGw = paid::Gateway<Hot, PaidBridge>;
 
 fn permanent(message: &str) -> AccessError {
     AccessError::new(ErrorClass::Permanent, message)
+}
+
+/// 本次任务剩余到截止时间的时长。没有任务截止时用 30 秒。
+fn request_budget() -> Result<Duration, AccessError> {
+    let budget = REQUEST_DEADLINE
+        .try_with(|deadline| deadline.saturating_duration_since(Instant::now()))
+        .unwrap_or(Duration::from_secs(30));
+    if budget.is_zero() {
+        Err(AccessError::new(ErrorClass::Transient, "deadline"))
+    } else {
+        Ok(budget)
+    }
 }
 
 fn transient(message: &str, source: impl std::error::Error + Send + Sync + 'static) -> AccessError {
@@ -55,9 +68,10 @@ impl Transport for HttpTransport {
         let host = url.host_str().ok_or_else(|| permanent("scheme"))?;
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| permanent("scheme"))?;
+        let budget = request_budget()?;
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(30))
+            .timeout(budget)
             .resolve(host, address)
             .build()
             .map_err(|source| transient("transport", source))?;

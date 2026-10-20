@@ -3,6 +3,8 @@
 use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use assembly::{Binds, Services};
@@ -325,4 +327,127 @@ async fn standard_preset_redacts_headers_before_they_reach_staging() {
         }
     }
     assert!(saw_redacted);
+}
+
+fn http_limit(dir: &Path, timeout: &str, addr: SocketAddr) {
+    write(
+        dir,
+        "system.yaml",
+        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\n  egress:\n    private_networks: allow\n",
+    );
+    write(
+        dir,
+        "accessors/http.yaml",
+        &format!(
+            "id: accessor/http\nkind: accessor\nname: HTTP\nimplementation: builtin:http\nlimits:\n  timeout: {timeout}\n  concurrency: 4\n  retry:\n    attempts: 1\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n"
+        ),
+    );
+    write(
+        dir,
+        "sources/slow.yaml",
+        &format!(
+            "id: source/slow\nkind: source\nname: Slow\npolicy:\n  robots:\n    mode: ignore\n    robots_reason: local-slow-server\naccess:\n  accessor: accessor/http\n  locator:\n    url: http://{addr}/slow\npipeline: []\nschedule:\n  interval: 15m\nadmission: {{}}\n"
+        ),
+    );
+}
+
+async fn slow_page(delay: Duration) -> (SocketAddr, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&hits);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let count = Arc::clone(&count);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+                let text = String::from_utf8_lossy(&buf);
+                let body = if text.contains("robots.txt") {
+                    "User-agent: *\nAllow: /\n".to_string()
+                } else {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    "slow-ok".to_string()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
+            });
+        }
+    });
+    (addr, hits)
+}
+
+fn assert_lease(tasks: &serde_json::Value, before: Timestamp, after: Timestamp, timeout: Duration) {
+    let span = timeout.saturating_mul(3) / 2;
+    let lease = Timestamp::parse(tasks[0]["leaseUntil"].as_str().unwrap()).unwrap();
+    let low = before.checked_add(span).unwrap();
+    let high = after.checked_add(span).unwrap();
+    assert!(
+        lease >= low && lease <= high,
+        "租约 {lease} 应落在 {low} 与 {high} 之间"
+    );
+}
+
+async fn run_slow(
+    timeout_text: &str,
+    timeout: Duration,
+    delay: Duration,
+) -> (Duration, bool, usize) {
+    let (addr, hits) = slow_page(delay).await;
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    http_limit(config.path(), timeout_text, addr);
+    let services = Services::open(data.path(), config.path(), binds())
+        .await
+        .unwrap();
+    let before = Timestamp::now();
+    let tasks = services.call("planner.tick", json!({})).await.unwrap();
+    let after = Timestamp::now();
+    assert_eq!(tasks.as_array().map(Vec::len), Some(1));
+    assert_lease(&tasks, before, after, timeout);
+    let started = std::time::Instant::now();
+    services
+        .call("runner.run_task", json!({ "task": &tasks[0] }))
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    services.call("committer.flush", json!({})).await.unwrap();
+    let stored = services
+        .strata()
+        .resolve(&format!("url:http://{addr}/slow"))
+        .await
+        .unwrap();
+    (elapsed, stored.is_some(), hits.load(Ordering::SeqCst))
+}
+
+#[tokio::test]
+async fn short_limit_interrupts_before_thirty_seconds() {
+    let (elapsed, stored, hits) =
+        run_slow("2s", Duration::from_secs(2), Duration::from_secs(15)).await;
+    assert!(hits >= 1, "慢服务器应接到请求");
+    assert!(!stored);
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "2 秒时限应在 30 秒前中断，实际 {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn long_limit_keeps_the_request_past_thirty_seconds() {
+    let (elapsed, stored, hits) =
+        run_slow("45s", Duration::from_secs(45), Duration::from_secs(32)).await;
+    assert!(hits >= 1, "慢服务器应接到请求");
+    assert!(stored);
+    assert!(
+        elapsed > Duration::from_secs(30),
+        "45 秒时限应留下超过 30 秒的响应，实际 {elapsed:?}"
+    );
 }
