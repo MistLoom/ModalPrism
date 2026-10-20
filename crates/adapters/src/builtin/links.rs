@@ -90,6 +90,7 @@ impl SearchAdapter for LinkDiscovery {
                 span: None,
                 follow: Follow::Yes {
                     accessor: input.source.accessor.clone(),
+                    accessor_spec: serde_json::json!({}),
                     render: input.source.render,
                     priority: 0,
                     needs: Vec::new(),

@@ -22,6 +22,7 @@ pub struct EngineRequest {
     pub proxy: String,
     pub headers: Vec<(String, String)>,
     pub wait_until: Option<String>,
+    pub wait_selector: Option<String>,
     pub eval: Option<String>,
     pub js: bool,
     pub frames: bool,
@@ -144,8 +145,7 @@ fn parse_spec(spec: &Value) -> Result<Spec, AccessError> {
         return Err(config("spec 无效"));
     }
     if let Some(wait) = &spec.wait {
-        if wait.selector.is_some()
-            || wait.script.is_some()
+        if wait.script.is_some()
             || wait.response_url.is_some()
             || wait.response_url_regex.is_some()
             || wait.response_json.is_some()
@@ -231,8 +231,12 @@ pub fn moli_args(request: &EngineRequest) -> Vec<String> {
         args.push(eval.clone());
     }
     if let Some(until) = &request.wait_until {
-        args.push("--wait-until".into());
+        args.push("--wait".into());
         args.push(until.clone());
+    }
+    if let Some(selector) = &request.wait_selector {
+        args.push("--wait-selector".into());
+        args.push(selector.clone());
     }
     if request.trace {
         args.push("--trace-network".into());
@@ -404,6 +408,7 @@ impl<E: BrowserEngine> Accessor for BrowserAccessor<E> {
                 proxy: self.proxy.clone(),
                 headers,
                 wait_until: spec.wait.as_ref().and_then(|wait| wait.until.clone()),
+                wait_selector: spec.wait.as_ref().and_then(|wait| wait.selector.clone()),
                 eval: spec.eval.clone(),
                 js: spec.js,
                 frames: spec.frames,

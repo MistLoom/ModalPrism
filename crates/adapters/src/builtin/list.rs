@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use scraper::{ElementRef, Html, Selector};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use strata_model::{FacetKind, Locator, RenderLevel};
 
 use crate::error::AdapterError;
@@ -102,6 +102,8 @@ struct DetailNeed {
     published: bool,
     title: bool,
     summary: bool,
+    follow_accessor: Option<String>,
+    follow_spec: Value,
 }
 
 #[async_trait]
@@ -891,6 +893,7 @@ fn listing_follow(
     let Some(detail) = detail else {
         return Follow::Yes {
             accessor: input.source.accessor.clone(),
+            accessor_spec: Value::Object(Map::new()),
             render: input.source.render,
             priority: 0,
             needs: Vec::new(),
@@ -909,8 +912,13 @@ fn listing_follow(
     if needs.is_empty() {
         return Follow::No;
     }
+    let accessor = detail
+        .follow_accessor
+        .clone()
+        .unwrap_or_else(|| "accessor/http".into());
     Follow::Yes {
-        accessor: "accessor/http".into(),
+        accessor,
+        accessor_spec: detail.follow_spec.clone(),
         render: input.source.render,
         priority: 0,
         needs,
@@ -935,10 +943,21 @@ fn detail_need(spec: &Value) -> Result<Option<DetailNeed>, AdapterError> {
         .get("fields")
         .and_then(Value::as_array)
         .ok_or_else(|| AdapterError::config("detail.fields"))?;
+    let follow_accessor = detail
+        .get("followAccessor")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    let follow_spec = detail
+        .get("followSpec")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
     let mut need = DetailNeed {
         published: false,
         title: false,
         summary: false,
+        follow_accessor,
+        follow_spec,
     };
     for field in fields {
         match field.as_str() {

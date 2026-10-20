@@ -429,7 +429,7 @@ fn follow_tasks(
                 source_id: task.source_id.clone(),
                 accessor: follow.accessor.clone(),
                 locator: follow.locator.clone(),
-                spec: Value::Object(Map::new()),
+                spec: follow.spec.clone(),
                 reason: TaskReason::Follow,
                 priority: 20,
                 queue: QueueName::Free,
