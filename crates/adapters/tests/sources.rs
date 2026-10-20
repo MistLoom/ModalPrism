@@ -328,6 +328,20 @@ async fn json_list_reads_units_and_templates() {
 }
 
 #[tokio::test]
+async fn changelog_reads_a_fullwidth_date_heading() {
+    let registry = Registry::builtins();
+    let html = r#"<article><h2 id="day">时间：2026-10-17</h2><h3 id="ship">发布</h3></article>"#;
+    let pipeline = json!([{
+        "run": ["adapter/html-list"],
+        "spec": {"adapter/html-list": {"parseMode": "docusaurus_changelog"}}
+    }]);
+    let output = run(&registry, bare(html, "text/html", pipeline))
+        .await
+        .unwrap();
+    assert_eq!(titles(&output.changeset.ops), ["发布"]);
+}
+
+#[tokio::test]
 async fn html_list_reads_a_configured_date_pattern() {
     let registry = Registry::builtins();
     let html = r#"<article class="card"><a href="https://example.com/posts/a">标题</a><span>发布于 2026-09-27</span></article>"#;
