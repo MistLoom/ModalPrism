@@ -1,37 +1,51 @@
 use std::sync::Arc;
 
+use ability_support::{AbilityCtx, MethodId};
 use async_trait::async_trait;
-use serde_json::Value;
-use strata_client::Strata;
+use serde_json::{Value, json};
 
 #[derive(Clone)]
 pub struct Hot {
-    strata: Arc<Strata>,
-    kind: &'static str,
+    ctx: Arc<dyn AbilityCtx>,
+    owner: &'static str,
 }
 
 impl Hot {
-    pub fn new(strata: Arc<Strata>, kind: &'static str) -> Self {
-        Self { strata, kind }
+    pub fn new(ctx: Arc<dyn AbilityCtx>, owner: &'static str) -> Self {
+        Self { ctx, owner }
     }
 }
 
 async fn load_bytes(hot: &Hot) -> Result<Option<Vec<u8>>, String> {
-    match hot
-        .strata
-        .hot_get(hot.kind, "state")
+    let method = MethodId::new("load").map_err(|e| e.to_string())?;
+    let response = hot
+        .ctx
+        .call(
+            "control_state",
+            &method,
+            json!({ "owner": hot.owner, "key": "state" }),
+        )
         .await
-        .map_err(|e| e.to_string())?
-    {
+        .map_err(|e| e.to_string())?;
+    match response.get("value") {
+        None | Some(Value::Null) => Ok(None),
         Some(value) => Ok(Some(value.to_string().into_bytes())),
-        None => Ok(None),
     }
 }
 
 async fn store_bytes(hot: &Hot, bytes: &[u8]) -> Result<(), String> {
     let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    hot.strata
-        .hot_put(hot.kind, "state", &value)
+    let method = MethodId::new("store").map_err(|e| e.to_string())?;
+    hot.ctx
+        .call(
+            "control_state",
+            &method,
+            json!({
+                "owner": hot.owner,
+                "key": "state",
+                "value": value,
+            }),
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(())

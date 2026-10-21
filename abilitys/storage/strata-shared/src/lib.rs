@@ -1,13 +1,9 @@
 //! Strata Ability 共用：从绑定期配置打开 `Strata`。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use ability_support::{Error, Result};
-
-mod registry;
-
-pub use registry::{borrow as borrow_strata, register_owner as register_strata};
 use serde::Deserialize;
 use serde_json::Value;
 use strata_client::{Options, Strata};
@@ -20,8 +16,13 @@ pub struct OpenConfig {
     pub system: Value,
 }
 
-/// 仅 `committer` 工厂调用：打开并注册共享 `Strata`。
+/// 仅 `committer` 工厂调用：打开存储根。
 pub async fn open_strata(config: &Value) -> Result<Arc<Strata>> {
+    connect_strata(config).await
+}
+
+/// 在同一数据目录上建立 Strata 连接（由各 Ability 工厂按配置创建并持有实例）。
+pub async fn connect_strata(config: &Value) -> Result<Arc<Strata>> {
     let cfg: OpenConfig = serde_json::from_value(config.clone())
         .map_err(|e| Error::invalid_args(e.to_string()))?;
     let options = strata_options(&cfg.system);
@@ -30,15 +31,7 @@ pub async fn open_strata(config: &Value) -> Result<Arc<Strata>> {
             .await
             .map_err(|e| Error::failed(e.to_string()))?,
     );
-    register_strata(&cfg.data_dir, Arc::clone(&strata)).await?;
     Ok(strata)
-}
-
-/// 非 owner Ability 工厂：借用已注册的 `Strata`。
-pub async fn attach_strata(config: &Value) -> Result<Arc<Strata>> {
-    let cfg: OpenConfig = serde_json::from_value(config.clone())
-        .map_err(|e| Error::invalid_args(e.to_string()))?;
-    borrow_strata(&cfg.data_dir).await
 }
 
 pub fn data_dir_of(config: &Value) -> Result<PathBuf> {

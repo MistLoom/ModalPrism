@@ -15,7 +15,10 @@ struct Applied {
 }
 
 pub async fn applied(ctx: &dyn CtxCall) -> Result<Arc<Snapshot>, String> {
-    let value = ctx.call("config", "applied", serde_json::json!({})).await?;
+    let value = ctx
+        .call("config", "applied", serde_json::json!({}))
+        .await
+        .map_err(|e| e.to_string())?;
     let applied: Applied =
         serde_json::from_value(value).map_err(|_| "spec 无效".to_string())?;
     Ok(Arc::new(Snapshot {

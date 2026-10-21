@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ability_support::Result;
 use serde_json::{Value, json};
 
-use crate::runtime::EgressGw;
+use crate::ability::EgressGw;
 
 pub async fn domains(gateway: &Arc<EgressGw>, proxy_url: &str) -> Result<Value> {
     let db = gateway

@@ -4,7 +4,7 @@ open: false
 protocols: [fun]
 depends: []
 stateful: true
-factory: false
+factory: true
 description: 控制面热数据读写（按拥有者分区，不进入可见快照）
 config_schema:
   type: object

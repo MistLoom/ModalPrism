@@ -19,9 +19,3 @@ pub async fn run(strata: &Arc<Strata>, args: &Value) -> Result<Value> {
         .map_err(|e| failed(e.to_string()))?;
     Ok(state.map(|s| s.value).unwrap_or(Value::Null))
 }
-
-pub async fn visible_cursor(ctx: &dyn ability_support::AbilityCtx, args: serde_json::Value) -> ability_support::Result<serde_json::Value> {
-    let _ = ctx;
-    let args = strata_shared::normalize_args(args)?;
-    run(&crate::runtime::strata()?, &args).await
-}

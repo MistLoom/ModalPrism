@@ -20,8 +20,3 @@ pub async fn run(ctx: &dyn AbilityCtx) -> Result<serde_json::Value> {
     ctx.call("committer", &flush, json!({})).await?;
     Ok(json!({ "applied": true }))
 }
-
-pub async fn hotlist_apply(ctx: &dyn AbilityCtx, args: serde_json::Value) -> Result<Value> {
-    let _ = args;
-    run(ctx).await
-}

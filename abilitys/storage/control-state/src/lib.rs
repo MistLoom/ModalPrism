@@ -1,15 +1,6 @@
-mod logic;
-mod runtime;
-#[allow(dead_code, unused_imports)]
+#![allow(dead_code, non_camel_case_types, unused_imports)]
+mod ability;
 mod generated;
+mod logic;
 
-pub use generated::provider::provider;
-
-pub mod install {
-    use ability_support::Result;
-    use serde_json::Value;
-
-    pub async fn prime(config: Value) -> Result<()> {
-        crate::runtime::prime(config).await
-    }
-}
+pub use ability::provider;

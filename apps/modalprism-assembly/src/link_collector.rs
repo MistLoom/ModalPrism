@@ -175,9 +175,6 @@ pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<
         let source = SourceId::new(id).map_err(|error| Error::new(error.to_string()))?;
         let instance = InstanceId::new(id).map_err(|error| Error::new(error.to_string()))?;
         let spec = LoadSpec::new(source, instance);
-        prime_before_load(id, bind_config.as_ref(), &bind, &strata_config)
-            .await
-            .map_err(|error| Error::new(error.to_string()))?;
         let spec = match bind_config {
             Some(config) => spec.with_config(config),
             None => spec,
@@ -223,45 +220,6 @@ pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<
             .map_err(|error| Error::new(error.to_string()))?;
     }
     Ok(host)
-}
-
-async fn prime_before_load(
-    id: &str,
-    bind_config: Option<&Value>,
-    bind: &Value,
-    strata_config: &Value,
-) -> ability_support::Result<()> {
-    match id {
-        "config" => ability_config::install::prime(bind.clone()).await?,
-        "config_inspect" => ability_config_inspect::install::prime(bind.clone()).await?,
-        "committer" => ability_committer::install::prime(strata_config.clone()).await?,
-        "strata_read" => ability_strata_read::install::prime(strata_config.clone()).await?,
-        "strata_write" => ability_strata_write::install::prime(strata_config.clone()).await?,
-        "strata_queue" => ability_strata_queue::install::prime(strata_config.clone()).await?,
-        "control_state" => ability_control_state::install::prime(strata_config.clone()).await?,
-        "type_hotlist" => type_hotlist::install::prime(strata_config.clone()).await?,
-        "egress" => ability_egress::install::prime(bind.clone()).await?,
-        "paid_gateway" => ability_paid_gateway::install::prime(bind.clone()).await?,
-        "runner" => ability_collector_runner::install::prime(bind.clone()).await?,
-        "push_ingress" => ability_push_ingress::install::prime(bind.clone()).await?,
-        "accessor_http" => ability_accessor_http::install::prime(bind.clone()).await?,
-        "accessor_rss" => ability_accessor_rss::install::prime(bind.clone()).await?,
-        "accessor_api" => ability_accessor_api::install::prime(bind.clone()).await?,
-        "accessor_paid_api" => ability_accessor_paid_api::install::prime(bind.clone()).await?,
-        "accessor_search" => ability_accessor_search::install::prime(bind.clone()).await?,
-        "accessor_push" => ability_accessor_push::install::prime(bind.clone()).await?,
-        "accessor_file" => ability_accessor_file::install::prime(bind.clone()).await?,
-        "accessor_browser" => ability_accessor_browser::install::prime(bind.clone()).await?,
-        "accessor_bundle_list" => {
-            ability_accessor_bundle_list::install::prime(bind.clone()).await?
-        }
-        _ => {
-            if let Some(config) = bind_config {
-                let _ = config;
-            }
-        }
-    }
-    Ok(())
 }
 
 fn with_bindings(spec: LoadSpec, deps: &[&str]) -> Result<LoadSpec, Error> {

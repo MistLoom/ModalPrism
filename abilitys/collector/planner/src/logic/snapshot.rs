@@ -1,5 +1,10 @@
-use ability_support::{AbilityCtx, Result};
+use std::sync::Arc;
 
-pub async fn from_ctx(ctx: &dyn AbilityCtx) -> Result<std::sync::Arc<config::Snapshot>> {
-    collector_ports::applied(ctx).await
+use ability_support::{AbilityCtx, Error, Result};
+
+pub async fn from_ctx(ctx: &dyn AbilityCtx) -> Result<Arc<config::Snapshot>> {
+    let call = crate::ctx_call::wrap(ctx.retain());
+    collector_ports::applied(call.as_ref())
+        .await
+        .map_err(|e| Error::failed(e))
 }

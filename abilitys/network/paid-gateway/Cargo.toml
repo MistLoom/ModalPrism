@@ -24,6 +24,7 @@ serde_json.workspace = true
 strata-shared = { path = "../../storage/strata-shared" }
 strata-client = { path = "../../../crates/strata-client" }
 url.workspace = true
+tokio.workspace = true
 
 [build-dependencies]
 ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }

@@ -1,4 +1,0 @@
-//! 业务能力逻辑。勿写入声明或协议相关代码。
-
-pub mod project;
-pub mod on_commit;

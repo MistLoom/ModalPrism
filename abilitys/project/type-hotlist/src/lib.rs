@@ -1,15 +1,8 @@
-mod logic;
-mod runtime;
+//! 热榜投影 Ability。
+
+mod ability;
 #[allow(dead_code, unused_imports)]
 mod generated;
+mod logic;
 
-pub use generated::provider::provider;
-
-pub mod install {
-    use ability_support::Result;
-    use serde_json::Value;
-
-    pub async fn prime(config: Value) -> Result<()> {
-        crate::runtime::prime(config).await
-    }
-}
+pub use ability::provider;

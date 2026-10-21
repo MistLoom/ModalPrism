@@ -10,17 +10,8 @@ depends:
   - egress
   - paid_gateway
   - control_state
-  - accessor_http
-  - accessor_rss
-  - accessor_api
-  - accessor_paid_api
-  - accessor_search
-  - accessor_push
-  - accessor_file
-  - accessor_browser
-  - accessor_bundle_list
 stateful: true
-factory: false
+factory: true
 description: 执行已租约任务
 config_schema:
   type: object

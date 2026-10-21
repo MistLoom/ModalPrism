@@ -303,6 +303,7 @@ dependencies = [
  "strata-client",
  "strata-model",
  "strata-shared",
+ "tokio",
  "url",
 ]
 
@@ -1870,10 +1871,10 @@ name = "console-api"
 version = "0.1.0"
 dependencies = [
  "axum",
- "collector-runtime",
  "config",
  "console",
  "frame-core",
+ "modalprism-assembly",
  "serde",
  "serde_json",
  "tempfile",

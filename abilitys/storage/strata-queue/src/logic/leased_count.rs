@@ -22,9 +22,3 @@ pub async fn run(strata: &Arc<Strata>, args: &Value) -> Result<Value> {
         .map_err(|e| failed(e.to_string()))?;
     Ok(json!(count))
 }
-
-pub async fn leased_count(ctx: &dyn ability_support::AbilityCtx, args: serde_json::Value) -> ability_support::Result<serde_json::Value> {
-    let _ = ctx;
-    let args = strata_shared::normalize_args(args)?;
-    run(&crate::runtime::strata()?, &args).await
-}

@@ -22,8 +22,11 @@ use strata_shared::parse;
 use crate::access::AbilityAccess;
 use crate::env::RunnerEnv;
 
-pub async fn run_task(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
-    let env = crate::runtime::env()?;
+pub async fn run_task(
+    ctx: &dyn AbilityCtx,
+    env: &Arc<crate::env::RunnerEnv>,
+    args: Value,
+) -> Result<Value> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {
@@ -31,7 +34,10 @@ pub async fn run_task(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
     }
     let args: Args = parse(&args)?;
     let ctx = ctx.retain();
-    let snapshot = collector_ports::applied(ctx.as_ref()).await?;
+    let call = crate::ctx_call::wrap(Arc::clone(&ctx));
+    let snapshot = collector_ports::applied(call.as_ref())
+        .await
+        .map_err(|e| Error::failed(e))?;
     let plans = plans_of(&snapshot);
     let Some(mut plan) = plans
         .into_iter()
@@ -56,12 +62,12 @@ pub async fn run_task(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
         .checked_add(plan.timeout)
         .map_err(|source| Error::failed(source.to_string()))?;
     let planner = Planner::new(
-        CtxQueue::runner(crate::ctx_call::wrap(ctx.clone())),
-        CtxPersist::new(crate::ctx_call::wrap(ctx.clone()), "planner"),
+        CtxQueue::runner(Arc::clone(&call)),
+        CtxPersist::new(Arc::clone(&call), "planner"),
     );
     let handler = TaskHandler {
         ctx: ctx.clone(),
-        env: Arc::clone(&env),
+        env: Arc::clone(env),
         snapshot,
         timeout: plan.timeout,
     };
