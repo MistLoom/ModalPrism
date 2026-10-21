@@ -159,17 +159,24 @@ async fn wait_http(addr: SocketAddr) -> Result<(), host::Error> {
     ))
 }
 
-fn strata_bind_config(services: &HostResources) -> Value {
+fn bind_config(services: &HostResources) -> Value {
     json!({
         "dataDir": services.data_dir(),
+        "configDir": services.config_dir(),
         "system": services.config().applied().system,
+        "proxyUrl": services.proxy_url(),
+        "browserProgram": services.browser_program(),
     })
 }
 
 async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
-    let strata_config = strata_bind_config(&services);
+    let bind = bind_config(&services);
+    let strata_config = json!({
+        "dataDir": services.data_dir(),
+        "system": services.config().applied().system,
+    });
     let providers: Vec<(
         &str,
         std::sync::Arc<dyn ability_support::AbilityProvider>,
@@ -210,21 +217,21 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
         ("health", health::provider(Arc::clone(&services)), true, None),
         (
             "config",
-            ability_config::provider(Arc::clone(&services)),
+            ability_config::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "config_inspect",
-            config_inspect::provider(Arc::clone(&services)),
-            false,
-            None,
+            ability_config_inspect::provider(),
+            true,
+            Some(bind.clone()),
         ),
         (
             "egress",
-            ability_egress::provider(Arc::clone(&services)),
+            ability_egress::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "paid_gateway",

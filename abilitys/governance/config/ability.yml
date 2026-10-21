@@ -1,0 +1,31 @@
+framework_version: "1"
+id: config
+open: false
+protocols: [fun]
+depends: []
+stateful: true
+factory: true
+description: 配置快照与重载
+config_schema:
+  type: object
+  properties:
+    configDir:
+      type: string
+    dataDir:
+      type: string
+    system:
+      type: object
+  required: [configDir, dataDir]
+methods:
+  - id: load
+    description: 从目录重载配置
+    input:
+      type: object
+  - id: generation
+    description: 当前代次
+    input:
+      type: object
+  - id: applied
+    description: 已应用快照摘要
+    input:
+      type: object

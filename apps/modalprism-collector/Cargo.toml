@@ -27,11 +27,11 @@ mime_guess = "2"
 rust-embed = { version = "8", features = ["mime-guess"] }
 tower-http = { version = "0.6", features = ["fs"] }
 ability-committer = { path = "../../abilitys/storage/committer" }
-ability-config = { path = "../../ability/config" }
-ability-egress = { path = "../../ability/egress" }
+ability-config = { path = "../../abilitys/governance/config" }
+ability-egress = { path = "../../abilitys/network/egress" }
 ability-planner = { path = "../../ability/planner" }
 config = { path = "../../crates/config" }
-config_inspect = { path = "../../ability/config_inspect" }
+ability-config-inspect = { path = "../../abilitys/governance/config-inspect" }
 frame-core.workspace = true
 frame-port-http.workspace = true
 health = { path = "../../ability/health" }

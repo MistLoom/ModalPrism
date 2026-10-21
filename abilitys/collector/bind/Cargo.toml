@@ -1,15 +1,16 @@
 [package]
-name = "ability-egress"
+name = "collector-bind"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "出站检查与正向代理状态"
+description = "采集 Ability 绑定期配置"
 publish = false
 
 [dependencies]
 ability-support.workspace = true
-host = { path = "../../crates/host" }
+config = { path = "../../../crates/config" }
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]

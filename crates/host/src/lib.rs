@@ -113,6 +113,10 @@ impl HostResources {
         self.proxy.lock().expect("代理").clone()
     }
 
+    pub fn browser_program(&self) -> PathBuf {
+        self.browser_program.lock().expect("浏览器").clone()
+    }
+
     pub fn set_browser_program(&self, program: impl Into<PathBuf>) {
         *self.browser_program.lock().expect("浏览器") = program.into();
     }

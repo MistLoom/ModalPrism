@@ -1,0 +1,27 @@
+framework_version: "1"
+id: egress
+open: false
+protocols: [fun]
+depends: []
+stateful: true
+factory: true
+description: 出站策略与连通性检查
+config_schema:
+  type: object
+  properties:
+    dataDir: { type: string }
+    system: { type: object }
+    proxyUrl: { type: string }
+  required: [dataDir]
+methods:
+  - id: check
+    description: 检查 URL 是否被策略阻断
+    input:
+      type: object
+      properties:
+        url: { type: string }
+      required: [url]
+  - id: status
+    description: 当前代理地址
+    input:
+      type: object

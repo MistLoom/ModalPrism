@@ -1,0 +1,25 @@
+[package]
+name = "ability-egress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "出站策略与连通性检查"
+publish = false
+build = "build.rs"
+
+[dependencies]
+ability-support.workspace = true
+async-trait.workspace = true
+collector-bind = { path = "../../collector/bind" }
+collector-runtime = { path = "../../../crates/collector-runtime" }
+egress = { path = "../../../crates/egress" }
+serde_json.workspace = true
+strata-shared = { path = "../../storage/strata-shared" }
+url.workspace = true
+
+[build-dependencies]
+ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+
+[lints]
+workspace = true

@@ -24,8 +24,23 @@ dependencies = [
 name = "ability-config"
 version = "0.1.0"
 dependencies = [
+ "ability-sdk-codegen",
  "ability-support",
- "host",
+ "async-trait",
+ "collector-bind",
+ "config",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-config-inspect"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-bind",
+ "config",
  "serde_json",
 ]
 
@@ -48,9 +63,15 @@ dependencies = [
 name = "ability-egress"
 version = "0.1.0"
 dependencies = [
+ "ability-sdk-codegen",
  "ability-support",
- "host",
+ "async-trait",
+ "collector-bind",
+ "collector-runtime",
+ "egress",
  "serde_json",
+ "strata-shared",
+ "url",
 ]
 
 [[package]]
@@ -1511,6 +1532,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "collector-bind"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "config",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "collector-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1599,15 +1630,6 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "config_inspect"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
 ]
 
 [[package]]
@@ -5740,6 +5762,7 @@ version = "0.1.0"
 dependencies = [
  "ability-committer",
  "ability-config",
+ "ability-config-inspect",
  "ability-core",
  "ability-egress",
  "ability-planner",
@@ -5758,7 +5781,6 @@ dependencies = [
  "async-trait",
  "axum",
  "config",
- "config_inspect",
  "console-api",
  "frame-core",
  "frame-port-http",

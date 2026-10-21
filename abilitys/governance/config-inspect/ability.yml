@@ -1,10 +1,19 @@
 framework_version: "1"
 id: config_inspect
 open: true
-protocols: [fun]
+protocols: [fun, http]
 depends: []
-stateful: false
-description: 检查配置而不替换快照
+stateful: true
+factory: true
+description: 配置校验与差异
+config_schema:
+  type: object
+  properties:
+    configDir:
+      type: string
+    dataDir:
+      type: string
+  required: [configDir, dataDir]
 methods:
   - id: validate
     description: 重新校验配置目录
@@ -18,3 +27,6 @@ methods:
     description: 解释模块字段来源
     input:
       type: object
+      properties:
+        module: { type: string }
+      required: [module]
