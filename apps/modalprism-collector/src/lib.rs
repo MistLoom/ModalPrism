@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use ability_core::AbilityHost;
 use ability_support::{InstanceId, MethodId};
-use collector_assembly::{ConsoleGateway, HttpOpsGateway, install_collector, ops_http_expose};
+use collector_assembly::{
+    ConsoleGateway, HttpOpsGateway, console_expose, install_collector, ops_http_expose,
+};
 use collector_runtime::{Binds, Error, refuse_remote, require_loopback};
 use config::LoadOptions;
 use frame_core::{Gateway, InvokeRequest};
@@ -19,6 +21,27 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 mod console_static;
+
+#[derive(Clone, Copy, Debug)]
+pub struct BootOptions {
+    pub background_loops: bool,
+}
+
+impl Default for BootOptions {
+    fn default() -> Self {
+        Self {
+            background_loops: true,
+        }
+    }
+}
+
+impl BootOptions {
+    pub fn without_background_loops() -> Self {
+        Self {
+            background_loops: false,
+        }
+    }
+}
 
 pub struct Running {
     host: Arc<AbilityHost>,
@@ -69,7 +92,12 @@ impl Running {
     }
 }
 
-pub async fn boot(data: &Path, config_dir: &Path, binds: Binds) -> Result<Running, Error> {
+pub async fn boot(
+    data: &Path,
+    config_dir: &Path,
+    binds: Binds,
+    options: BootOptions,
+) -> Result<Running, Error> {
     let load_options = LoadOptions::from_process();
     let snapshot = config::validate(config_dir, &load_options)?;
     refuse_remote(&snapshot, data)?;
@@ -99,7 +127,7 @@ pub async fn boot(data: &Path, config_dir: &Path, binds: Binds) -> Result<Runnin
     });
 
     let host = install_collector(bind, strata_config).await?;
-    let gateway = ConsoleGateway::new(Arc::clone(&host));
+    let gateway = ConsoleGateway::new(Arc::clone(&host), console_expose());
     let stop = Arc::new(AtomicBool::new(false));
 
     let _ = invoke_host(&host, "committer", "maintain", json!({})).await;
@@ -115,12 +143,12 @@ pub async fn boot(data: &Path, config_dir: &Path, binds: Binds) -> Result<Runnin
     });
     wait_http(http).await?;
 
-    let tasks = vec![
-        http_task,
-        spawn_planner_loop(Arc::clone(&host), Arc::clone(&stop)),
-        spawn_flush_loop(Arc::clone(&host), Arc::clone(&stop)),
-        spawn_health_loop(Arc::clone(&host), Arc::clone(&stop)),
-    ];
+    let mut tasks = vec![http_task];
+    if options.background_loops {
+        tasks.push(spawn_planner_loop(Arc::clone(&host), Arc::clone(&stop)));
+        tasks.push(spawn_flush_loop(Arc::clone(&host), Arc::clone(&stop)));
+        tasks.push(spawn_health_loop(Arc::clone(&host), Arc::clone(&stop)));
+    }
 
     Ok(Running {
         host,

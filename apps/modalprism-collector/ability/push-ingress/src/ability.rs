@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use ability_collector_runner::access::AbilityAccess;
+use collector_accessor_shared::AbilityAccess;
 
 use crate::generated::manifest;
 
@@ -55,6 +55,7 @@ impl PushCommit for CtxPush {
         AbilityAccess::build(
             Arc::clone(&self.ctx),
             policy,
+            config::overlay_system_policy(&self.bind.system, &Value::Null),
             paid,
             self.bind.data_dir.join("staging"),
         )

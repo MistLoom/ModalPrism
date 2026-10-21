@@ -16,7 +16,7 @@ pub async fn source_status(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
         .await
         .map_err(|e| Error::failed(e.to_string()))?;
     Ok(json!({
-        "key": format!("source/{source}"),
+        "key": planner::health_source_subject(&source),
         "status": status.health_status,
         "alert": status.alert,
         "lastError": status.last_error,

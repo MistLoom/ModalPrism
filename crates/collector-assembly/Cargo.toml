@@ -37,8 +37,12 @@ ability-accessor-search = { path = "../../apps/modalprism-collector/ability/acce
 ability-accessor-push = { path = "../../apps/modalprism-collector/ability/accessor-push" }
 ability-accessor-file = { path = "../../apps/modalprism-collector/ability/accessor-file" }
 ability-accessor-browser = { path = "../../apps/modalprism-collector/ability/accessor-browser" }
+ability-accessor-bundle-list = { path = "../../apps/modalprism-collector/ability/accessor-bundle-list" }
 type_article = { path = "../../abilitys/project/type-article" }
 type_hotlist = { path = "../../abilitys/project/type-hotlist" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

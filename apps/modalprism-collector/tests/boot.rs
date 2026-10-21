@@ -9,7 +9,7 @@ use ability_support::{InstanceId, MethodId};
 use collector_runtime::Binds;
 use config::builtin_presets;
 use frame_core::{Gateway, InvokeRequest};
-use modalprism_collector::{apply_hotlist, boot};
+use modalprism_collector::{apply_hotlist, boot, BootOptions};
 use serde_json::json;
 use strata_model::{
     AccessTask, ApplyOpts, Body, ChangeSet, FacetKind, FacetSelector, LineageInput, Locator, Op,
@@ -51,6 +51,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
             proxy: "127.0.0.1:0".parse().unwrap(),
             push: "127.0.0.1:0".parse().unwrap(),
         },
+        BootOptions::default(),
     )
     .await
     .unwrap();
@@ -189,7 +190,7 @@ async fn visible_flush_commits_the_hotlist_changeset() {
         "types/hotlist.yaml",
         "id: type/hotlist\nkind: type\nname: HotList\nspec:\n  keepSnapshots: 2\n",
     );
-    let running = boot(data.path(), config.path(), binds_zero())
+    let running = boot(data.path(), config.path(), binds_zero(), BootOptions::default())
         .await
         .unwrap();
     let strata = strata_client::Strata::open(data.path(), strata_client::Options::default())

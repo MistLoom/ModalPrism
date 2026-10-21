@@ -27,6 +27,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ability-accessor-bundle-list"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
 name = "ability-accessor-file"
 version = "0.1.0"
 dependencies = [
@@ -120,6 +132,7 @@ name = "ability-collector-runner"
 version = "0.1.0"
 dependencies = [
  "ability-collector-planner",
+ "ability-committer",
  "ability-config",
  "ability-control-state",
  "ability-core",
@@ -133,6 +146,7 @@ dependencies = [
  "accessors",
  "async-trait",
  "bytes",
+ "collector-accessor-shared",
  "collector-bind",
  "collector-gateway",
  "collector-ports",
@@ -148,6 +162,7 @@ dependencies = [
  "strata-shared",
  "tempfile",
  "tokio",
+ "type_hotlist",
 ]
 
 [[package]]
@@ -250,7 +265,6 @@ dependencies = [
 name = "ability-health"
 version = "0.1.0"
 dependencies = [
- "ability-core",
  "ability-sdk-codegen",
  "ability-support",
  "async-trait",
@@ -284,12 +298,12 @@ dependencies = [
 name = "ability-push-ingress"
 version = "0.1.0"
 dependencies = [
- "ability-collector-runner",
  "ability-sdk-codegen",
  "ability-support",
  "accessors",
  "accessors-builtin",
  "async-trait",
+ "collector-accessor-shared",
  "collector-bind",
  "collector-gateway",
  "collector-ports",
@@ -1680,13 +1694,15 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 name = "collector-accessor-shared"
 version = "0.1.0"
 dependencies = [
- "ability-collector-runner",
  "ability-support",
  "accessors",
  "async-trait",
+ "bytes",
  "collector-bind",
  "collector-gateway",
  "collector-runtime",
+ "egress",
+ "paid",
  "serde",
  "serde_json",
  "strata-model",
@@ -1698,6 +1714,7 @@ version = "0.1.0"
 dependencies = [
  "ability-accessor-api",
  "ability-accessor-browser",
+ "ability-accessor-bundle-list",
  "ability-accessor-file",
  "ability-accessor-http",
  "ability-accessor-paid-api",
@@ -9620,9 +9637,14 @@ dependencies = [
 name = "type_hotlist"
 version = "0.1.0"
 dependencies = [
+ "ability-sdk-codegen",
  "ability-support",
+ "async-trait",
+ "config",
  "serde_json",
+ "strata-client",
  "strata-model",
+ "strata-shared",
  "types",
 ]
 

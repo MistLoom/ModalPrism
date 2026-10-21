@@ -61,3 +61,19 @@ pub fn consecutive(health: &Health) -> u32 {
         .saturating_add(health.permanent)
         .saturating_add(health.config)
 }
+
+pub fn health_source_subject(source_id: &str) -> String {
+    if source_id.starts_with("source/") {
+        source_id.to_string()
+    } else {
+        format!("source/{source_id}")
+    }
+}
+
+pub fn health_accessor_subject(accessor: &str) -> String {
+    if accessor.starts_with("accessor/") {
+        accessor.to_string()
+    } else {
+        format!("accessor/{accessor}")
+    }
+}

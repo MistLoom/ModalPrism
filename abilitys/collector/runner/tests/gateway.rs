@@ -1,10 +1,12 @@
-//! runner 经 Gateway 委托 planner.run_task。
+//! runner 经 Gateway 执行 run_task（成功 nack 未知信源）。
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ability_collector_planner::provider as planner_provider;
 use ability_collector_runner::provider as runner_provider;
+use ability_committer::provider as committer_provider;
+use type_hotlist::provider as type_hotlist_provider;
 use ability_config::provider as config_provider;
 use ability_core::AbilityHost;
 use ability_control_state::provider as control_state_provider;
@@ -14,8 +16,8 @@ use ability_strata_queue::provider as queue_provider;
 use ability_strata_read::provider as read_provider;
 use ability_strata_write::provider as write_provider;
 use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
-use frame_core::{Gateway, InvokeRequest};
 use config::builtin_presets;
+use frame_core::{Gateway, InvokeRequest};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -58,12 +60,23 @@ async fn load(
             bindings,
         },
     )
-        .await
-        .expect("加载");
+    .await
+    .expect("加载");
+}
+
+fn bindings(deps: &[&str]) -> BTreeMap<String, InstanceId> {
+    let mut out = BTreeMap::new();
+    for dep in deps {
+        out.insert(
+            dep.to_string(),
+            InstanceId::new(*dep).expect("instance"),
+        );
+    }
+    out
 }
 
 #[tokio::test]
-async fn runner_delegates_run_task_to_planner() {
+async fn runner_run_task_nacks_unknown_source() {
     let data = tempdir().expect("临时目录");
     let config_dir = tempdir().expect("配置目录");
     write_config(config_dir.path());
@@ -77,6 +90,8 @@ async fn runner_delegates_run_task_to_planner() {
     host.set_entry_app("test");
 
     for (id, provider) in [
+        ("committer", committer_provider()),
+        ("type_hotlist", type_hotlist_provider()),
         ("config", config_provider()),
         ("control_state", control_state_provider()),
         ("egress", egress_provider()),
@@ -93,63 +108,76 @@ async fn runner_delegates_run_task_to_planner() {
     load(&host, "config", bind.clone(), None).await;
     load(
         &host,
-        "control_state",
-        json!({
-            "dataDir": data.path().to_string_lossy(),
-            "system": json!({}),
-        }),
-        None,
+        "committer",
+        strata_config.clone(),
+        Some(bindings(&["config"])),
     )
     .await;
-    load(&host, "egress", bind.clone(), None).await;
-    load(&host, "paid_gateway", bind.clone(), None).await;
-    load(&host, "strata_read", strata_config.clone(), None).await;
     load(&host, "strata_write", strata_config.clone(), None).await;
-    load(&host, "strata_queue", strata_config, None).await;
-
-    let mut planner_bindings = BTreeMap::new();
-    for dep in ["config", "strata_queue", "control_state"] {
-        planner_bindings.insert(
-            dep.to_string(),
-            InstanceId::new(dep).expect("instance"),
-        );
-    }
-    load(&host, "planner", bind.clone(), Some(planner_bindings)).await;
-
-    let mut runner_bindings = BTreeMap::new();
-    for dep in [
-        "config",
-        "strata_queue",
-        "strata_write",
-        "strata_read",
+    load(&host, "control_state", strata_config.clone(), None).await;
+    load(
+        &host,
+        "type_hotlist",
+        strata_config.clone(),
+        Some(bindings(&["config"])),
+    )
+    .await;
+    load(
+        &host,
         "egress",
+        bind.clone(),
+        Some(bindings(&["config"])),
+    )
+    .await;
+    load(
+        &host,
         "paid_gateway",
-        "control_state",
-    ] {
-        runner_bindings.insert(
-            dep.to_string(),
-            InstanceId::new(dep).expect("instance"),
-        );
-    }
-    load(&host, "runner", bind.clone(), Some(runner_bindings)).await;
+        bind.clone(),
+        Some(bindings(&["config"])),
+    )
+    .await;
+    load(&host, "strata_read", strata_config.clone(), None).await;
+    load(&host, "strata_queue", strata_config.clone(), None).await;
+    load(
+        &host,
+        "planner",
+        bind.clone(),
+        Some(bindings(&["config", "strata_queue", "control_state"])),
+    )
+    .await;
+    load(
+        &host,
+        "runner",
+        bind.clone(),
+        Some(bindings(&[
+            "config",
+            "strata_queue",
+            "strata_write",
+            "strata_read",
+            "egress",
+            "paid_gateway",
+            "control_state",
+        ])),
+    )
+    .await;
 
-    let runner_instance = InstanceId::new("runner").expect("instance");
     let result = host
         .invoke(InvokeRequest::new(
-            runner_instance,
+            InstanceId::new("runner").expect("instance"),
             MethodId::new("run_task").expect("method"),
             json!({
                 "task": {
                     "taskId": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                    "sourceId": "missing-source",
-                    "accessor": "http",
-                    "generation": 0,
+                    "sourceId": "source/missing",
+                    "accessor": "builtin:http",
+                    "generation": 1,
                     "attempt": 0,
-                    "queue": "default",
+                    "priority": 10,
+                    "queue": "free",
                     "reason": "schedule",
-                    "locator": { "url": "https://example.com" },
+                    "locator": { "type": "url", "url": "https://example.com/" },
                     "spec": {},
-                    "leaseUntil": "2026-01-01T00:00:00Z",
+                    "leaseUntil": "2026-01-01T00:00:00Z"
                 }
             }),
         ))
@@ -157,17 +185,16 @@ async fn runner_delegates_run_task_to_planner() {
 
     match result {
         Ok(response) => {
-            assert!(
-                response.data.get("nacked").is_some() || response.data.get("ok").is_some()
+            assert_eq!(
+                response.data.get("nacked").and_then(|v| v.as_str()),
+                Some("config")
             );
         }
         Err(error) => {
             let msg = error.to_string();
             assert!(
-                msg.contains("planner")
-                    || msg.contains("spec 无效")
-                    || msg.contains("config"),
-                "runner 应进入任务执行路径: {error}"
+                msg.contains("config") || msg.contains("任务不存在"),
+                "应进入 run_task 业务路径: {error}"
             );
         }
     }

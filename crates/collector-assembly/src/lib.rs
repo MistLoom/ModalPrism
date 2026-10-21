@@ -8,7 +8,8 @@ mod link_read;
 mod surface;
 
 pub use expose::{
-    OPS_HTTP_INSTANCES, READ_AGENT_MCP_INSTANCES, ops_http_expose, read_agent_expose,
+    OPS_HTTP_INSTANCES, READ_AGENT_MCP_INSTANCES, console_expose, ops_http_expose,
+    read_agent_expose,
 };
 pub use link_collector::install_collector;
 pub use link_read::install_read_agent;

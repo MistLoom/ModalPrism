@@ -8,13 +8,13 @@ use ability_support::{
 use async_trait::async_trait;
 use serde_json::Value;
 use strata_client::Strata;
-use strata_shared::{normalize_args, open_strata};
+use strata_shared::{attach_strata, normalize_args};
 
 use crate::generated::manifest;
 
 pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::from_manifest(manifest::manifest()).into_factory(|config| async move {
-        let strata = open_strata(&config).await?;
+        let strata = attach_strata(&config).await?;
         Ok(Arc::new(StrataReadAbility {
             manifest: manifest::manifest(),
             strata,

@@ -18,6 +18,7 @@ members = [
     "abilitys/collector/accessor-shared",
     "apps/modalprism-collector/ability/accessor-api",
     "apps/modalprism-collector/ability/accessor-browser",
+    "apps/modalprism-collector/ability/accessor-bundle-list",
     "apps/modalprism-collector/ability/accessor-file",
     "apps/modalprism-collector/ability/accessor-http",
     "apps/modalprism-collector/ability/accessor-paid-api",

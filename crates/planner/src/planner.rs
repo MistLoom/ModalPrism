@@ -199,7 +199,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         let _guard = self.lock.lock().await;
         let db = load_db(&self.persist).await?;
         let row = db.sources.get(source);
-        let health = db.health.get(&format!("source/{source}"));
+        let health = db.health.get(&crate::health_source_subject(source));
         let today = day_of(Timestamp::now());
         let today_yield_count = db
             .yields
@@ -427,7 +427,7 @@ fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
         .sources
         .entry(id)
         .or_insert_with(|| new_row(millis(plan.interval), plan.generation));
-    let subject = format!("source/{}", plan.source_id);
+    let subject = crate::health_source_subject(plan.source_id.as_str());
     if let Some(health) = db.health.get_mut(&subject) {
         if health.status == "misconfigured" && row.generation != plan.generation {
             health.status = "ok".into();
@@ -493,7 +493,7 @@ fn dispatchable(db: &Db, plan: &SourcePlan) -> bool {
     plan.enabled
         && !matches!(
             db.health
-                .get(&format!("source/{}", plan.source_id))
+                .get(&crate::health_source_subject(plan.source_id.as_str()))
                 .map(|health| health.status.as_str()),
             Some("paused" | "misconfigured")
         )

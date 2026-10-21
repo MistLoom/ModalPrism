@@ -46,7 +46,7 @@ impl Ability for CommitterAbility {
     ) -> Result<Value> {
         let args = normalize_args(args)?;
         match method.as_str() {
-            "hotlist_apply" => crate::logic::hotlist_apply::run(&self.strata, ctx).await,
+            "hotlist_apply" => crate::logic::hotlist_apply::run(ctx).await,
             "flush" => crate::logic::flush::run(&self.strata, &args).await,
             "maintain" => crate::logic::maintain::run(&self.data_dir, &self.strata, &args).await,
             "recover" => crate::logic::recover::run(&self.strata, &args).await,

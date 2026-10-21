@@ -1,0 +1,31 @@
+framework_version: "1"
+id: accessor_bundle_list
+open: false
+protocols: [fun]
+depends:
+  - egress
+  - paid_gateway
+  - config
+stateful: true
+factory: true
+description: 内置访问器 bundle-list
+config_schema:
+  type: object
+  properties:
+    dataDir: { type: string }
+    configDir: { type: string }
+    system: { type: object }
+    proxyUrl: { type: string }
+    browserProgram: { type: string }
+  required: [dataDir, configDir]
+methods:
+  - id: validate
+    description: 校验访问规格
+    input:
+      type: object
+      properties:
+        spec: {}
+  - id: access
+    description: 执行一次访问
+    input:
+      type: object

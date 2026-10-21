@@ -7,41 +7,66 @@ use ability_core::AbilityHost;
 use ability_support::{Error, InstanceId, MethodId, Result};
 use async_trait::async_trait;
 use frame_core::{
-    AbilityExpose, AccessKind, CatalogEntry, Gateway, InvokeRequest, InvokeResponse,
+    AbilityExpose, CatalogEntry, Gateway, InvokeMask, InvokeRequest, InvokeResponse,
+    invoke_mask_from_expose,
 };
 
-/// 控制台与进程内写路径：不施加 HTTP 协议门控，归属应用内全部已加载实例可调用。
+fn mask_for_host(host: &AbilityHost, expose: &AbilityExpose) -> InvokeMask {
+    let ids: Vec<String> = host
+        .catalog()
+        .into_iter()
+        .map(|entry| entry.instance.to_string())
+        .collect();
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    invoke_mask_from_expose(expose, &refs)
+}
+
+/// 控制台与进程内写路径：Expose 白名单 + 调用链 InvokeMask。
 pub struct ConsoleGateway {
     host: Arc<AbilityHost>,
+    mask: InvokeMask,
 }
 
 impl ConsoleGateway {
-    pub fn new(host: Arc<AbilityHost>) -> Arc<dyn Gateway> {
-        Arc::new(Self { host })
+    pub fn new(host: Arc<AbilityHost>, expose: AbilityExpose) -> Arc<dyn Gateway> {
+        let mask = mask_for_host(host.as_ref(), &expose);
+        Arc::new(Self { host, mask })
     }
 }
 
 #[async_trait]
 impl Gateway for ConsoleGateway {
     async fn invoke(&self, request: InvokeRequest) -> Result<InvokeResponse> {
-        self.host.invoke(request).await
+        self.host
+            .invoke(request.with_invoke_mask(self.mask.clone()))
+            .await
     }
 
     fn catalog(&self) -> Vec<CatalogEntry> {
-        self.host.catalog()
+        self.host
+            .catalog()
+            .into_iter()
+            .filter(|entry| {
+                self.mask
+                    .allows(entry.instance.as_str())
+            })
+            .collect()
     }
 
     fn get_entry(&self, instance: &InstanceId, method: &MethodId) -> Option<CatalogEntry> {
+        if !self.mask.allows(instance.as_str()) {
+            return None;
+        }
         self.host.get_entry(instance, method)
     }
 }
 
-/// 对外 `/v1/abilities`：HTTP 协议门控 + Expose 白名单。
+/// 对外 `/v1/abilities`：Expose 白名单 + InvokeMask，不经全局 access_gate。
 pub struct HttpOpsGateway {
     host: Arc<AbilityHost>,
     expose: AbilityExpose,
+    mask: InvokeMask,
     http_instances: HashSet<String>,
-    lock: tokio::sync::Mutex<()>,
 }
 
 impl HttpOpsGateway {
@@ -50,19 +75,24 @@ impl HttpOpsGateway {
         expose: AbilityExpose,
         http_instances: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Arc<dyn Gateway> {
+        let http_instances: HashSet<String> = http_instances
+            .into_iter()
+            .map(|id| id.as_ref().to_string())
+            .collect();
+        let mask = mask_for_host(host.as_ref(), &expose);
         Arc::new(Self {
             host,
             expose,
-            http_instances: http_instances
-                .into_iter()
-                .map(|id| id.as_ref().to_string())
-                .collect(),
-            lock: tokio::sync::Mutex::new(()),
+            mask,
+            http_instances,
         })
     }
 
     fn ensure_exposed(&self, instance: &str) -> Result<()> {
         if !self.expose.resolve(instance).enabled {
+            return Err(Error::unavailable("实例未开放"));
+        }
+        if !self.http_instances.contains(instance) {
             return Err(Error::unavailable("实例未开放"));
         }
         Ok(())
@@ -73,11 +103,9 @@ impl HttpOpsGateway {
 impl Gateway for HttpOpsGateway {
     async fn invoke(&self, request: InvokeRequest) -> Result<InvokeResponse> {
         self.ensure_exposed(request.instance.as_str())?;
-        let _guard = self.lock.lock().await;
-        self.host.set_access_gate(Some(AccessKind::Http));
-        let result = self.host.invoke(request).await;
-        self.host.set_access_gate(None);
-        result
+        self.host
+            .invoke(request.with_invoke_mask(self.mask.clone()))
+            .await
     }
 
     fn catalog(&self) -> Vec<CatalogEntry> {
@@ -87,6 +115,7 @@ impl Gateway for HttpOpsGateway {
             .filter(|entry| {
                 self.expose.resolve(entry.instance.as_str()).enabled
                     && self.http_instances.contains(entry.instance.as_str())
+                    && self.mask.allows(entry.instance.as_str())
             })
             .collect()
     }
@@ -94,6 +123,7 @@ impl Gateway for HttpOpsGateway {
     fn get_entry(&self, instance: &InstanceId, method: &MethodId) -> Option<CatalogEntry> {
         if !self.expose.resolve(instance.as_str()).enabled
             || !self.http_instances.contains(instance.as_str())
+            || !self.mask.allows(instance.as_str())
         {
             return None;
         }
@@ -101,12 +131,12 @@ impl Gateway for HttpOpsGateway {
     }
 }
 
-/// MCP / Tools 表面：协议门控 + Expose 白名单。
+/// MCP / Tools 表面：Expose 白名单 + InvokeMask。
 pub struct McpReadGateway {
     host: Arc<AbilityHost>,
     expose: AbilityExpose,
+    mask: InvokeMask,
     mcp_instances: HashSet<String>,
-    lock: tokio::sync::Mutex<()>,
 }
 
 impl McpReadGateway {
@@ -115,19 +145,24 @@ impl McpReadGateway {
         expose: AbilityExpose,
         mcp_instances: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Arc<dyn Gateway> {
+        let mcp_instances: HashSet<String> = mcp_instances
+            .into_iter()
+            .map(|id| id.as_ref().to_string())
+            .collect();
+        let mask = mask_for_host(host.as_ref(), &expose);
         Arc::new(Self {
             host,
             expose,
-            mcp_instances: mcp_instances
-                .into_iter()
-                .map(|id| id.as_ref().to_string())
-                .collect(),
-            lock: tokio::sync::Mutex::new(()),
+            mask,
+            mcp_instances,
         })
     }
 
     fn ensure_exposed(&self, instance: &str) -> Result<()> {
         if !self.expose.resolve(instance).enabled {
+            return Err(Error::unavailable("实例未开放"));
+        }
+        if !self.mcp_instances.contains(instance) {
             return Err(Error::unavailable("实例未开放"));
         }
         Ok(())
@@ -138,11 +173,9 @@ impl McpReadGateway {
 impl Gateway for McpReadGateway {
     async fn invoke(&self, request: InvokeRequest) -> Result<InvokeResponse> {
         self.ensure_exposed(request.instance.as_str())?;
-        let _guard = self.lock.lock().await;
-        self.host.set_access_gate(Some(AccessKind::Mcp));
-        let result = self.host.invoke(request).await;
-        self.host.set_access_gate(None);
-        result
+        self.host
+            .invoke(request.with_invoke_mask(self.mask.clone()))
+            .await
     }
 
     fn catalog(&self) -> Vec<CatalogEntry> {
@@ -152,6 +185,7 @@ impl Gateway for McpReadGateway {
             .filter(|entry| {
                 self.expose.resolve(entry.instance.as_str()).enabled
                     && self.mcp_instances.contains(entry.instance.as_str())
+                    && self.mask.allows(entry.instance.as_str())
             })
             .collect()
     }
@@ -159,6 +193,7 @@ impl Gateway for McpReadGateway {
     fn get_entry(&self, instance: &InstanceId, method: &MethodId) -> Option<CatalogEntry> {
         if !self.expose.resolve(instance.as_str()).enabled
             || !self.mcp_instances.contains(instance.as_str())
+            || !self.mask.allows(instance.as_str())
         {
             return None;
         }

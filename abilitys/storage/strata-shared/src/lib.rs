@@ -1,10 +1,14 @@
 #![allow(dead_code, non_camel_case_types, unused_imports)]
 //! Strata Ability 共用：从绑定期配置打开 `Strata`。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ability_support::{Error, Result};
+
+mod registry;
+
+pub use registry::{borrow as borrow_strata, register_owner as register_strata};
 use serde::Deserialize;
 use serde_json::Value;
 use strata_client::{Options, Strata};
@@ -17,14 +21,37 @@ pub struct OpenConfig {
     pub system: Value,
 }
 
+/// 仅 `committer` 工厂调用：打开并注册共享 `Strata`。
 pub async fn open_strata(config: &Value) -> Result<Arc<Strata>> {
     let cfg: OpenConfig = serde_json::from_value(config.clone())
         .map_err(|e| Error::invalid_args(e.to_string()))?;
     let options = strata_options(&cfg.system);
-    let strata = Strata::open(&cfg.data_dir, options)
-        .await
-        .map_err(|e| Error::failed(e.to_string()))?;
-    Ok(Arc::new(strata))
+    let strata = Arc::new(
+        Strata::open(&cfg.data_dir, options)
+            .await
+            .map_err(|e| Error::failed(e.to_string()))?,
+    );
+    register_strata(&cfg.data_dir, Arc::clone(&strata)).await?;
+    Ok(strata)
+}
+
+/// 非 owner Ability 工厂：借用已注册的 `Strata`。
+pub async fn attach_strata(config: &Value) -> Result<Arc<Strata>> {
+    let cfg: OpenConfig = serde_json::from_value(config.clone())
+        .map_err(|e| Error::invalid_args(e.to_string()))?;
+    borrow_strata(&cfg.data_dir).await
+}
+
+pub fn data_dir_of(config: &Value) -> Result<PathBuf> {
+    let cfg: OpenConfig = serde_json::from_value(config.clone())
+        .map_err(|e| Error::invalid_args(e.to_string()))?;
+    Ok(cfg.data_dir)
+}
+
+pub fn system_of(config: &Value) -> Result<Value> {
+    let cfg: OpenConfig = serde_json::from_value(config.clone())
+        .map_err(|e| Error::invalid_args(e.to_string()))?;
+    Ok(cfg.system)
 }
 
 pub fn invalid_args(message: impl Into<String>) -> Error {

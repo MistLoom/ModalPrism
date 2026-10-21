@@ -1,35 +1,22 @@
-use ability_support::{AbilityCtx, Error, MethodId, Result};
+use ability_support::{AbilityCtx, MethodId, Result};
 use serde_json::{Value, json};
-use strata_client::Strata;
-use strata_model::ApplyOpts;
 
-pub async fn run(strata: &Strata, ctx: &dyn AbilityCtx) -> Result<serde_json::Value> {
-    let applied = ctx
-        .call("config", &MethodId::new("applied").unwrap(), json!({}))
+pub async fn run(ctx: &dyn AbilityCtx) -> Result<serde_json::Value> {
+    let on_commit = MethodId::new("on_commit").expect("method id");
+    let value = ctx
+        .call("type_hotlist", &on_commit, json!({}))
         .await?;
-    let generation = applied.get("generation").and_then(|v| v.as_u64()).unwrap_or(1);
-    let system = applied.get("system").cloned().unwrap_or(json!({}));
-    let modules: std::collections::BTreeMap<String, Value> = applied
-        .get("modules")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let snapshot = config::Snapshot {
-        generation,
-        system,
-        modules,
-        origins: std::collections::BTreeMap::new(),
-    };
-    let value = types::HotList::on_commit(strata, &snapshot)
-        .await
-        .map_err(|e| Error::failed(e.to_string()))?;
     if value.is_null() {
         return Ok(json!({ "applied": false }));
     }
-    let changeset = serde_json::from_value(value).map_err(|e| Error::failed(e.to_string()))?;
-    strata
-        .apply(changeset, ApplyOpts::default())
-        .await
-        .map_err(|e| Error::failed(e.to_string()))?;
-    strata.flush().await.map_err(|e| Error::failed(e.to_string()))?;
+    let apply = MethodId::new("apply").expect("method id");
+    ctx.call(
+        "strata_write",
+        &apply,
+        json!({ "changeset": value }),
+    )
+    .await?;
+    let flush = MethodId::new("flush").expect("method id");
+    ctx.call("committer", &flush, json!({})).await?;
     Ok(json!({ "applied": true }))
 }

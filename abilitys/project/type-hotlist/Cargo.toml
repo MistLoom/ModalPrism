@@ -4,14 +4,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "热榜快照投影与变更集"
+description = "热榜投影"
 publish = false
+build = "build.rs"
 
 [dependencies]
 ability-support.workspace = true
+async-trait.workspace = true
+config = { path = "../../../crates/config" }
 serde_json.workspace = true
+strata-client = { path = "../../../crates/strata-client" }
 strata-model = { path = "../../../crates/strata-model" }
+strata-shared = { path = "../../storage/strata-shared" }
 types = { path = "../../../crates/types" }
+
+[build-dependencies]
+ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
 
 [lints]
 workspace = true

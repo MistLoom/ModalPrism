@@ -17,7 +17,9 @@ collector-runtime = { path = "../../../crates/collector-runtime" }
 serde.workspace = true
 serde_json.workspace = true
 strata-model = { path = "../../../crates/strata-model" }
-ability-collector-runner = { path = "../runner" }
+bytes.workspace = true
+egress = { path = "../../../crates/egress" }
+paid = { path = "../../../crates/paid" }
 
 [lints]
 workspace = true

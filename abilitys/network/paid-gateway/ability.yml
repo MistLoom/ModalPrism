@@ -2,7 +2,8 @@ framework_version: "1"
 id: paid_gateway
 open: false
 protocols: [fun]
-depends: []
+depends:
+  - config
 stateful: true
 factory: true
 description: 付费回执网关
@@ -33,3 +34,20 @@ methods:
       properties:
         receiptId: { type: string }
       required: [receiptId]
+  - id: call
+    description: 经付费网关执行请求
+    input:
+      type: object
+      properties:
+        endpoint: { type: string }
+        headers:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: string }
+        body: {}
+        params: { type: object }
+        policy: { type: object }
+      required: [endpoint, headers, body, params]

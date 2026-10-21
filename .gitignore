@@ -1,4 +1,5 @@
 /target
+/var/
 apps/console-web/node_modules/
 # apps/console-web/dist/ — committed for cargo-only console embed; see docs/console.md
 

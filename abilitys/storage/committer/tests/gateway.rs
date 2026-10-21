@@ -35,9 +35,39 @@ async fn strata_read_resolve_via_gateway() {
     });
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("test");
+    host.install_str("committer", committer_provider())
+        .await
+        .expect("安装");
     host.install_str("strata_read", strata_read_provider())
         .await
         .expect("安装");
+    host.install_str("config", config_provider())
+        .await
+        .expect("安装");
+    let config_dir = tempdir().expect("配置");
+    write_config_dir(config_dir.path());
+    let bind = json!({
+        "dataDir": data.path().to_string_lossy(),
+        "configDir": config_dir.path().to_string_lossy(),
+        "system": json!({}),
+    });
+    host.load(LoadSpec::new(
+        SourceId::new("config").expect("source"),
+        InstanceId::new("config").expect("instance"),
+    ).with_config(bind.clone()))
+        .await
+        .expect("加载");
+    host.load(LoadSpec {
+        source: SourceId::new("committer").expect("source"),
+        as_name: InstanceId::new("committer").expect("instance"),
+        config: config.clone(),
+        bindings: Some(BTreeMap::from([(
+            "config".to_string(),
+            InstanceId::new("config").expect("instance"),
+        )])),
+    })
+    .await
+    .expect("加载");
     let source = SourceId::new("strata_read").expect("source");
     let instance = InstanceId::new("strata_read").expect("instance");
     host.load(

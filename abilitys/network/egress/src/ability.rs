@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 
 use crate::hot::Hot;
 use serde_json::{Value, json};
-use strata_shared::{open_strata, text_field};
+use strata_shared::{attach_strata, text_field};
 
 use crate::generated::manifest;
 
@@ -22,7 +22,7 @@ pub(crate) type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, T
 pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::from_manifest(manifest::manifest()).into_factory(|config| async move {
         let bind = BindConfig::parse(&config)?;
-        let strata = open_strata(&bind.strata_config()).await?;
+        let strata = attach_strata(&bind.strata_config()).await?;
         let opening = policy_of(&bind.system);
         let gateway = Arc::new(egress::Gateway::new(
             Hot::new(strata, "egress"),
@@ -88,7 +88,7 @@ impl Ability for EgressAbility {
     async fn invoke(
         &self,
         method: &MethodId,
-        _ctx: &dyn AbilityCtx,
+        ctx: &dyn AbilityCtx,
         args: Value,
     ) -> Result<Value> {
         match method.as_str() {
@@ -128,7 +128,24 @@ impl Ability for EgressAbility {
                 crate::logic::governance::reset_circuit(&self.gateway, &host).await
             }
             "http_request" => {
-                crate::logic::http_request::run(&self.gateway, self.opening.clone(), &args).await
+                let applied = ctx
+                    .call(
+                        "config",
+                        &MethodId::new("applied").expect("method id"),
+                        json!({}),
+                    )
+                    .await?;
+                let system = applied
+                    .get("system")
+                    .cloned()
+                    .unwrap_or_else(|| self.system.clone());
+                crate::logic::http_request::run(
+                    &self.gateway,
+                    &system,
+                    policy_of(&system),
+                    &args,
+                )
+                .await
             }
             _ => Err(Error::unavailable("方法不存在")),
         }

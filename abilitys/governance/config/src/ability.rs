@@ -7,10 +7,9 @@ use ability_support::{
 };
 use async_trait::async_trait;
 use collector_bind::BindConfig;
-use config::{ConfigStore, watch};
+use config::{ConfigStore, WatchHandle, watch};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 
 use crate::generated::manifest;
 
@@ -32,7 +31,7 @@ struct ConfigAbility {
     manifest: AbilityManifest,
     store: Arc<ConfigStore>,
     bind: BindConfig,
-    watch: Mutex<Option<JoinHandle<()>>>,
+    watch: Mutex<Option<WatchHandle>>,
 }
 
 #[async_trait]
@@ -45,15 +44,12 @@ impl Ability for ConfigAbility {
         match phase {
             Lifecycle::Started => {
                 let store = Arc::clone(&self.store);
-                let handle = tokio::spawn(async move {
-                    let _ = watch(store, Duration::from_secs(2));
-                });
+                let handle = watch(store, Duration::from_secs(2))
+                    .map_err(|e| Error::failed(e.to_string()))?;
                 *self.watch.lock().await = Some(handle);
             }
             Lifecycle::Stopped => {
-                if let Some(task) = self.watch.lock().await.take() {
-                    task.abort();
-                }
+                let _ = self.watch.lock().await.take();
             }
             _ => {}
         }

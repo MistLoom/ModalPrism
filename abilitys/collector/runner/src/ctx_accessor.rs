@@ -30,6 +30,7 @@ impl CtxAccessor {
             "push" => "accessor_push",
             "file" => "accessor_file",
             "browser" => "accessor_browser",
+            "bundle-list" => "accessor_bundle_list",
             _ => return Err(config_error("implementation")),
         };
         Ok(Self {

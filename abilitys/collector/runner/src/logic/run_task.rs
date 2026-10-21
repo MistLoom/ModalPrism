@@ -161,6 +161,7 @@ impl Handler for TaskHandler {
         let access = AbilityAccess::build(
             self.ctx.clone(),
             egress_policy.clone(),
+            source_policy,
             paid_policy,
             self.env.bind.data_dir.join("staging"),
         );

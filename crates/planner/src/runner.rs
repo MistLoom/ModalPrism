@@ -348,7 +348,7 @@ fn success_status(
 }
 
 fn record_failure(db: &mut Db, plan: &SourcePlan, error: &Classified, _now: Timestamp) {
-    let subject = format!("source/{}", plan.source_id);
+    let subject = crate::health_source_subject(plan.source_id.as_str());
     let (status, last_error) = {
         let health = db.health.entry(subject).or_default();
         health.last_error = Some(error.message.clone());
@@ -372,7 +372,7 @@ fn record_failure(db: &mut Db, plan: &SourcePlan, error: &Classified, _now: Time
     };
     let accessor = db
         .health
-        .entry(format!("accessor/{}", plan.accessor))
+        .entry(crate::health_accessor_subject(plan.accessor.as_str()))
         .or_default();
     accessor.status = status;
     accessor.last_error = last_error;
@@ -380,8 +380,8 @@ fn record_failure(db: &mut Db, plan: &SourcePlan, error: &Classified, _now: Time
 
 fn subjects(plan: &SourcePlan, adapters: &[String]) -> Vec<String> {
     let mut out = vec![
-        format!("source/{}", plan.source_id),
-        format!("accessor/{}", plan.accessor),
+        crate::health_source_subject(plan.source_id.as_str()),
+        crate::health_accessor_subject(plan.accessor.as_str()),
     ];
     out.extend(adapters.iter().map(|id| format!("adapter/{id}")));
     out

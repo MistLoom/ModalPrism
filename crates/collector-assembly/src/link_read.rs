@@ -38,16 +38,22 @@ pub async fn install_read_agent(bind: Value, strata_config: Value) -> Result<Arc
         Option<Value>,
     )> = vec![
         (
-            "strata_read",
-            ability_strata_read::provider(),
-            vec![AccessKind::Fun, AccessKind::Mcp, AccessKind::Tools],
-            Some(strata_config.clone()),
-        ),
-        (
             "config",
             ability_config::provider(),
             vec![AccessKind::Fun],
             Some(bind.clone()),
+        ),
+        (
+            "committer",
+            ability_committer::provider(),
+            vec![AccessKind::Fun],
+            Some(strata_config.clone()),
+        ),
+        (
+            "strata_read",
+            ability_strata_read::provider(),
+            vec![AccessKind::Fun, AccessKind::Mcp, AccessKind::Tools],
+            Some(strata_config.clone()),
         ),
         (
             "config_inspect",
@@ -109,6 +115,7 @@ pub async fn install_read_agent(bind: Value, strata_config: Value) -> Result<Arc
         let spec = match id {
             "planner" => with_bindings(spec, &["config", "strata_queue", "control_state"])?,
             "health" => with_bindings(spec, &["config", "planner"])?,
+            "committer" => with_bindings(spec, &["config"])?,
             _ => spec,
         };
         host.load(spec)

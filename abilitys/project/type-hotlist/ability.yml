@@ -1,10 +1,18 @@
 framework_version: "1"
 id: type_hotlist
 open: true
-protocols: [fun, mcp, tools]
-depends: []
-stateful: false
+protocols: [fun]
+depends:
+  - config
+stateful: true
+factory: true
 description: 热榜快照投影与变更集
+config_schema:
+  type: object
+  properties:
+    dataDir: { type: string }
+    system: { type: object }
+  required: [dataDir]
 methods:
   - id: project
     description: 投影一期热榜

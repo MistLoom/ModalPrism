@@ -12,6 +12,7 @@ build = "build.rs"
 ability-support.workspace = true
 async-trait.workspace = true
 accessors = { path = "../../../crates/accessors" }
+collector-accessor-shared = { path = "../accessor-shared" }
 collector-bind = { path = "../../collector/bind" }
 collector-gateway = { path = "../../../crates/collector-gateway" }
 collector-ports = { path = "../../../crates/collector-ports" }
@@ -30,6 +31,8 @@ strata-shared = { path = "../../storage/strata-shared" }
 ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
 
 [dev-dependencies]
+ability-committer = { path = "../../storage/committer" }
+type_hotlist = { path = "../../project/type-hotlist" }
 ability-collector-planner = { path = "../planner" }
 ability-config = { path = "../../governance/config" }
 ability-control-state = { path = "../../storage/control-state" }

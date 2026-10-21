@@ -16,7 +16,7 @@ collector-bind = { path = "../../../../abilitys/collector/bind" }
 collector-gateway = { path = "../../../../crates/collector-gateway" }
 collector-runtime = { path = "../../../../crates/collector-runtime" }
 collector-ports = { path = "../../../../crates/collector-ports" }
-ability-collector-runner = { path = "../../../../abilitys/collector/runner" }
+collector-accessor-shared = { path = "../../../../abilitys/collector/accessor-shared" }
 config = { path = "../../../../crates/config" }
 strata-model = { path = "../../../../crates/strata-model" }
 accessors = { path = "../../../../crates/accessors" }

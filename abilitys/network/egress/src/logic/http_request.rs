@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ability_support::Result;
-use collector_gateway::EGRESS_POLICY;
+use collector_gateway::{EGRESS_POLICY, policy_from};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use strata_shared::{failed, parse};
@@ -10,7 +10,12 @@ use egress::Policy;
 
 use crate::ability::EgressGw;
 
-pub async fn run(gateway: &Arc<EgressGw>, policy: Policy, args: &Value) -> Result<Value> {
+pub async fn run(
+    gateway: &Arc<EgressGw>,
+    system: &Value,
+    default_policy: Policy,
+    args: &Value,
+) -> Result<Value> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
@@ -18,8 +23,16 @@ pub async fn run(gateway: &Arc<EgressGw>, policy: Policy, args: &Value) -> Resul
         url: String,
         headers: Vec<(String, String)>,
         body: serde_json::Value,
+        #[serde(default)]
+        module_policy: Option<Value>,
     }
     let args: Args = parse(args)?;
+    let policy = args
+        .module_policy
+        .as_ref()
+        .map(|module| policy_from(system, module))
+        .or_else(|| EGRESS_POLICY.try_with(|p| p.clone()).ok())
+        .unwrap_or(default_policy);
     let body = match args.body {
         Value::String(text) => text.into_bytes(),
         Value::Null => Vec::new(),

@@ -10,7 +10,6 @@ use serde_json::Value;
 pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<AbilityHost>, Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
-    host.set_expose(crate::expose::ops_http_expose());
     let grant = AbilityGrant {
         app: "modalprism".into(),
         open: false,
@@ -22,6 +21,18 @@ pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<
         bool,
         Option<Value>,
     )> = vec![
+        (
+            "config",
+            ability_config::provider(),
+            false,
+            Some(bind.clone()),
+        ),
+        (
+            "committer",
+            ability_committer::provider(),
+            false,
+            Some(strata_config.clone()),
+        ),
         (
             "strata_read",
             ability_strata_read::provider(),
@@ -47,20 +58,14 @@ pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<
             Some(strata_config.clone()),
         ),
         (
-            "config",
-            ability_config::provider(),
-            false,
-            Some(bind.clone()),
-        ),
-        (
             "config_inspect",
             ability_config_inspect::provider(),
             true,
             Some(bind.clone()),
         ),
         (
-            "committer",
-            ability_committer::provider(),
+            "type_hotlist",
+            type_hotlist::provider(),
             false,
             Some(strata_config.clone()),
         ),
@@ -148,6 +153,12 @@ pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<
             false,
             Some(bind.clone()),
         ),
+        (
+            "accessor_bundle_list",
+            ability_accessor_bundle_list::provider(),
+            false,
+            Some(bind.clone()),
+        ),
     ];
 
     for (id, provider, http, bind_config) in providers {
@@ -191,6 +202,7 @@ pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<
                     "accessor_push",
                     "accessor_file",
                     "accessor_browser",
+                    "accessor_bundle_list",
                 ],
             )?,
             "health" => with_bindings(spec, &["config", "planner", "strata_write"])?,
@@ -198,7 +210,9 @@ pub async fn install_collector(bind: Value, strata_config: Value) -> Result<Arc<
                 spec,
                 &["config", "egress", "paid_gateway", "strata_write"],
             )?,
-            "committer" => with_bindings(spec, &["config"])?,
+            "committer" => with_bindings(spec, &["config", "type_hotlist", "strata_write"])?,
+            "type_hotlist" => with_bindings(spec, &["config"])?,
+            "egress" | "paid_gateway" => with_bindings(spec, &["config"])?,
             _ => spec,
         };
         host.load(spec)
