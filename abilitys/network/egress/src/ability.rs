@@ -5,9 +5,11 @@ use ability_support::{
 };
 use async_trait::async_trait;
 use collector_bind::BindConfig;
-use collector_gateway::{EgressGw, HttpTransport, SystemResolver, policy_of};
-use strata_shared::persist::Hot;
-use egress::{Resolver, TcpDial};
+use collector_gateway::{HttpTransport, SystemResolver, policy_of, TcpDial};
+use crate::hot::Hot;
+use egress::Resolver;
+
+pub(crate) type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, TcpDial>;
 use serde_json::{Value, json};
 use strata_shared::open_strata;
 
@@ -30,6 +32,7 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
             gateway,
             proxy_url: bind.proxy_url.unwrap_or_default(),
             system: bind.system,
+            opening,
         }) as Arc<dyn Ability>)
     })
 }
@@ -39,6 +42,7 @@ struct EgressAbility {
     gateway: Arc<EgressGw>,
     proxy_url: String,
     system: Value,
+    opening: egress::Policy,
 }
 
 #[async_trait]
@@ -75,6 +79,9 @@ impl Ability for EgressAbility {
                 Ok(json!({ "blocked": blocked, "addresses": rendered }))
             }
             "status" => Ok(json!({ "proxy": self.proxy_url })),
+            "http_request" => {
+                crate::logic::http_request::run(&self.gateway, self.opening.clone(), &args).await
+            }
             _ => Err(Error::unavailable("方法不存在")),
         }
     }

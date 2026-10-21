@@ -12,6 +12,7 @@ members = [
     "crates/planner",
     "crates/accessors-builtin",
     "crates/collector-gateway",
+    "crates/collector-ports",
     "crates/collector-runtime",
     "crates/host",
     "crates/console",

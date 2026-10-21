@@ -15,7 +15,6 @@ egress = { path = "../egress" }
 paid = { path = "../paid" }
 reqwest.workspace = true
 serde_json.workspace = true
-strata-shared = { path = "../../abilitys/storage/strata-shared" }
 strata-model = { path = "../strata-model" }
 tokio.workspace = true
 url.workspace = true

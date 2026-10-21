@@ -26,25 +26,55 @@ methods:
     description: 租约一批任务
     input:
       type: object
-      properties:
-        queue: { type: string }
-        count: { type: integer }
-        leaseMs: { type: integer }
-      required: [queue, count, leaseMs]
   - id: extend
     description: 延长租约
     input:
       type: object
-      properties:
-        taskId: { type: string }
-        leaseMs: { type: integer }
-      required: [taskId, leaseMs]
   - id: nack
     description: 退回任务
     input:
       type: object
-      properties:
-        taskId: { type: string }
-        retryAt: { type: string }
-        error: { type: string }
-      required: [taskId, retryAt, error]
+  - id: lease_id
+    description: 按任务 id 租约
+    input:
+      type: object
+  - id: release_leases
+    description: 释放过期租约
+    input:
+      type: object
+  - id: active
+    description: 队列是否已有活跃任务
+    input:
+      type: object
+  - id: lease_ready
+    description: 租约就绪任务
+    input:
+      type: object
+  - id: lease_follows
+    description: 租约 follow 任务
+    input:
+      type: object
+  - id: leased_count
+    description: 已租约数量
+    input:
+      type: object
+  - id: apply
+    description: 应用变更集（含 ack）
+    input:
+      type: object
+  - id: accepted_cursor
+    description: 已接受游标
+    input:
+      type: object
+  - id: visible_cursor
+    description: 可见游标
+    input:
+      type: object
+  - id: hot_load
+    description: 读取控制热数据
+    input:
+      type: object
+  - id: hot_store
+    description: 写入控制热数据
+    input:
+      type: object

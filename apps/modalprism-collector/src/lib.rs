@@ -238,7 +238,12 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
             true,
             Some(bind.clone()),
         ),
-        ("runner", ability_collector_runner::provider(), false, None),
+        (
+            "runner",
+            ability_collector_runner::provider(),
+            false,
+            Some(bind.clone()),
+        ),
         ("health", health::provider(Arc::clone(&services)), true, None),
         (
             "accessor_http",
@@ -310,7 +315,7 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
         let spec = match id {
             "planner" => {
                 let mut bindings = BTreeMap::new();
-                for dep in ["config", "paid_gateway", "strata_queue"] {
+                for dep in ["config", "strata_queue"] {
                     let key = dep.to_string();
                     let instance =
                         InstanceId::new(dep).map_err(|error| host::Error::new(error.to_string()))?;
@@ -323,9 +328,18 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
             }
             "runner" => {
                 let mut bindings = BTreeMap::new();
-                let instance = InstanceId::new("planner")
-                    .map_err(|error| host::Error::new(error.to_string()))?;
-                bindings.insert("planner".to_string(), instance);
+                for dep in [
+                    "config",
+                    "strata_queue",
+                    "strata_write",
+                    "strata_read",
+                    "egress",
+                    "paid_gateway",
+                ] {
+                    let instance = InstanceId::new(dep)
+                        .map_err(|error| host::Error::new(error.to_string()))?;
+                    bindings.insert(dep.to_string(), instance);
+                }
                 LoadSpec {
                     bindings: Some(bindings),
                     ..spec

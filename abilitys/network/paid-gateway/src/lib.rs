@@ -1,6 +1,8 @@
 //! Ability `paid_gateway`
 
 mod ability;
+mod bridge;
+mod hot;
 #[allow(dead_code, unused_imports)]
 mod generated;
 mod logic;

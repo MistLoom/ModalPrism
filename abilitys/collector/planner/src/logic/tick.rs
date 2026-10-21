@@ -1,18 +1,20 @@
 use ability_support::{AbilityCtx, Error, Result};
+use collector_ports::{CtxPersist, CtxQueue};
 use collector_runtime::plans::{capacities, plans_of};
 use planner::Planner;
 use serde_json::Value;
 use strata_model::Timestamp;
-use strata_shared::persist::{Hot, StrataQueue};
 
 use crate::logic::snapshot::from_ctx;
 
-pub async fn run(
-    ctx: &dyn AbilityCtx,
-    planner: &Planner<StrataQueue, Hot>,
-) -> Result<Value> {
-    let snapshot = from_ctx(ctx).await?;
+pub async fn tick(ctx: &dyn AbilityCtx, _args: Value) -> Result<Value> {
+    let ctx = ctx.retain();
+    let snapshot = from_ctx(ctx.as_ref()).await?;
     let plans = plans_of(&snapshot);
+    let planner = Planner::new(
+        CtxQueue::new(ctx.clone()),
+        CtxPersist::new(ctx.clone(), "planner"),
+    );
     let tasks = planner
         .tick(&plans, &capacities(), Timestamp::now())
         .await

@@ -8,18 +8,13 @@ version = "0.1.0"
 dependencies = [
  "ability-sdk-codegen",
  "ability-support",
- "accessors",
  "async-trait",
- "collector-bind",
- "collector-gateway",
+ "collector-ports",
  "collector-runtime",
  "config",
- "egress",
- "paid",
  "planner",
  "serde",
  "serde_json",
- "strata-client",
  "strata-model",
  "strata-shared",
 ]
@@ -28,12 +23,31 @@ dependencies = [
 name = "ability-collector-runner"
 version = "0.1.0"
 dependencies = [
+ "ability-collector-planner",
+ "ability-config",
+ "ability-core",
+ "ability-paid-gateway",
  "ability-sdk-codegen",
+ "ability-strata-queue",
  "ability-support",
+ "accessors",
  "async-trait",
+ "bytes",
+ "collector-bind",
+ "collector-gateway",
+ "collector-ports",
+ "collector-runtime",
+ "config",
+ "egress",
+ "frame-core",
+ "paid",
+ "planner",
  "serde",
  "serde_json",
+ "strata-model",
  "strata-shared",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -99,11 +113,14 @@ version = "0.1.0"
 dependencies = [
  "ability-sdk-codegen",
  "ability-support",
+ "accessors",
  "async-trait",
+ "bytes",
  "collector-bind",
  "collector-gateway",
  "egress",
  "serde_json",
+ "strata-model",
  "strata-shared",
  "url",
 ]
@@ -114,13 +131,16 @@ version = "0.1.0"
 dependencies = [
  "ability-sdk-codegen",
  "ability-support",
+ "accessors",
  "async-trait",
+ "bytes",
  "collector-bind",
  "collector-gateway",
  "egress",
  "paid",
  "serde",
  "serde_json",
+ "strata-model",
  "strata-shared",
 ]
 
@@ -1603,9 +1623,21 @@ dependencies = [
  "reqwest 0.12.28",
  "serde_json",
  "strata-model",
- "strata-shared",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "collector-ports"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "async-trait",
+ "config",
+ "planner",
+ "serde",
+ "serde_json",
+ "strata-model",
 ]
 
 [[package]]
@@ -8866,11 +8898,6 @@ name = "strata-shared"
 version = "0.1.0"
 dependencies = [
  "ability-support",
- "accessors",
- "async-trait",
- "egress",
- "paid",
- "planner",
  "serde",
  "serde_json",
  "strata-client",

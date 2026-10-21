@@ -1,4 +1,6 @@
 mod ability;
+mod hot;
+mod logic;
 #[allow(dead_code, unused_imports)]
 mod generated;
 

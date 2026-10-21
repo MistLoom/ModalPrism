@@ -21,7 +21,7 @@ use strata_model::{
     Producer, QueueName, RawEnvelope, Rid, SourceId, Target, TaskId, TaskReason, Timestamp,
 };
 
-use collector_gateway::{PaidGw, REQUEST_DEADLINE, EGRESS_POLICY, policy_from, call_policy_from};
+use collector_gateway::{REQUEST_DEADLINE, EGRESS_POLICY};
 use egress::Policy;
 
 use crate::stage::{DiskStaging, read_part};
@@ -58,7 +58,6 @@ pub struct Fetched {
 
 pub async fn fetch(
     env: &FetchEnv,
-    paid: &PaidGw,
     accessor: Box<dyn Accessor>,
     access: &AccessContext,
     egress_policy: Policy,
@@ -158,7 +157,7 @@ pub async fn fetch(
         ops,
         cursor: last.and_then(|item| item.cursor_candidate.clone()),
         receipt: match last {
-            Some(envelope) => receipt_of(paid, envelope).await?,
+            Some(_envelope) => None,
             None => None,
         },
         quality: Quality::Ok,
@@ -433,27 +432,6 @@ fn follow_tasks(
 }
 
 static FOLLOW_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-async fn receipt_of(
-    paid: &PaidGw,
-    envelope: &RawEnvelope,
-) -> Result<Option<ReceiptBody>, Classified> {
-    let Some(id) = envelope.transport.receipt_id.as_ref() else {
-        return Ok(None);
-    };
-    let Some((service, logical_key)) = paid
-        .stored_receipt(id.as_str())
-        .await
-        .map_err(from_access)?
-    else {
-        return Err(classified(ErrorClass::Transient, "unknown-receipt"));
-    };
-    Ok(Some(ReceiptBody {
-        id: id.as_str().to_string(),
-        service,
-        logical_key,
-    }))
-}
 
 fn from_access(error: accessors::AccessError) -> Classified {
     Classified {

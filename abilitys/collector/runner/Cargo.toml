@@ -11,8 +11,19 @@ build = "build.rs"
 [dependencies]
 ability-support.workspace = true
 async-trait.workspace = true
+accessors = { path = "../../../crates/accessors" }
+collector-bind = { path = "../../collector/bind" }
+collector-gateway = { path = "../../../crates/collector-gateway" }
+collector-ports = { path = "../../../crates/collector-ports" }
+collector-runtime = { path = "../../../crates/collector-runtime" }
+config = { path = "../../../crates/config" }
+egress = { path = "../../../crates/egress" }
+paid = { path = "../../../crates/paid" }
+planner = { path = "../../../crates/planner" }
 serde.workspace = true
 serde_json.workspace = true
+strata-model = { path = "../../../crates/strata-model" }
+bytes.workspace = true
 strata-shared = { path = "../../storage/strata-shared" }
 
 [build-dependencies]
@@ -21,12 +32,11 @@ ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb61
 [dev-dependencies]
 ability-collector-planner = { path = "../planner" }
 ability-config = { path = "../../governance/config" }
-config = { path = "../../../crates/config" }
 ability-core.workspace = true
 ability-paid-gateway = { path = "../../network/paid-gateway" }
 ability-strata-queue = { path = "../../storage/strata-queue" }
+config = { path = "../../../crates/config" }
 frame-core.workspace = true
-strata-model = { path = "../../../crates/strata-model" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

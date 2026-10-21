@@ -5,12 +5,13 @@ use ability_support::{
 };
 use async_trait::async_trait;
 use collector_bind::BindConfig;
-use collector_gateway::{
-    HttpTransport, PaidBridge, PaidGw, SystemResolver, call_policy_from, policy_of,
-};
+use collector_gateway::{HttpTransport, SystemResolver, call_policy_from, policy_of};
+use crate::bridge::{EgressGw, PaidBridge, PaidGw};
 use egress::{Resolver, TcpDial};
 use serde_json::Value;
-use strata_shared::{open_strata, persist::Hot};
+use strata_shared::open_strata;
+
+use crate::hot::Hot;
 
 use crate::generated::manifest;
 
@@ -37,6 +38,7 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
         Ok(Arc::new(PaidGatewayAbility {
             manifest: manifest::manifest(),
             gateway,
+            system: bind.system,
         }) as Arc<dyn Ability>)
     })
 }
@@ -44,6 +46,7 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
 struct PaidGatewayAbility {
     manifest: AbilityManifest,
     gateway: Arc<PaidGw>,
+    system: Value,
 }
 
 #[async_trait]
@@ -60,6 +63,7 @@ impl Ability for PaidGatewayAbility {
     ) -> Result<Value> {
         match method.as_str() {
             "reserve" => Err(Error::failed("reserve")),
+            "call" => crate::logic::call::run(&self.gateway, &self.system, &args).await,
             "complete" => crate::logic::complete::run(&self.gateway, &args).await,
             "status" => crate::logic::status::run(&self.gateway, &args).await,
             _ => Err(Error::unavailable("方法不存在")),

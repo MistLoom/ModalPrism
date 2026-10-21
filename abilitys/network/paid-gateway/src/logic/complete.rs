@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ability_support::Result;
-use collector_gateway::PaidGw;
+use crate::bridge::PaidGw;
 use serde_json::{Value, json};
 use strata_shared::{failed, text_field};
 

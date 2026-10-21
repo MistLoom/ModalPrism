@@ -11,11 +11,6 @@ publish = false
 ability-support.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-accessors = { path = "../../../crates/accessors" }
-async-trait.workspace = true
-egress = { path = "../../../crates/egress" }
-paid = { path = "../../../crates/paid" }
-planner = { path = "../../../crates/planner" }
 strata-client = { path = "../../../crates/strata-client" }
 strata-model = { path = "../../../crates/strata-model" }
 

@@ -1,57 +1,31 @@
-//! 出站传输。地址由网关在 SSRF 检查之后给出。
+//! 出站传输与策略解析（无状态，不持有 Strata / Gateway 实例）。
 
 use std::net::IpAddr;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use accessors::EgressGateway;
 use async_trait::async_trait;
 use egress::{
     CrawlDelayMode, Exempt, Policy, PrivateNetworks, Resolver, RobotsMode, TcpDial, Transport,
     Unreachable,
 };
-use paid::{CallPolicy, PaidTransport, UnknownMode};
+use paid::CallPolicy;
 use serde_json::Value;
 use strata_model::ErrorClass;
-use url::Url;
 
-use accessors::{AccessError, HttpRequest, HttpResponse, PaidCall, PaidResponse};
-
-use strata_shared::persist::Hot;
-use tokio::net::TcpListener;
-
-pub struct HttpTransport;
-
-pub struct SystemResolver;
-
-pub struct PaidBridge {
-    pub egress: Arc<EgressGw>,
-    pub fallback: Policy,
-}
+use accessors::{AccessError, HttpRequest, HttpResponse};
 
 tokio::task_local! {
     pub static EGRESS_POLICY: Policy;
     pub static REQUEST_DEADLINE: Instant;
 }
 
-pub type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, TcpDial>;
-pub type PaidGw = paid::Gateway<Hot, PaidBridge>;
+pub struct HttpTransport;
+
+pub struct SystemResolver;
 
 fn permanent(message: &str) -> AccessError {
     AccessError::new(ErrorClass::Permanent, message)
-}
-
-/// 本次任务剩余到截止时间的时长。没有任务截止时用 30 秒。
-fn request_budget() -> Result<Duration, AccessError> {
-    let budget = REQUEST_DEADLINE
-        .try_with(|deadline| deadline.saturating_duration_since(Instant::now()))
-        .unwrap_or(Duration::from_secs(30));
-    if budget.is_zero() {
-        Err(AccessError::new(ErrorClass::Transient, "deadline"))
-    } else {
-        Ok(budget)
-    }
 }
 
 fn transient(message: &str, source: impl std::error::Error + Send + Sync + 'static) -> AccessError {
@@ -65,7 +39,7 @@ impl Transport for HttpTransport {
         request: HttpRequest,
         address: SocketAddr,
     ) -> Result<HttpResponse, AccessError> {
-        let url = Url::parse(&request.url).map_err(|_| permanent("scheme"))?;
+        let url = url::Url::parse(&request.url).map_err(|_| permanent("scheme"))?;
         let host = url.host_str().ok_or_else(|| permanent("scheme"))?;
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| permanent("scheme"))?;
@@ -112,6 +86,17 @@ impl Transport for HttpTransport {
     }
 }
 
+fn request_budget() -> Result<Duration, AccessError> {
+    let budget = REQUEST_DEADLINE
+        .try_with(|deadline| deadline.saturating_duration_since(Instant::now()))
+        .unwrap_or(Duration::from_secs(30));
+    if budget.is_zero() {
+        Err(AccessError::new(ErrorClass::Transient, "deadline"))
+    } else {
+        Ok(budget)
+    }
+}
+
 #[async_trait]
 impl Resolver for SystemResolver {
     async fn lookup(&self, host: &str) -> Result<Vec<IpAddr>, AccessError> {
@@ -119,58 +104,6 @@ impl Resolver for SystemResolver {
             Ok(items) => Ok(items.map(|addr| addr.ip()).collect()),
             Err(source) => Err(transient("dns", source)),
         }
-    }
-}
-
-#[async_trait]
-impl PaidTransport for PaidBridge {
-    async fn send(&self, call: PaidCall) -> Result<PaidResponse, AccessError> {
-        let Ok(mut url) = Url::parse(&call.endpoint) else {
-            return Err(permanent("scheme"));
-        };
-        if url.scheme() != "http" && url.scheme() != "https" {
-            return Err(permanent("scheme"));
-        }
-        let method = call
-            .params
-            .get("method")
-            .and_then(Value::as_str)
-            .unwrap_or("GET")
-            .to_string();
-        if let Some(object) = call.params.as_object() {
-            let mut pairs = url.query_pairs_mut();
-            for (key, value) in object {
-                if key == "method" {
-                    continue;
-                }
-                let text = match value {
-                    Value::String(text) => text.clone(),
-                    other => other.to_string(),
-                };
-                pairs.append_pair(key, &text);
-            }
-        }
-        let policy = EGRESS_POLICY
-            .try_with(|policy| policy.clone())
-            .unwrap_or_else(|_| self.fallback.clone());
-        let response = self
-            .egress
-            .request_governed(
-                &policy,
-                HttpRequest {
-                    method,
-                    url: url.to_string(),
-                    headers: call.headers.clone(),
-                    body: call.body,
-                },
-            )
-            .await?;
-        Ok(PaidResponse {
-            status: response.status,
-            headers: response.headers,
-            body: response.body,
-            receipt_id: None,
-        })
     }
 }
 
@@ -256,7 +189,7 @@ pub fn policy_from(system: &Value, module_policy: &Value) -> Policy {
     policy
 }
 
-pub fn call_policy_from(system: &Value, module_policy: &Value) -> CallPolicy {
+pub fn call_policy_from(system: &Value, module_policy: &Value) -> paid::CallPolicy {
     let effective = config::overlay_system_policy(system, module_policy);
     let mut policy = CallPolicy::default();
     if effective
@@ -264,7 +197,7 @@ pub fn call_policy_from(system: &Value, module_policy: &Value) -> CallPolicy {
         .and_then(Value::as_str)
         == Some("manual")
     {
-        policy.unknown = UnknownMode::Manual;
+        policy.unknown = paid::UnknownMode::Manual;
     }
     policy
 }
@@ -283,33 +216,3 @@ fn parse_duration(text: &str) -> Option<Duration> {
     Some(Duration::from_millis(count.saturating_mul(scale)))
 }
 
-pub struct BoundEgress {
-    pub inner: Arc<EgressGw>,
-    pub policy: Policy,
-}
-
-#[async_trait]
-impl EgressGateway for BoundEgress {
-    async fn request(&self, request: HttpRequest) -> Result<HttpResponse, AccessError> {
-        self.inner.request_governed(&self.policy, request).await
-    }
-}
-
-pub struct BoundPaid {
-    pub inner: Arc<PaidGw>,
-    pub policy: CallPolicy,
-}
-
-#[async_trait]
-impl accessors::PaidGateway for BoundPaid {
-    async fn call(&self, request: PaidCall) -> Result<PaidResponse, AccessError> {
-        self.inner.call_governed(&self.policy, request).await
-    }
-}
-
-pub async fn serve_proxy<F>(gateway: Arc<EgressGw>, listener: TcpListener, policy_of: F)
-where
-    F: Fn() -> Policy,
-{
-    egress::serve_each(gateway.as_ref(), listener, policy_of).await;
-}

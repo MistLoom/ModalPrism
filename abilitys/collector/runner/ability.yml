@@ -3,10 +3,29 @@ id: runner
 open: false
 protocols: [fun]
 depends:
-  - planner
-stateful: false
-factory: false
+  - config
+  - strata_queue
+  - strata_write
+  - strata_read
+  - egress
+  - paid_gateway
+stateful: true
+factory: true
 description: 执行已租约任务
+config_schema:
+  type: object
+  properties:
+    dataDir:
+      type: string
+    configDir:
+      type: string
+    system:
+      type: object
+    proxyUrl:
+      type: string
+    browserProgram:
+      type: string
+  required: [dataDir, configDir]
 methods:
   - id: run_task
     description: 执行一个任务

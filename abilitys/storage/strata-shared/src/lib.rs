@@ -1,6 +1,4 @@
-//! Strata Ability 共用：从绑定期配置打开 `Strata`、热数据与队列适配。
-
-pub mod persist;
+//! Strata Ability 共用：从绑定期配置打开 `Strata`。
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -9,7 +9,10 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+accessors = { path = "../../../crates/accessors" }
 ability-support.workspace = true
+bytes.workspace = true
+strata-model = { path = "../../../crates/strata-model" }
 async-trait.workspace = true
 collector-gateway = { path = "../../../crates/collector-gateway" }
 egress = { path = "../../../crates/egress" }
