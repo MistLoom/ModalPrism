@@ -62,12 +62,17 @@ pub fn consecutive(health: &Health) -> u32 {
         .saturating_add(health.config)
 }
 
-pub fn health_source_subject(source_id: &str) -> String {
+/// 信源在调度库与健康主题里使用的规范 id（`source/...`）。
+pub fn canonical_source_id(source_id: &str) -> String {
     if source_id.starts_with("source/") {
         source_id.to_string()
     } else {
         format!("source/{source_id}")
     }
+}
+
+pub fn health_source_subject(source_id: &str) -> String {
+    canonical_source_id(source_id)
 }
 
 pub fn health_accessor_subject(accessor: &str) -> String {

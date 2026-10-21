@@ -265,6 +265,7 @@ async fn store(strata: &strata_client::Strata, ops: Vec<Op>) {
                     module: "test".into(),
                     version: "1".into(),
                     config_generation: 1,
+                source_id: None,
                 },
                 idempotency_key: None,
                 ack: None,

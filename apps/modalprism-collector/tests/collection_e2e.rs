@@ -8,7 +8,7 @@ use collector_runtime::Binds;
 use config::builtin_presets;
 use frame_core::{Gateway, InvokeRequest};
 use modalprism_collector::{boot, BootOptions};
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -128,29 +128,43 @@ async fn one_round_ingests_fixture_rss_into_strata_read() {
     .unwrap();
     let host = running.host();
 
-    let tasks = invoke(
+    let triggered = invoke(
         host,
         "planner",
         "trigger",
         json!({ "source": "fixture-rss" }),
     )
     .await;
-    let tasks = if tasks.as_array().is_some_and(|a| !a.is_empty()) {
-        tasks
-    } else {
-        invoke(host, "planner", "tick", json!({})).await
-    };
-    let tasks = tasks.as_array().expect("任务列表");
-    assert!(!tasks.is_empty(), "planner 应派出任务，tick/trigger 返回: {tasks:?}");
-    for task in tasks {
-        let outcome = invoke(host, "runner", "run_task", json!({ "task": task.clone() })).await;
-        if outcome.get("nacked").is_some() {
-            panic!("run_task 被拒绝: {outcome:?}");
+    if let Some(runs) = triggered.get("runs").and_then(Value::as_array) {
+        assert!(!runs.is_empty(), "trigger 应执行采集: {triggered:?}");
+        for run in runs {
+            assert!(
+                run.get("ok").and_then(Value::as_bool) == Some(true),
+                "trigger 内 run_task 应成功: {run:?}"
+            );
         }
-        assert!(
-            outcome.get("ok").and_then(|v| v.as_bool()) == Some(true),
-            "run_task 应成功: {outcome:?}"
-        );
+    } else {
+        let tasks = if triggered
+            .get("tasks")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty())
+        {
+            triggered.get("tasks").cloned().unwrap()
+        } else {
+            invoke(host, "planner", "tick", json!({})).await
+        };
+        let tasks = tasks.as_array().expect("任务列表");
+        assert!(!tasks.is_empty(), "planner 应派出任务: {tasks:?}");
+        for task in tasks {
+            let outcome = invoke(host, "runner", "run_task", json!({ "task": task.clone() })).await;
+            if outcome.get("nacked").is_some() {
+                panic!("run_task 被拒绝: {outcome:?}");
+            }
+            assert!(
+                outcome.get("ok").and_then(Value::as_bool) == Some(true),
+                "run_task 应成功: {outcome:?}"
+            );
+        }
     }
     let flushed = invoke(host, "committer", "flush", json!({})).await;
     assert!(

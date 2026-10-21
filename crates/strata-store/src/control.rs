@@ -149,6 +149,8 @@ pub(crate) trait ControlStore {
 
     async fn release_leases(&self) -> Result<Vec<AccessTask>, Error>;
 
+    async fn release_source_leases(&self, source: &str) -> Result<(), Error>;
+
     async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, Error>;
 
     async fn task_active(&self, source: &str, locator_key: &str) -> Result<bool, Error>;
@@ -646,6 +648,37 @@ impl ControlStore for SqliteControl {
             source,
         })?;
         Ok(task)
+    }
+
+    async fn release_source_leases(&self, source: &str) -> Result<(), Error> {
+        let rows = sqlx::query(
+            "SELECT task_id, payload FROM tasks WHERE source_id = ? AND status = 'leased'",
+        )
+        .bind(source)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|source| Error::Sql {
+            context: "读取信源租约",
+            source,
+        })?;
+        let released_at = Timestamp::now();
+        for row in rows {
+            let task_id: String = row.get(0);
+            let mut task: AccessTask = serde_json::from_str(row.get::<String, _>(1).as_str())?;
+            task.lease_until = released_at;
+            sqlx::query(
+                "UPDATE tasks SET payload = ?, status = 'queued', lease_until = NULL, retry_at = NULL WHERE task_id = ?",
+            )
+            .bind(serde_json::to_string(&task)?)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|source| Error::Sql {
+                context: "释放信源租约",
+                source,
+            })?;
+        }
+        Ok(())
     }
 
     async fn release_leases(&self) -> Result<Vec<AccessTask>, Error> {

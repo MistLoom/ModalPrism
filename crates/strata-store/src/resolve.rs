@@ -161,7 +161,7 @@ pub(crate) fn resolve(
                 let key = IdentityKey::parse(identity)?;
                 let source_id = match &key {
                     IdentityKey::Source { source_id, .. } => Some(source_id.clone()),
-                    _ => None,
+                    _ => cs.producer.source_id.clone(),
                 };
                 let scheme = scheme_of(identity);
                 if let Some(existing) = heads.identities.get(identity) {
@@ -459,7 +459,33 @@ mod tests {
             module: "test".to_string(),
             version: "0".to_string(),
             config_generation: 1,
+            source_id: None,
         }
+    }
+
+    #[test]
+    fn producer_source_id_on_url_identity() {
+        let cs = ChangeSet {
+            producer: Producer {
+                module: "runner".to_string(),
+                version: "1".to_string(),
+                config_generation: 1,
+                source_id: Some("source/demo".to_string()),
+            },
+            idempotency_key: None,
+            ack: None,
+            ops: vec![ensure("url:https://example.test/post", "a")],
+        };
+        let mut heads = HeadSet::default();
+        let resolved = resolve(&cs, &mut heads, "c1", "2026-10-19T00:00:00Z").unwrap();
+        let StoredOp::Ensure { source_id, .. } = &resolved.commit.ops[0] else {
+            panic!("ensure");
+        };
+        assert_eq!(source_id.as_deref(), Some("source/demo"));
+        assert_eq!(
+            resolved.resources[0].source_id.as_deref(),
+            Some("source/demo")
+        );
     }
 
     fn ensure(identity: &str, alias: &str) -> Op {

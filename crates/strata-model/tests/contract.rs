@@ -120,6 +120,7 @@ fn changeset_serde_and_validation() {
             module: "adapter/readability-md".into(),
             version: "1.4.0".into(),
             config_generation: 37,
+        source_id: None,
         },
         idempotency_key: Some("k1".into()),
         ack: None,

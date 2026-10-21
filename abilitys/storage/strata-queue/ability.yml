@@ -42,6 +42,13 @@ methods:
     description: 释放过期租约
     input:
       type: object
+  - id: release_source_leases
+    description: 释放指定信源的调度租约
+    input:
+      type: object
+      properties:
+        source: { type: string }
+      required: [source]
   - id: active
     description: 队列是否已有活跃任务
     input:

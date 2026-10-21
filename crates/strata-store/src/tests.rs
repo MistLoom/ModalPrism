@@ -13,6 +13,7 @@ fn producer() -> Producer {
         module: "store-test".into(),
         version: "1".into(),
         config_generation: 3,
+    source_id: None,
     }
 }
 

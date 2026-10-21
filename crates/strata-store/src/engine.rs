@@ -309,6 +309,11 @@ impl Engine {
         inner.control.release_leases().await
     }
 
+    pub async fn release_source_leases(&self, source: &str) -> Result<(), Error> {
+        let inner = self.inner.lock().await;
+        inner.control.release_source_leases(source).await
+    }
+
     pub async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, Error> {
         let inner = self.inner.lock().await;
         inner.control.leased_count(queue, now).await

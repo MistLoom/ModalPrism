@@ -17,6 +17,8 @@ pub struct Producer {
     pub module: String,
     pub version: String,
     pub config_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
 }
 
 /// `putFacet` 携带的血缘输入。提交时写入的 `commit_id` 由 Strata 分配。

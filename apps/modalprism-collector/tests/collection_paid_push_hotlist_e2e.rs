@@ -105,15 +105,29 @@ admission:
 }
 
 async fn run_planner_round(host: &AbilityHost, source: &str) {
-    let tasks = invoke(
+    let triggered = invoke(
         host,
         "planner",
         "trigger",
         json!({ "source": source }),
     )
     .await;
-    let tasks = if tasks.as_array().is_some_and(|a| !a.is_empty()) {
-        tasks
+    if let Some(runs) = triggered.get("runs").and_then(serde_json::Value::as_array) {
+        assert!(!runs.is_empty(), "trigger 应执行采集: {triggered:?}");
+        for run in runs {
+            assert!(
+                run.get("ok").and_then(serde_json::Value::as_bool) == Some(true),
+                "run_task: {run:?}"
+            );
+        }
+        return;
+    }
+    let tasks = if triggered
+        .get("tasks")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|a| !a.is_empty())
+    {
+        triggered.get("tasks").cloned().unwrap()
     } else {
         invoke(host, "planner", "tick", json!({})).await
     };

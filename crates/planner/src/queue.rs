@@ -25,6 +25,7 @@ pub trait Queue: Send + Sync {
         error: &str,
     ) -> Result<(), PlannerError>;
     async fn release_leases(&self) -> Result<Vec<AccessTask>, PlannerError>;
+    async fn release_source_leases(&self, source: &str) -> Result<(), PlannerError>;
     async fn active(&self, source: &str, locator_key: &str) -> Result<bool, PlannerError>;
     async fn lease_ready(
         &self,
@@ -159,6 +160,19 @@ impl Queue for MemoryQueue {
             row.task.lease_until = released_at;
         }
         Ok(released)
+    }
+
+    async fn release_source_leases(&self, source: &str) -> Result<(), PlannerError> {
+        let mut rows = self.rows.lock().await;
+        let released_at = Timestamp::now();
+        for row in rows.iter_mut().filter(|row| {
+            row.status == "leased" && row.task.source_id.as_str() == source
+        }) {
+            row.status = "queued".into();
+            row.task.lease_until = released_at;
+            row.retry_at = None;
+        }
+        Ok(())
     }
 
     async fn active(&self, source: &str, locator_key: &str) -> Result<bool, PlannerError> {

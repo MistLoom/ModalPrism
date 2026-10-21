@@ -29,6 +29,7 @@ pub async fn evaluate(ctx: &dyn AbilityCtx, _args: Value) -> Result<Value> {
             module: "health".into(),
             version: "1".into(),
             config_generation: generation,
+        source_id: None,
         },
         idempotency_key: None,
         ack: None,

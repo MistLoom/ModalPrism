@@ -409,6 +409,10 @@ impl Strata {
         Ok(self.engine.release_leases().await?)
     }
 
+    pub async fn release_source_leases(&self, source: &str) -> Result<(), Error> {
+        Ok(self.engine.release_source_leases(source).await?)
+    }
+
     pub async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, Error> {
         Ok(self.engine.leased_count(queue, now).await?)
     }

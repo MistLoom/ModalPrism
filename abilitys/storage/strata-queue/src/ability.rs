@@ -47,6 +47,9 @@ impl Ability for StrataQueueAbility {
             "nack" => crate::logic::nack::run(&self.strata, &args).await,
             "lease_id" => crate::logic::lease_id::run(&self.strata, &args).await,
             "release_leases" => crate::logic::release_leases::run(&self.strata, &args).await,
+            "release_source_leases" => {
+                crate::logic::release_source_leases::run(&self.strata, &args).await
+            }
             "active" => crate::logic::active::run(&self.strata, &args).await,
             "lease_ready" => crate::logic::lease_ready::run(&self.strata, &args).await,
             "lease_follows" => crate::logic::lease_follows::run(&self.strata, &args).await,

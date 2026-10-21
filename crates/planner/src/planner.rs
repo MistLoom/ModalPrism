@@ -196,14 +196,21 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
     }
 
     pub async fn source_status(&self, source: &str) -> Result<SourceStatus, PlannerError> {
+        let source = crate::health::canonical_source_id(source);
+        if source.is_empty() {
+            return Err(PlannerError::new("信源为空"));
+        }
         let _guard = self.lock.lock().await;
         let db = load_db(&self.persist).await?;
-        let row = db.sources.get(source);
-        let health = db.health.get(&crate::health_source_subject(source));
+        let row = db.sources.get(&source);
+        let health = db.health.get(&crate::health_source_subject(&source));
+        if row.is_none() && health.is_none() {
+            return Err(PlannerError::new("信源未知"));
+        }
         let today = day_of(Timestamp::now());
         let today_yield_count = db
             .yields
-            .get(source)
+            .get(&source)
             .and_then(|by_day| by_day.get(&today))
             .copied()
             .unwrap_or(0);
@@ -223,6 +230,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
     }
 
     pub async fn make_due(&self, source: &str, now: Timestamp) -> Result<(), PlannerError> {
+        let source = crate::health::canonical_source_id(source);
         if source.is_empty() {
             return Err(PlannerError::new("信源为空"));
         }
@@ -230,7 +238,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         let mut db = load_db(&self.persist).await?;
         let row = db
             .sources
-            .entry(source.to_string())
+            .entry(source)
             .or_insert_with(|| new_row(0, 0));
         row.next_at = Some(stamp(now)?);
         save_db(&self.persist, &db).await

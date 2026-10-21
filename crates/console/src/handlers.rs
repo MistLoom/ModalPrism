@@ -174,10 +174,11 @@ pub async fn source_trigger(
     if body.is_some_and(|b| !b.confirm) {
         return Err(ConsoleError::bad_request("需要 confirm: true"));
     }
-    let tasks = invoke::call(&ctx.gateway, 
-            "planner.trigger",
-            json!({ "source": key.strip_prefix("source/").unwrap_or(&key) }),
-        )
+    let tasks = invoke::call(
+        &ctx.gateway,
+        "planner.trigger",
+        json!({ "source": key }),
+    )
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
     Ok(json!({ "tasks": tasks }))

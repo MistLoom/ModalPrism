@@ -455,6 +455,7 @@ fn changeset(plan: &SourcePlan, ack: Option<TaskId>, mut ops: Vec<Op>) -> Change
             module: "planner".into(),
             version: "1".into(),
             config_generation: plan.generation,
+            source_id: Some(plan.source_id.as_str().to_string()),
         },
         idempotency_key: None,
         ack,

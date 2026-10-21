@@ -14,6 +14,7 @@ fn producer() -> Producer {
         module: "client-test".into(),
         version: "1".into(),
         config_generation: 4,
+    source_id: None,
     }
 }
 

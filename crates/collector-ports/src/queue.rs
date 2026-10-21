@@ -88,6 +88,12 @@ impl planner::Queue for CtxQueue {
         serde_json::from_value(value).map_err(|_| Self::plan_err("租约"))
     }
 
+    async fn release_source_leases(&self, source: &str) -> Result<(), PlannerError> {
+        self.call("release_source_leases", json!({ "source": source }))
+            .await?;
+        Ok(())
+    }
+
     async fn active(&self, source: &str, locator_key: &str) -> Result<bool, PlannerError> {
         let value = self
             .call(

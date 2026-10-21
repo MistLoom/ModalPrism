@@ -48,7 +48,9 @@ pipeline:
 schedule:
   interval: 2h
 admission:
-  allowUrlPrefixes: ["https://mimo.xiaomi.com/blog/"]
+  allowUrlPrefixes:
+    - "https://mimo.xiaomi.com/blog/"
+    - "https://cdn.cnbj1.fds.api.mi-img.com/"
   initialBackfill:
     limit: 30
     maxAge: 365d

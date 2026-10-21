@@ -8,8 +8,8 @@ use std::time::Instant;
 use accessors::{AccessContext, AccessHints, AccessRequest, Accessor, Session, SessionPool};
 use accessors_builtin::{BrowserAccessor, MoliCommand, by_id};
 use adapters::{
-    Admission, DetectorChoice, FollowRequest, PartBytes, Registry, empty_identities,
-    parse_pipeline, run, source_view,
+    Admission, AdapterFeedback, DetectorChoice, FollowRequest, PartBytes, Quality as AdapterQuality,
+    Registry, empty_identities, parse_pipeline, run, source_view,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -127,9 +127,15 @@ pub async fn fetch(
         .get("pipeline")
         .cloned()
         .unwrap_or(Value::Array(Vec::new()));
-    let (ops, follow_requests) =
+    let (ops, follow_requests, quality, selector_miss, blocked) =
         if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
-            (raw_ops(&envelopes)?, Vec::new())
+            let ops = raw_ops(&envelopes)?;
+            let quality = if envelopes.is_empty() {
+                Quality::Empty
+            } else {
+                Quality::Ok
+            };
+            (ops, Vec::new(), quality, false, false)
         } else {
             adapted_ops(
                 env,
@@ -142,6 +148,7 @@ pub async fn fetch(
             )
             .await?
         };
+    schedule_ingest_error(task, &envelopes, &ops, quality, blocked)?;
     let max_fetches = detail_budget(&module);
     let follows = if task.reason == TaskReason::Schedule && max_fetches > 0 {
         follow_tasks(task, &follow_requests)?
@@ -160,9 +167,9 @@ pub async fn fetch(
             Some(_envelope) => None,
             None => None,
         },
-        quality: Quality::Ok,
-        selector_miss: false,
-        blocked: false,
+        quality,
+        selector_miss,
+        blocked,
         ttl: last.and_then(|item| item.signals.ttl),
         retry_after: last.and_then(|item| item.signals.retry_after),
         cache_max_age: last.and_then(|item| item.signals.cache_max_age),
@@ -254,7 +261,7 @@ pub async fn inbound_ops(
     } else {
         adapted_ops(env, &task, module, envelopes, &pipeline, false, None)
             .await
-            .map(|(ops, _)| ops)
+            .map(|(ops, _, _, _, _)| ops)
     }
 }
 
@@ -312,7 +319,7 @@ async fn adapted_ops(
     pipeline: &Value,
     initial: bool,
     resource: Option<&Rid>,
-) -> Result<(Vec<Op>, Vec<FollowRequest>), Classified> {
+) -> Result<(Vec<Op>, Vec<FollowRequest>, Quality, bool, bool), Classified> {
     let rules =
         parse_pipeline(pipeline).map_err(|error| classified(error.class(), error.to_string()))?;
     let mut parts = Vec::new();
@@ -358,6 +365,7 @@ async fn adapted_ops(
                 module: "runner".into(),
                 version: "1".into(),
                 config_generation: task.generation,
+                source_id: Some(task.source_id.as_str().to_string()),
             },
             specs,
             identities: empty_identities(),
@@ -365,7 +373,8 @@ async fn adapted_ops(
     )
     .await
     .map_err(|error| classified(error.class(), error.to_string()))?;
-    Ok((output.changeset.ops, output.follows))
+    let (quality, blocked, selector_miss) = feedback_flags(&output.feedback);
+    Ok((output.changeset.ops, output.follows, quality, selector_miss, blocked))
 }
 
 fn accessor_of(task: &AccessTask, module: &Value) -> String {
@@ -449,4 +458,52 @@ fn classified(class: ErrorClass, message: impl Into<String>) -> Classified {
         retry_after: None,
         retry_at: None,
     }
+}
+
+fn feedback_flags(feedback: &[AdapterFeedback]) -> (Quality, bool, bool) {
+    let mut quality = Quality::Ok;
+    let mut blocked = false;
+    let mut selector_miss = false;
+    for item in feedback {
+        if !item.feedback.missing.is_empty() {
+            selector_miss = true;
+        }
+        match item.feedback.quality {
+            AdapterQuality::Blocked => {
+                blocked = true;
+                quality = Quality::Blocked;
+            }
+            AdapterQuality::Empty => {
+                if quality != Quality::Blocked {
+                    quality = Quality::Empty;
+                }
+            }
+            AdapterQuality::Thin => {
+                if matches!(quality, Quality::Ok) {
+                    quality = Quality::Thin;
+                }
+            }
+            AdapterQuality::Ok => {}
+        }
+    }
+    (quality, blocked, selector_miss)
+}
+
+pub fn schedule_ingest_error(
+    task: &AccessTask,
+    envelopes: &[RawEnvelope],
+    ops: &[Op],
+    quality: Quality,
+    blocked: bool,
+) -> Result<(), Classified> {
+    if task.reason != TaskReason::Schedule || !ops.is_empty() {
+        return Ok(());
+    }
+    if blocked || quality == Quality::Blocked {
+        return Err(classified(ErrorClass::Permanent, "blocked"));
+    }
+    if envelopes.is_empty() || quality == Quality::Empty {
+        return Err(classified(ErrorClass::Permanent, "empty-fetch"));
+    }
+    Ok(())
 }

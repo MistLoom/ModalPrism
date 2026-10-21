@@ -147,6 +147,7 @@ impl Accessor for BundleListAccessor {
                 scripts = scripts.split_off(scripts.len() - cap);
             }
             scripts.reverse();
+            let attempted = !scripts.is_empty();
             for script in scripts {
                 ready(ctx, request.deadline)?;
                 let fetched = fetch_page(&request, ctx, &http, script).await?;
@@ -161,6 +162,12 @@ impl Accessor for BundleListAccessor {
                 if !items.is_empty() {
                     break;
                 }
+            }
+            if items.is_empty() && attempted {
+                return Err(accessors::AccessError::new(
+                    strata_model::ErrorClass::Permanent,
+                    "script-fetch",
+                ));
             }
         }
         let body = json!({ "items": items }).to_string();

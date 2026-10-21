@@ -182,6 +182,7 @@ impl HotList {
                 module: "type_hotlist".into(),
                 version: "1".into(),
                 config_generation: snapshot.generation,
+            source_id: None,
             },
             idempotency_key: Some(content_hash(&encoded)),
             ack: None,

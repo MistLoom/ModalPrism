@@ -84,6 +84,7 @@ fn producer() -> Producer {
         module: "test".into(),
         version: "1".into(),
         config_generation: 1,
+    source_id: None,
     }
 }
 

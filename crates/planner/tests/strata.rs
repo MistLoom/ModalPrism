@@ -144,6 +144,10 @@ impl Queue for StrataQueue {
         self.0.release_leases().await.map_err(plan_err)
     }
 
+    async fn release_source_leases(&self, source: &str) -> Result<(), PlannerError> {
+        self.0.release_source_leases(source).await.map_err(plan_err)
+    }
+
     async fn lease_ready(
         &self,
         source: &str,

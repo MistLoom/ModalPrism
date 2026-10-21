@@ -338,6 +338,7 @@ async fn changed_config_hash_drops_the_validator() {
             module: "planner".into(),
             version: "1".into(),
             config_generation: 1,
+        source_id: None,
         },
         idempotency_key: None,
         ack: None,
@@ -563,4 +564,24 @@ async fn paid_budget_counts_skips_and_resets_with_the_window() {
     let restored = planner.source_status("source/blog").await.unwrap();
     assert!(restored.skip_reason.is_none());
     assert_eq!(restored.budget_used, 1);
+}
+
+#[tokio::test]
+async fn unknown_source_status_errors() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let err = planner.source_status("source/missing").await.unwrap_err();
+    assert!(err.to_string().contains("信源未知"));
+}
+
+#[tokio::test]
+async fn bare_source_id_matches_canonical_row() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap();
+    let full = planner.source_status("source/blog").await.unwrap();
+    let bare = planner.source_status("blog").await.unwrap();
+    assert_eq!(bare.next_at, full.next_at);
+    assert_eq!(bare.interval_ms, full.interval_ms);
 }
