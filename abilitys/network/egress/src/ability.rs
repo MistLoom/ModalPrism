@@ -5,7 +5,8 @@ use ability_support::{
 };
 use async_trait::async_trait;
 use collector_bind::BindConfig;
-use collector_gateway::{HttpTransport, SystemResolver, policy_of, TcpDial};
+use collector_gateway::{HttpTransport, SystemResolver, policy_of};
+use egress::TcpDial;
 use crate::hot::Hot;
 use egress::Resolver;
 
@@ -25,7 +26,7 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
             HttpTransport,
             SystemResolver,
             TcpDial,
-            opening,
+            opening.clone(),
         ));
         Ok(Arc::new(EgressAbility {
             manifest: manifest::manifest(),

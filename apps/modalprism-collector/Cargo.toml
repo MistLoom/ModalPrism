@@ -11,22 +11,17 @@ build = "build.rs"
 [dependencies]
 ability-core.workspace = true
 ability-support.workspace = true
-accessor_api = { path = "../../ability/accessor_api" }
-accessor_browser = { path = "../../ability/accessor_browser" }
-accessor_file = { path = "../../ability/accessor_file" }
-accessor_http = { path = "../../ability/accessor_http" }
-accessor_paid_api = { path = "../../ability/accessor_paid_api" }
-accessor_push = { path = "../../ability/accessor_push" }
-accessor_rss = { path = "../../ability/accessor_rss" }
-accessor_search = { path = "../../ability/accessor_search" }
-host = { path = "../../crates/host" }
-console-api = { path = "../../crates/console-api" }
 async-trait.workspace = true
 axum = "0.8"
+collector-boot = { path = "../../crates/collector-boot" }
+collector-gateway = { path = "../../crates/collector-gateway" }
+collector-runtime = { path = "../../crates/collector-runtime" }
+console-api = { path = "../../crates/console-api" }
 mime_guess = "2"
 rust-embed = { version = "8", features = ["mime-guess"] }
 tower-http = { version = "0.6", features = ["fs"] }
 ability-committer = { path = "../../abilitys/storage/committer" }
+ability-control-state = { path = "../../abilitys/storage/control-state" }
 ability-config = { path = "../../abilitys/governance/config" }
 ability-egress = { path = "../../abilitys/network/egress" }
 ability-collector-planner = { path = "../../abilitys/collector/planner" }
@@ -36,7 +31,8 @@ config = { path = "../../crates/config" }
 ability-config-inspect = { path = "../../abilitys/governance/config-inspect" }
 frame-core.workspace = true
 frame-port-http.workspace = true
-health = { path = "../../ability/health" }
+accessors = { path = "../../crates/accessors" }
+serde.workspace = true
 serde_json.workspace = true
 ability-strata-queue = { path = "../../abilitys/storage/strata-queue" }
 ability-strata-read = { path = "../../abilitys/storage/strata-read" }

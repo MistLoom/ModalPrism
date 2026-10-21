@@ -5,6 +5,7 @@ protocols: [fun]
 depends:
   - config
   - strata_queue
+  - control_state
 stateful: false
 factory: false
 description: 扫描到期信源并租约任务

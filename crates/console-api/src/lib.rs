@@ -6,17 +6,19 @@ mod security;
 
 use std::sync::Arc;
 
-use host::HostResources;
 use axum::Router;
 use axum::middleware::from_fn;
 use axum::routing::{get, patch, post};
+use collector_boot::BootResources;
+use frame_core::Gateway;
 
 pub use console::config_path::normalize_rel_path;
 pub use error::ApiError;
 
 #[derive(Clone)]
 pub struct ConsoleState {
-    pub services: Arc<HostResources>,
+    pub gateway: Arc<dyn Gateway>,
+    pub services: Arc<BootResources>,
     pub http_addr: String,
 }
 

@@ -9,6 +9,7 @@ depends:
   - strata_read
   - egress
   - paid_gateway
+  - control_state
 stateful: true
 factory: true
 description: 执行已租约任务

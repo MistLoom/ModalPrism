@@ -8,9 +8,12 @@ description = "Web 控制台业务逻辑（无 HTTP）"
 publish = false
 
 [dependencies]
-host = { path = "../host" }
+ability-support.workspace = true
+collector-boot = { path = "../collector-boot" }
+collector-runtime = { path = "../collector-runtime" }
 config = { path = "../config" }
 egress = { path = "../egress" }
+frame-core.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 strata-client = { path = "../strata-client" }

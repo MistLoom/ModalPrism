@@ -93,6 +93,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ability-control-state"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-shared",
+]
+
+[[package]]
 name = "ability-core"
 version = "0.1.0"
 source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
@@ -119,7 +132,9 @@ dependencies = [
  "collector-bind",
  "collector-gateway",
  "egress",
+ "serde",
  "serde_json",
+ "strata-client",
  "strata-model",
  "strata-shared",
  "url",
@@ -140,17 +155,10 @@ dependencies = [
  "paid",
  "serde",
  "serde_json",
+ "strata-client",
  "strata-model",
  "strata-shared",
-]
-
-[[package]]
-name = "ability-planner"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -228,78 +236,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "accessor_api"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "accessor_browser"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "accessor_file"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "accessor_http"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "accessor_paid_api"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "accessor_push"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "accessor_rss"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "accessor_search"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
 ]
 
 [[package]]
@@ -1612,6 +1548,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "collector-boot"
+version = "0.1.0"
+dependencies = [
+ "accessors",
+ "accessors-builtin",
+ "async-trait",
+ "collector-gateway",
+ "collector-runtime",
+ "config",
+ "egress",
+ "paid",
+ "planner",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "strata-shared",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "collector-gateway"
 version = "0.1.0"
 dependencies = [
@@ -1734,9 +1691,12 @@ dependencies = [
 name = "console"
 version = "0.1.0"
 dependencies = [
+ "ability-support",
+ "collector-boot",
+ "collector-runtime",
  "config",
  "egress",
- "host",
+ "frame-core",
  "serde",
  "serde_json",
  "strata-client",
@@ -1749,9 +1709,11 @@ name = "console-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "collector-boot",
+ "collector-runtime",
  "config",
  "console",
- "host",
+ "frame-core",
  "serde",
  "serde_json",
  "tempfile",
@@ -3853,15 +3815,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "health"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
 name = "heapify"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3936,34 +3889,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
-]
-
-[[package]]
-name = "host"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "accessors",
- "accessors-builtin",
- "adapters",
- "async-trait",
- "bytes",
- "collector-gateway",
- "collector-runtime",
- "config",
- "egress",
- "paid",
- "planner",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "strata-client",
- "strata-model",
- "strata-shared",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -5865,6 +5790,7 @@ dependencies = [
  "ability-committer",
  "ability-config",
  "ability-config-inspect",
+ "ability-control-state",
  "ability-core",
  "ability-egress",
  "ability-paid-gateway",
@@ -5872,24 +5798,19 @@ dependencies = [
  "ability-strata-read",
  "ability-strata-write",
  "ability-support",
- "accessor_api",
- "accessor_browser",
- "accessor_file",
- "accessor_http",
- "accessor_paid_api",
- "accessor_push",
- "accessor_rss",
- "accessor_search",
+ "accessors",
  "async-trait",
  "axum",
+ "collector-boot",
+ "collector-gateway",
+ "collector-runtime",
  "config",
  "console-api",
  "frame-core",
  "frame-port-http",
- "health",
- "host",
  "mime_guess",
  "rust-embed",
+ "serde",
  "serde_json",
  "strata-client",
  "strata-model",
@@ -6722,15 +6643,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "ulid",
-]
-
-[[package]]
-name = "paid_gateway"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
 ]
 
 [[package]]
@@ -7948,15 +7860,6 @@ dependencies = [
  "heapless",
  "num-traits",
  "smallvec",
-]
-
-[[package]]
-name = "runner"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
 ]
 
 [[package]]

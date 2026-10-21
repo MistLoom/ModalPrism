@@ -4,15 +4,18 @@ pub mod config_path;
 pub mod copy;
 pub mod error;
 pub mod handlers;
+pub mod invoke;
 
 use std::sync::Arc;
 
-use host::HostResources;
+use collector_boot::BootResources;
+use frame_core::Gateway;
 
 pub use error::{ConsoleError, ConsoleResult};
 
 #[derive(Clone)]
 pub struct ConsoleContext {
-    pub services: Arc<HostResources>,
+    pub gateway: Arc<dyn Gateway>,
+    pub services: Arc<BootResources>,
     pub http_addr: String,
 }

@@ -1,0 +1,16 @@
+[package]
+name = "type_hotlist"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "热榜快照投影与变更集"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+serde_json.workspace = true
+types = { path = "../../../crates/types" }
+
+[lints]
+workspace = true

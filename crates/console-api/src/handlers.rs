@@ -15,6 +15,7 @@ use crate::ConsoleState;
 
 fn context(state: &ConsoleState) -> ConsoleContext {
     ConsoleContext {
+        gateway: state.gateway.clone(),
         services: state.services.clone(),
         http_addr: state.http_addr.clone(),
     }

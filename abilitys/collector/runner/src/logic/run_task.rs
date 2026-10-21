@@ -164,12 +164,8 @@ impl Handler for TaskHandler {
             paid_policy,
             self.env.bind.data_dir.join("staging"),
         );
-        let accessor = execute::open_accessor(
-            implementation,
-            &fetch_env.browser,
-            &fetch_env.proxy,
-        )
-        .map_err(|error| classified(ErrorClass::Config, error.message))?;
+        let accessor = crate::ctx_accessor::CtxAccessor::open(self.ctx.clone(), implementation)
+            .map_err(|error| classified(ErrorClass::Config, error.message))?;
         let policy = egress_policy.clone();
         let fetched = REQUEST_DEADLINE
             .scope(
@@ -177,7 +173,7 @@ impl Handler for TaskHandler {
                 EGRESS_POLICY.scope(policy.clone(), async move {
                     execute::fetch(
                         &fetch_env,
-                        accessor,
+                        Box::new(accessor),
                         &access,
                         policy,
                         task,

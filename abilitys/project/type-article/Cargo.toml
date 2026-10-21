@@ -1,0 +1,16 @@
+[package]
+name = "type_article"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "文章投影"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+serde_json.workspace = true
+types = { path = "../../../crates/types" }
+
+[lints]
+workspace = true

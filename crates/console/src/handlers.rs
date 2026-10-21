@@ -1,4 +1,5 @@
-use host::capacities;
+use collector_runtime::plans::capacities;
+use crate::invoke;
 use egress::circuit_open;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -22,9 +23,7 @@ pub async fn meta(
     ctx: &ConsoleContext,
     q: AsOfQuery,
 ) -> ConsoleResult<Value> {
-    let generation = ctx
-        .services
-        .call("config.generation", json!({}))
+    let generation = invoke::call(&ctx.gateway, "config.generation", json!({}))
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
     let read_only = q.as_of_snapshot.is_some();
@@ -38,9 +37,7 @@ pub async fn meta(
 }
 
 pub async fn timeline(ctx: &ConsoleContext) -> ConsoleResult<Value> {
-    let changes = ctx
-        .services
-        .call("strata_read.changes", json!({ "after": 0, "limit": 100 }))
+    let changes = invoke::call(&ctx.gateway, "strata_read.changes", json!({ "after": 0, "limit": 100 }))
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
     let items: Vec<Value> = changes
@@ -86,9 +83,7 @@ pub async fn overview(
         })
         .count();
     let record_stats = record_stats_by_source(ctx).await?;
-    let changes = ctx
-        .services
-        .call("strata_read.changes", json!({ "after": 0, "limit": 20 }))
+    let changes = invoke::call(&ctx.gateway, "strata_read.changes", json!({ "after": 0, "limit": 20 }))
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
     let recent: Vec<Value> = changes
@@ -178,9 +173,7 @@ pub async fn source_trigger(
     if body.is_some_and(|b| !b.confirm) {
         return Err(ConsoleError::bad_request("需要 confirm: true"));
     }
-    let tasks = ctx
-        .services
-        .call(
+    let tasks = invoke::call(&ctx.gateway, 
             "planner.trigger",
             json!({ "source": key.strip_prefix("source/").unwrap_or(&key) }),
         )
@@ -378,14 +371,10 @@ pub async fn reset_circuit(
 }
 
 pub async fn config_summary(ctx: &ConsoleContext) -> ConsoleResult<Value> {
-    let generation = ctx
-        .services
-        .call("config.generation", json!({}))
+    let generation = invoke::call(&ctx.gateway, "config.generation", json!({}))
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
-    let diff = ctx
-        .services
-        .call("config_inspect.diff", json!({}))
+    let diff = invoke::call(&ctx.gateway, "config_inspect.diff", json!({}))
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
     let diff_len = diff.as_array().map(|a| a.len()).unwrap_or(0);
@@ -396,18 +385,14 @@ pub async fn config_summary(ctx: &ConsoleContext) -> ConsoleResult<Value> {
 }
 
 pub async fn config_validate(ctx: &ConsoleContext) -> ConsoleResult<Value> {
-    ctx
-        .services
-        .call("config_inspect.validate", json!({}))
+    invoke::call(&ctx.gateway, "config_inspect.validate", json!({}))
         .await
         .map_err(|e| ConsoleError::bad_request(e.to_string()))?;
     Ok(json!({ "ok": true }))
 }
 
 pub async fn config_reload(ctx: &ConsoleContext) -> ConsoleResult<Value> {
-    let value = ctx
-        .services
-        .call("config.load", json!({}))
+    let value = invoke::call(&ctx.gateway, "config.load", json!({}))
         .await
         .map_err(|e| ConsoleError::bad_request(e.to_string()))?;
     Ok(value)
@@ -466,9 +451,7 @@ pub async fn config_file_validate_text(
     tokio::fs::write(&file, &body.text)
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
-    let result = ctx
-        .services
-        .call("config_inspect.validate", json!({}))
+    let result = invoke::call(&ctx.gateway, "config_inspect.validate", json!({}))
         .await;
     tokio::fs::write(&file, original)
         .await
@@ -548,14 +531,10 @@ pub async fn config_file_rollback(
 }
 
 async fn validate_and_reload(state: &ConsoleContext) -> ConsoleResult<()> {
-    state
-        .services
-        .call("config_inspect.validate", json!({}))
+    invoke::call(&state.gateway, "config_inspect.validate", json!({}))
         .await
         .map_err(|e| ConsoleError::bad_request(e.to_string()))?;
-    state
-        .services
-        .call("config.load", json!({}))
+    invoke::call(&state.gateway, "config.load", json!({}))
         .await
         .map_err(|e| ConsoleError::bad_request(e.to_string()))?;
     Ok(())
@@ -610,14 +589,10 @@ async fn source_summaries(state: &ConsoleContext) -> ConsoleResult<Vec<Value>> {
             .unwrap_or("")
             .to_string();
         let source_key = id.strip_prefix("source/").unwrap_or(id);
-        let status = state
-            .services
-            .call("planner.next", json!({ "source": source_key }))
+        let status = invoke::call(&state.gateway, "planner.next", json!({ "source": source_key }))
             .await
             .map_err(|e| ConsoleError::internal(e.to_string()))?;
-        let health = state
-            .services
-            .call("health.status", json!({ "source": source_key }))
+        let health = invoke::call(&state.gateway, "health.status", json!({ "source": source_key }))
             .await
             .map_err(|e| ConsoleError::internal(e.to_string()))?;
         let health_status = health
@@ -859,9 +834,7 @@ async fn load_record_detail(
                 .and_then(Value::as_str)
         })
         .map(|s| truncate(s, 2000));
-    let kinds = state
-        .services
-        .call("strata_read.kinds", json!({ "rid": rid_text }))
+    let kinds = invoke::call(&state.gateway, "strata_read.kinds", json!({ "rid": rid_text }))
         .await
         .ok()
         .unwrap_or(Value::Array(vec![]));
@@ -1094,9 +1067,7 @@ async fn resolve_record_source_id(
     {
         return Ok(Some(sid.to_string()));
     }
-    let related = state
-        .services
-        .call(
+    let related = invoke::call(&state.gateway, 
             "strata_read.related",
             json!({ "rid": rid_text, "rel": "discovered_by", "direction": "out" }),
         )
