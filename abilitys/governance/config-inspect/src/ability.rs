@@ -13,7 +13,8 @@ use crate::generated::manifest;
 pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::from_manifest(manifest::manifest()).into_factory(|config| async move {
         let bind = BindConfig::parse(&config)?;
-        let store = ConfigStore::open(&bind.config_dir, bind.load_options())?;
+        let store = ConfigStore::open(&bind.config_dir, bind.load_options())
+            .map_err(|e| Error::failed(e.to_string()))?;
         Ok(Arc::new(InspectAbility {
             manifest: manifest::manifest(),
             config_dir: bind.config_dir,
@@ -44,11 +45,13 @@ impl Ability for InspectAbility {
     ) -> Result<Value> {
         match method.as_str() {
             "validate" => {
-                config::validate(&self.config_dir, &self.load_options)?;
+                config::validate(&self.config_dir, &self.load_options)
+                    .map_err(|e| Error::failed(e.to_string()))?;
                 Ok(json!({ "ok": true }))
             }
             "diff" => {
-                let fresh = config::validate(&self.config_dir, &self.load_options)?;
+                let fresh = config::validate(&self.config_dir, &self.load_options)
+                    .map_err(|e| Error::failed(e.to_string()))?;
                 let changes = config::diff(&self.store.snapshot(), &fresh);
                 let items = changes
                     .into_iter()
@@ -67,7 +70,8 @@ impl Ability for InspectAbility {
                     .get("module")
                     .and_then(Value::as_str)
                     .ok_or_else(|| Error::invalid_args("spec 无效"))?;
-                let fields = config::explain(&self.store.snapshot(), module)?;
+                let fields = config::explain(&self.store.snapshot(), module)
+                    .map_err(|e| Error::failed(e.to_string()))?;
                 let items = fields
                     .into_iter()
                     .map(|field| {

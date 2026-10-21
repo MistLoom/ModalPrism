@@ -13,7 +13,8 @@ use crate::generated::manifest;
 pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::from_manifest(manifest::manifest()).into_factory(|config| async move {
         let bind = BindConfig::parse(&config)?;
-        let store = ConfigStore::open(&bind.config_dir, bind.load_options())?;
+        let store = ConfigStore::open(&bind.config_dir, bind.load_options())
+            .map_err(|e| Error::failed(e.to_string()))?;
         Ok(Arc::new(ConfigAbility {
             manifest: manifest::manifest(),
             store: Arc::new(store),
@@ -40,7 +41,9 @@ impl Ability for ConfigAbility {
     ) -> Result<Value> {
         match method.as_str() {
             "load" => {
-                self.store.reload()?;
+                self.store
+                    .reload()
+                    .map_err(|e| Error::failed(e.to_string()))?;
                 Ok(json!({ "generation": self.store.snapshot().generation }))
             }
             "generation" => Ok(json!({ "generation": self.store.snapshot().generation })),
