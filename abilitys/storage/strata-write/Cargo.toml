@@ -1,0 +1,24 @@
+[package]
+name = "ability-strata-write"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "提交变更集"
+publish = false
+build = "build.rs"
+
+[dependencies]
+ability-support.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-client = { path = "../../../crates/strata-client" }
+strata-model = { path = "../../../crates/strata-model" }
+strata-shared = { path = "../strata-shared" }
+
+[build-dependencies]
+ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+
+[lints]
+workspace = true

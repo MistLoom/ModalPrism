@@ -1,0 +1,96 @@
+framework_version: "1"
+id: strata_read
+open: true
+protocols: [fun, http]
+depends: []
+stateful: true
+factory: true
+description: 读取已发布的资源、facet 和变更
+config_schema:
+  type: object
+  properties:
+    dataDir:
+      type: string
+    system:
+      type: object
+  required: [dataDir]
+methods:
+  - id: kinds
+    description: 列出资源上的 facet 种类
+    input:
+      type: object
+      properties:
+        rid: { type: string }
+        includeVariants: { type: boolean }
+      required: [rid]
+  - id: has
+    description: 判断资源是否有某种 facet
+    input:
+      type: object
+      properties:
+        rid: { type: string }
+        kind: { type: string }
+        variant: { type: string }
+      required: [rid, kind]
+  - id: get
+    description: 读取 facet 的版本与元数据
+    input:
+      type: object
+      properties:
+        facet: { type: string }
+        lazy: { type: boolean }
+      required: [facet]
+  - id: slice
+    description: 读取文本区间
+    input:
+      type: object
+      properties:
+        span: { type: string }
+      required: [span]
+  - id: resolve
+    description: 按身份键解析资源
+    input:
+      type: object
+      properties:
+        identity: { type: string }
+      required: [identity]
+  - id: history
+    description: 列出 facet 版本
+    input:
+      type: object
+      properties:
+        facet: { type: string }
+      required: [facet]
+  - id: lineage
+    description: 读取 facet 血缘
+    input:
+      type: object
+      properties:
+        facet: { type: string }
+        direction: { type: string }
+        depth: { type: integer }
+      required: [facet]
+  - id: related
+    description: 读取资源关系
+    input:
+      type: object
+      properties:
+        rid: { type: string }
+        rel: { type: string }
+        direction: { type: string }
+      required: [rid]
+  - id: query
+    description: 按查询对象读取
+    input:
+      type: object
+      properties:
+        query: { type: object }
+      required: [query]
+  - id: changes
+    description: 读取已可见变更
+    input:
+      type: object
+      properties:
+        after: { type: integer }
+        limit: { type: integer }
+      required: [after]

@@ -1,0 +1,50 @@
+framework_version: "1"
+id: strata_queue
+open: false
+protocols: [fun]
+depends: []
+stateful: true
+factory: true
+description: 控制库任务队列
+config_schema:
+  type: object
+  properties:
+    dataDir:
+      type: string
+    system:
+      type: object
+  required: [dataDir]
+methods:
+  - id: enqueue
+    description: 写入任务
+    input:
+      type: object
+      properties:
+        tasks: { type: array }
+      required: [tasks]
+  - id: lease
+    description: 租约一批任务
+    input:
+      type: object
+      properties:
+        queue: { type: string }
+        count: { type: integer }
+        leaseMs: { type: integer }
+      required: [queue, count, leaseMs]
+  - id: extend
+    description: 延长租约
+    input:
+      type: object
+      properties:
+        taskId: { type: string }
+        leaseMs: { type: integer }
+      required: [taskId, leaseMs]
+  - id: nack
+    description: 退回任务
+    input:
+      type: object
+      properties:
+        taskId: { type: string }
+        retryAt: { type: string }
+        error: { type: string }
+      required: [taskId, retryAt, error]

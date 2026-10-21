@@ -45,6 +45,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "ability-sdk-codegen"
+version = "0.1.0"
+source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
+dependencies = [
+ "ability-support",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
+name = "ability-strata-queue"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "strata-shared",
+]
+
+[[package]]
+name = "ability-strata-read"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "strata-shared",
+]
+
+[[package]]
+name = "ability-strata-write"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "strata-shared",
+]
+
+[[package]]
 name = "ability-support"
 version = "0.1.0"
 source = "git+https://github.com/MistLoom/LEAF?rev=ffabb6128ae6e006c6c3cee3a706532501f26219#ffabb6128ae6e006c6c3cee3a706532501f26219"
@@ -1446,7 +1498,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2686,7 +2738,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2848,7 +2900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5657,6 +5709,9 @@ dependencies = [
  "ability-core",
  "ability-egress",
  "ability-planner",
+ "ability-strata-queue",
+ "ability-strata-read",
+ "ability-strata-write",
  "ability-support",
  "accessor_api",
  "accessor_browser",
@@ -5683,9 +5738,6 @@ dependencies = [
  "serde_json",
  "strata-client",
  "strata-model",
- "strata_queue",
- "strata_read",
- "strata_write",
  "tempfile",
  "tokio",
  "tower-http",
@@ -5840,7 +5892,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7087,7 +7139,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7823,7 +7875,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7882,7 +7934,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8452,7 +8504,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8687,6 +8739,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-shared"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "serde",
+ "serde_json",
+ "strata-client",
+]
+
+[[package]]
 name = "strata-store"
 version = "0.1.0"
 dependencies = [
@@ -8704,33 +8766,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "ulid",
-]
-
-[[package]]
-name = "strata_queue"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "strata_read"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
-]
-
-[[package]]
-name = "strata_write"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
 ]
 
 [[package]]
@@ -8894,10 +8929,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9778,7 +9813,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

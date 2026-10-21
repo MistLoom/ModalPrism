@@ -38,9 +38,9 @@ health = { path = "../../ability/health" }
 paid_gateway = { path = "../../ability/paid_gateway" }
 runner = { path = "../../ability/runner" }
 serde_json.workspace = true
-strata_queue = { path = "../../ability/strata_queue" }
-strata_read = { path = "../../ability/strata_read" }
-strata_write = { path = "../../ability/strata_write" }
+ability-strata-queue = { path = "../../abilitys/storage/strata-queue" }
+ability-strata-read = { path = "../../abilitys/storage/strata-read" }
+ability-strata-write = { path = "../../abilitys/storage/strata-write" }
 strata-model = { path = "../../crates/strata-model" }
 tokio = { workspace = true, features = ["signal"] }
 types = { path = "../../crates/types" }

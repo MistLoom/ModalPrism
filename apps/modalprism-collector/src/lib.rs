@@ -159,103 +159,129 @@ async fn wait_http(addr: SocketAddr) -> Result<(), host::Error> {
     ))
 }
 
+fn strata_bind_config(services: &HostResources) -> Value {
+    json!({
+        "dataDir": services.data_dir(),
+        "system": services.config().applied().system,
+    })
+}
+
 async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
+    let strata_config = strata_bind_config(&services);
     let providers: Vec<(
         &str,
         std::sync::Arc<dyn ability_support::AbilityProvider>,
         bool,
+        Option<Value>,
     )> = vec![
         (
             "strata_read",
-            strata_read::provider(Arc::clone(&services)),
+            ability_strata_read::provider(),
             true,
+            Some(strata_config.clone()),
         ),
         (
             "strata_write",
-            strata_write::provider(Arc::clone(&services)),
+            ability_strata_write::provider(),
             false,
+            Some(strata_config.clone()),
         ),
         (
             "strata_queue",
-            strata_queue::provider(Arc::clone(&services)),
+            ability_strata_queue::provider(),
             false,
+            Some(strata_config.clone()),
         ),
         (
             "committer",
             committer::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "planner",
             ability_planner::provider(Arc::clone(&services)),
             true,
+            None,
         ),
-        ("runner", runner::provider(Arc::clone(&services)), false),
-        ("health", health::provider(Arc::clone(&services)), true),
+        ("runner", runner::provider(Arc::clone(&services)), false, None),
+        ("health", health::provider(Arc::clone(&services)), true, None),
         (
             "config",
             ability_config::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "config_inspect",
             config_inspect::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "egress",
             ability_egress::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "paid_gateway",
             paid_gateway::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_http",
             accessor_http::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_rss",
             accessor_rss::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_api",
             accessor_api::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_paid_api",
             accessor_paid_api::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_search",
             accessor_search::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_push",
             accessor_push::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_file",
             accessor_file::provider(Arc::clone(&services)),
             false,
+            None,
         ),
         (
             "accessor_browser",
             accessor_browser::provider(Arc::clone(&services)),
             false,
+            None,
         ),
     ];
-    for (id, provider, http) in providers {
+    for (id, provider, http, bind_config) in providers {
         host.install_str(id, provider)
             .await
             .map_err(|error| host::Error::new(error.to_string()))?;
@@ -268,7 +294,12 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
         let source = SourceId::new(id).map_err(|error| host::Error::new(error.to_string()))?;
         let instance =
             InstanceId::new(id).map_err(|error| host::Error::new(error.to_string()))?;
-        host.load(LoadSpec::new(source, instance))
+        let spec = LoadSpec::new(source, instance);
+        let spec = match bind_config {
+            Some(config) => spec.with_config(config),
+            None => spec,
+        };
+        host.load(spec)
             .await
             .map_err(|error| host::Error::new(error.to_string()))?;
     }
