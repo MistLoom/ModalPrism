@@ -11,7 +11,7 @@ build = "build.rs"
 [dependencies]
 ability-support.workspace = true
 async-trait.workspace = true
-collector-bind = { path = "../../collector/bind" }
+collector-bind = { path = "../../../crates/collector-bind" }
 config = { path = "../../../crates/config" }
 serde_json.workspace = true
 serde.workspace = true

@@ -12,7 +12,7 @@ build = "build.rs"
 ability-core.workspace = true
 ability-support.workspace = true
 axum = "0.8"
-collector-assembly = { path = "../../crates/collector-assembly" }
+modalprism-assembly = { path = "../modalprism-assembly" }
 collector-runtime = { path = "../../crates/collector-runtime" }
 console-api = { path = "../../crates/console-api" }
 config = { path = "../../crates/config" }

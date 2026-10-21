@@ -12,8 +12,8 @@ build = "build.rs"
 ability-support.workspace = true
 async-trait.workspace = true
 accessors = { path = "../../../crates/accessors" }
-collector-accessor-shared = { path = "../accessor-shared" }
-collector-bind = { path = "../../collector/bind" }
+collector-accessor-shared = { path = "../../../crates/collector-accessor-shared" }
+collector-bind = { path = "../../../crates/collector-bind" }
 collector-gateway = { path = "../../../crates/collector-gateway" }
 collector-ports = { path = "../../../crates/collector-ports" }
 collector-runtime = { path = "../../../crates/collector-runtime" }

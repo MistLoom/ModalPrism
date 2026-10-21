@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ability_support::{AbilityCtx, Error, Result};
 use config::Snapshot;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use crate::call::CtxCall;
 
 #[derive(Deserialize)]
 struct Applied {
@@ -13,11 +14,10 @@ struct Applied {
     modules: BTreeMap<String, Value>,
 }
 
-pub async fn applied(ctx: &dyn AbilityCtx) -> Result<Arc<Snapshot>> {
-    let method = ability_support::MethodId::new("applied").expect("method id");
-    let value = ctx.call("config", &method, json!({})).await?;
+pub async fn applied(ctx: &dyn CtxCall) -> Result<Arc<Snapshot>, String> {
+    let value = ctx.call("config", "applied", serde_json::json!({})).await?;
     let applied: Applied =
-        serde_json::from_value(value).map_err(|_| Error::invalid_args("spec 无效"))?;
+        serde_json::from_value(value).map_err(|_| "spec 无效".to_string())?;
     Ok(Arc::new(Snapshot {
         generation: applied.generation,
         system: applied.system,

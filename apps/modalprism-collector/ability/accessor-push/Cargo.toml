@@ -11,8 +11,8 @@ build = "build.rs"
 [dependencies]
 ability-support.workspace = true
 async-trait.workspace = true
-collector-accessor-shared = { path = "../../../../abilitys/collector/accessor-shared" }
-collector-bind = { path = "../../../../abilitys/collector/bind" }
+collector-accessor-shared = { path = "../../../../crates/collector-accessor-shared" }
+collector-bind = { path = "../../../../crates/collector-bind" }
 serde_json.workspace = true
 serde.workspace = true
 

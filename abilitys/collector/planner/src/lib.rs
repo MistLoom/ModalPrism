@@ -1,9 +1,10 @@
-#![allow(dead_code, non_camel_case_types, unused_imports)]
 //! Ability `planner`
 
 mod ability;
+mod ctx_call;
 #[allow(dead_code, unused_imports)]
 mod generated;
 mod logic;
 
 pub use ability::provider;
+pub use ctx_call::wrap as ctx_call;

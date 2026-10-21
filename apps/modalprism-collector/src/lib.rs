@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use ability_core::AbilityHost;
 use ability_support::{InstanceId, MethodId};
-use collector_assembly::{
+use modalprism_assembly::{
     ConsoleGateway, HttpOpsGateway, console_expose, install_collector, ops_http_expose,
 };
 use collector_runtime::{Binds, Error, refuse_remote, require_loopback};
@@ -66,7 +66,7 @@ impl Running {
         HttpOpsGateway::new(
             Arc::clone(&self.host),
             ops_http_expose(),
-            collector_assembly::OPS_HTTP_INSTANCES,
+            modalprism_assembly::OPS_HTTP_INSTANCES,
         )
     }
 
@@ -137,7 +137,7 @@ pub async fn boot(
     let http_ops = HttpOpsGateway::new(
         Arc::clone(&host),
         ops_http_expose(),
-        collector_assembly::OPS_HTTP_INSTANCES,
+        modalprism_assembly::OPS_HTTP_INSTANCES,
     );
     let console_gateway = Arc::clone(&gateway);
     let http_task = tokio::spawn(async move {

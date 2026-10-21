@@ -1,8 +1,10 @@
 //! 内置访问器 validate/access，经 AbilityCtx 调用 egress 与 paid_gateway。
 
 mod access;
+mod ctx_call;
 
 pub use access::AbilityAccess;
+pub use ctx_call::wrap as ctx_call;
 
 use std::sync::Arc;
 use std::time::Duration;

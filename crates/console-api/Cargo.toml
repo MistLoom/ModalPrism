@@ -17,7 +17,7 @@ tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 
 [dev-dependencies]
-collector-runtime = { path = "../collector-runtime" }
+modalprism-assembly = { path = "../../apps/modalprism-assembly" }
 axum = "0.8"
 config = { path = "../config" }
 tempfile.workspace = true

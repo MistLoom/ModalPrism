@@ -8,8 +8,8 @@ pub async fn source_status(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
     let source = text_field(&args, "source")?;
     let ctx = ctx.retain();
     let planner = Planner::new(
-        CtxQueue::new(ctx.clone()),
-        CtxPersist::new(ctx.clone(), "planner"),
+        CtxQueue::new(crate::ctx_call::wrap(ctx.clone())),
+        CtxPersist::new(crate::ctx_call::wrap(ctx.clone()), "planner"),
     );
     let status = planner
         .source_status(&source)

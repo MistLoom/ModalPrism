@@ -8,7 +8,6 @@ description = "采集 Ability 经 ctx.call 的 planner 端口"
 publish = false
 
 [dependencies]
-ability-support.workspace = true
 config = { path = "../config" }
 async-trait.workspace = true
 planner = { path = "../planner" }

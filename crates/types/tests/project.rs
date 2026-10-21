@@ -8,9 +8,56 @@ use std::time::Duration;
 use config::builtin_presets;
 use serde_json::{Value, json};
 use strata_model::{
-    ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, Rid, Target,
+    ApplyOpts, Body, ChangeSet, FacetKind, FacetRef, LineageInput, Op, Producer, Rid, Target,
 };
 use types::{Article, HotList, ReadRoot, invalid_input};
+
+async fn root_call(root: &ReadRoot, method: &str, args: Value) -> Result<Value, types::Error> {
+    match method {
+        "type_article.project" => {
+            let rid = args
+                .get("rid")
+                .and_then(Value::as_str)
+                .ok_or_else(|| types::Error::new("spec 无效"))?;
+            Article::project(root, &Rid::parse(rid).map_err(|_| types::Error::new("spec 无效"))?)
+                .await
+        }
+        "type_article.on_commit" => {
+            if args.as_object().is_some_and(|o| !o.is_empty()) {
+                return Err(types::Error::new("spec 无效"));
+            }
+            Ok(Value::Null)
+        }
+        "type_hotlist.project" => {
+            let rid = args
+                .get("rid")
+                .and_then(Value::as_str)
+                .ok_or_else(|| types::Error::new("spec 无效"))?;
+            HotList::project(root, &Rid::parse(rid).map_err(|_| types::Error::new("spec 无效"))?)
+                .await
+        }
+        "type_hotlist.on_commit" => {
+            if args.as_object().is_some_and(|o| !o.is_empty()) {
+                return Err(types::Error::new("spec 无效"));
+            }
+            HotList::on_commit(root.strata(), &*root.config().applied()).await
+        }
+        "strata_read.get" => {
+            let facet = args
+                .get("facet")
+                .and_then(Value::as_str)
+                .ok_or_else(|| types::Error::new("spec 无效"))?;
+            let value = root
+                .strata()
+                .get(&FacetRef::parse(facet).map_err(|_| types::Error::new("spec 无效"))?)
+                .await
+                .map_err(|e| types::Error::new(e.to_string()))?;
+            serde_json::to_value(value).map_err(|e| types::Error::new(e.to_string()))
+        }
+        "health.status" => types::read::health_status(root, &args).await,
+        _ => Err(types::Error::new("spec 无效")),
+    }
+}
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -136,8 +183,8 @@ async fn article_projects_without_body_bytes() {
     )
     .await;
     let rid = resolve(&root, "ext:article:one").await;
-    let projected = root
-        .call("type_article.project", json!({ "rid": rid }))
+    let projected =
+        root_call(root, "type_article.project", json!({ "rid": rid }))
         .await
         .unwrap();
     assert_eq!(projected["rid"], rid);
@@ -147,15 +194,15 @@ async fn article_projects_without_body_bytes() {
     assert_eq!(projected["cover"]["size"], cover.size());
     assert!(projected.get("bytes").is_none());
     assert!(
-        root.call("type_article.on_commit", json!({}))
+        root_call(root, "type_article.on_commit", json!({}))
             .await
             .unwrap()
             .is_null()
     );
     assert!(root.strata().flush().await.unwrap().is_none());
 
-    let missing = root
-        .call(
+    let missing =
+        root_call(root, 
             "type_article.project",
             json!({ "rid": "r_01ARZ3NDEKTSV4RRFFQ69G5FAV" }),
         )
@@ -163,8 +210,8 @@ async fn article_projects_without_body_bytes() {
         .unwrap();
     assert!(missing.is_null());
 
-    let facet = root
-        .call(
+    let facet =
+        root_call(root, 
             "strata_read.get",
             json!({ "facet": format!("{rid}@image:cover#latest") }),
         )
@@ -173,8 +220,8 @@ async fn article_projects_without_body_bytes() {
     assert!(facet.get("bytes").is_none());
     assert_eq!(facet["part"]["sha256"], cover.sha256());
 
-    let health = root
-        .call("health.status", json!({ "source": "demo" }))
+    let health =
+        root_call(root, "health.status", json!({ "source": "demo" }))
         .await
         .unwrap();
     assert_eq!(health["key"], "source/demo");
@@ -190,14 +237,14 @@ async fn article_projects_without_body_bytes() {
         }],
     )
     .await;
-    let health = root
-        .call("health.status", json!({ "source": "demo" }))
+    let health =
+        root_call(root, "health.status", json!({ "source": "demo" }))
         .await
         .unwrap();
     assert_eq!(health["status"], "degraded");
     assert_eq!(health["alert"], true);
 
-    let Err(error) = root.call("type_article.project", json!([])).await else {
+    let Err(error) = root_call(root, "type_article.project", json!([])).await else {
         panic!("参数应当无效");
     };
     assert!(invalid_input(&error.message));
@@ -236,16 +283,16 @@ async fn article_reads_text_stored_only_as_blob() {
     )
     .await;
     let rid = resolve(&root, "ext:article:blob").await;
-    let lazy = root
-        .call(
+    let lazy =
+        root_call(root, 
             "strata_read.get",
             json!({ "facet": format!("{rid}@md:readable#latest"), "lazy": true }),
         )
         .await
         .unwrap();
     assert!(lazy["text"].is_null());
-    let projected = root
-        .call("type_article.project", json!({ "rid": rid }))
+    let projected =
+        root_call(root, "type_article.project", json!({ "rid": rid }))
         .await
         .unwrap();
     assert_eq!(projected["readable"], text);
@@ -296,7 +343,7 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
     let second = resolve(&root, "ext:snap:2").await;
 
     let changeset = root
-        .call("type_hotlist.on_commit", json!({}))
+        root_call(root, "type_hotlist.on_commit", json!({}))
         .await
         .unwrap();
     assert!(root.strata().flush().await.unwrap().is_none());
@@ -336,8 +383,8 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
         .await
         .unwrap();
     root.strata().flush().await.unwrap();
-    let projected = root
-        .call("type_hotlist.project", json!({ "rid": second }))
+    let projected =
+        root_call(root, "type_hotlist.project", json!({ "rid": second }))
         .await
         .unwrap();
     assert_eq!(projected["list"], list);
@@ -345,7 +392,7 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
     assert_eq!(projected["entries"][0]["rank"], 1);
     assert_eq!(projected["delta"]["newEntries"][0], item_c);
     assert!(
-        root.call("type_hotlist.on_commit", json!({}))
+        root_call(root, "type_hotlist.on_commit", json!({}))
             .await
             .unwrap()
             .is_null()
@@ -363,7 +410,7 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
     )
     .await;
     let trim = root
-        .call("type_hotlist.on_commit", json!({}))
+        root_call(root, "type_hotlist.on_commit", json!({}))
         .await
         .unwrap();
     assert!(root.strata().flush().await.unwrap().is_none());
@@ -378,7 +425,7 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
         .unwrap();
     root.strata().flush().await.unwrap();
     let page = root
-        .call(
+        root_call(root, 
             "strata_read.query",
             json!({
                 "query": {

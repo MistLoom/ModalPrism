@@ -4,7 +4,7 @@
 
 ## 组合根
 
-采集进程在 `AbilityHost` 上完成全部 Ability 的 `install` 与 `load`，装配逻辑集中在 `crates/collector-assembly`。进程内持有三个 Gateway 表面：
+采集进程在 `AbilityHost` 上完成全部 Ability 的 `install` 与 `load`，装配逻辑集中在 `apps/modalprism-assembly`（由 `modalprism-collector` / `modalprism-agent` 的 `boot` 调用）。各 Ability 在 `load` 前通过 `install::prime` 注入绑定期状态；方法分发由 `ability.yml` codegen 生成。进程内持有三个 Gateway 表面：
 
 | 表面 | 用途 |
 |---|---|

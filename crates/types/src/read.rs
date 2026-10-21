@@ -257,7 +257,7 @@ pub(crate) async fn changes(root: &ReadRoot, args: &Value) -> Result<Value, Erro
     Ok(Value::Array(items))
 }
 
-pub(crate) async fn health_status(root: &ReadRoot, args: &Value) -> Result<Value, Error> {
+pub async fn health_status(root: &ReadRoot, args: &Value) -> Result<Value, Error> {
     let source = text_field(args, "source")?;
     let key = format!("source/{source}");
     let state = root.strata().state("health", &key).await?;

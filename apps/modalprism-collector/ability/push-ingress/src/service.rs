@@ -43,9 +43,10 @@ impl PushCommit for CtxPush {
         source_id: &str,
         envelopes: &[strata_model::RawEnvelope],
     ) -> std::result::Result<(), collector_runtime::Error> {
-        let applied = collector_ports::applied(self.ctx.as_ref())
+        let call = collector_accessor_shared::ctx_call(Arc::clone(&self.ctx));
+        let applied = collector_ports::applied(call.as_ref())
             .await
-            .map_err(|e| collector_runtime::Error::new(e.to_string()))?;
+            .map_err(|e| collector_runtime::Error::new(e))?;
         let module = applied
             .modules
             .get(source_id)
@@ -97,7 +98,7 @@ pub async fn serve(bind: collector_bind::BindConfig, ctx: Arc<dyn AbilityCtx>) -
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| ability_support::Error::failed(e.to_string()))?;
-    let snapshot = collector_ports::applied(ctx.as_ref()).await?;
+    let snapshot = collector_ports::applied(collector_accessor_shared::ctx_call(ctx).as_ref()).await?;
     let services = Arc::new(CtxPush {
         ctx,
         bind,

@@ -1,4 +1,3 @@
-#![allow(dead_code, non_camel_case_types, unused_imports)]
 //! Strata Ability 共用：从绑定期配置打开 `Strata`。
 
 use std::path::{Path, PathBuf};

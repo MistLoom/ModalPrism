@@ -12,11 +12,11 @@ build = "build.rs"
 ability-support.workspace = true
 accessors-builtin = { path = "../../../../crates/accessors-builtin" }
 async-trait.workspace = true
-collector-bind = { path = "../../../../abilitys/collector/bind" }
+collector-bind = { path = "../../../../crates/collector-bind" }
 collector-gateway = { path = "../../../../crates/collector-gateway" }
 collector-runtime = { path = "../../../../crates/collector-runtime" }
 collector-ports = { path = "../../../../crates/collector-ports" }
-collector-accessor-shared = { path = "../../../../abilitys/collector/accessor-shared" }
+collector-accessor-shared = { path = "../../../../crates/collector-accessor-shared" }
 config = { path = "../../../../crates/config" }
 strata-model = { path = "../../../../crates/strata-model" }
 accessors = { path = "../../../../crates/accessors" }

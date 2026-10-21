@@ -16,7 +16,7 @@ strata-model = { path = "../../../crates/strata-model" }
 async-trait.workspace = true
 serde.workspace = true
 strata-client = { path = "../../../crates/strata-client" }
-collector-bind = { path = "../../collector/bind" }
+collector-bind = { path = "../../../crates/collector-bind" }
 collector-gateway = { path = "../../../crates/collector-gateway" }
 egress = { path = "../../../crates/egress" }
 serde_json.workspace = true

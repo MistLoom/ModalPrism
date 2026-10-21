@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use ability_core::AbilityHost;
 use ability_support::{InstanceId, MethodId};
-use collector_assembly::{HttpOpsGateway, ops_http_expose, OPS_HTTP_INSTANCES};
+use modalprism_assembly::{HttpOpsGateway, ops_http_expose, OPS_HTTP_INSTANCES};
 use frame_core::{Gateway, InvokeRequest};
 use serde_json::json;
 

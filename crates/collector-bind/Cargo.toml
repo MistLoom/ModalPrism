@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 ability-support.workspace = true
-config = { path = "../../../crates/config" }
+config = { path = "../config" }
 serde.workspace = true
 serde_json.workspace = true
 

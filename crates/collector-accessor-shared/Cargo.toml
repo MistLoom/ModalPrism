@@ -9,17 +9,19 @@ publish = false
 
 [dependencies]
 ability-support.workspace = true
-accessors = { path = "../../../crates/accessors" }
+accessors = { path = "../accessors" }
 async-trait.workspace = true
-collector-bind = { path = "../bind" }
-collector-gateway = { path = "../../../crates/collector-gateway" }
-collector-runtime = { path = "../../../crates/collector-runtime" }
+collector-bind = { path = "../collector-bind" }
+collector-ports = { path = "../collector-ports" }
+planner = { path = "../planner" }
+collector-gateway = { path = "../collector-gateway" }
+collector-runtime = { path = "../collector-runtime" }
 serde.workspace = true
 serde_json.workspace = true
-strata-model = { path = "../../../crates/strata-model" }
+strata-model = { path = "../strata-model" }
 bytes.workspace = true
-egress = { path = "../../../crates/egress" }
-paid = { path = "../../../crates/paid" }
+egress = { path = "../egress" }
+paid = { path = "../paid" }
 
 [lints]
 workspace = true

@@ -1,42 +1,36 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ability_support::{AbilityCtx, MethodId};
 use async_trait::async_trait;
 use planner::PlannerError;
 use serde_json::{Value, json};
 use strata_model::{AccessTask, ChangeSet, QueueName, TaskId, Timestamp};
 
+use crate::call::CtxCall;
+
 /// 队列操作全部经 `strata_queue` Ability。`apply` 可选走 `strata_write`。
 pub struct CtxQueue {
-    ctx: Arc<dyn AbilityCtx>,
+    ctx: Arc<dyn CtxCall>,
     apply_via_write: bool,
 }
 
 impl CtxQueue {
-    pub fn new(ctx: Arc<dyn AbilityCtx>) -> Self {
+    pub fn new(ctx: Arc<dyn CtxCall>) -> Self {
         Self {
             ctx,
             apply_via_write: false,
         }
     }
 
-    pub fn runner(ctx: Arc<dyn AbilityCtx>) -> Self {
+    pub fn runner(ctx: Arc<dyn CtxCall>) -> Self {
         Self {
             ctx,
             apply_via_write: true,
         }
     }
 
-    fn method(name: &str) -> MethodId {
-        MethodId::new(name).expect("method id")
-    }
-
     async fn call(&self, method: &str, args: Value) -> Result<Value, PlannerError> {
-        self.ctx
-            .call("strata_queue", &Self::method(method), args)
-            .await
-            .map_err(|e| PlannerError::new(e.to_string()))
+        self.ctx.call("strata_queue", method, args).await
     }
 
     fn plan_err(message: &str) -> PlannerError {
@@ -171,13 +165,8 @@ impl planner::Queue for CtxQueue {
         }
         if self.apply_via_write && changeset.ack.is_none() {
             self.ctx
-                .call(
-                    "strata_write",
-                    &Self::method("apply"),
-                    json!({ "changeset": changeset }),
-                )
-                .await
-                .map_err(|e| PlannerError::new(e.to_string()))?;
+                .call("strata_write", "apply", json!({ "changeset": changeset }))
+                .await?;
             return Ok(());
         }
         self.call("apply", json!({ "changeset": changeset }))

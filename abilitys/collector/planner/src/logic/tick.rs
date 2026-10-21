@@ -12,8 +12,8 @@ pub async fn tick(ctx: &dyn AbilityCtx, _args: Value) -> Result<Value> {
     let snapshot = from_ctx(ctx.as_ref()).await?;
     let plans = plans_of(&snapshot);
     let planner = Planner::new(
-        CtxQueue::new(ctx.clone()),
-        CtxPersist::new(ctx.clone(), "planner"),
+        CtxQueue::new(crate::ctx_call::wrap(ctx.clone())),
+        CtxPersist::new(crate::ctx_call::wrap(ctx.clone()), "planner"),
     );
     let tasks = planner
         .tick(&plans, &capacities(), Timestamp::now())

@@ -56,8 +56,8 @@ pub async fn run_task(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
         .checked_add(plan.timeout)
         .map_err(|source| Error::failed(source.to_string()))?;
     let planner = Planner::new(
-        CtxQueue::runner(ctx.clone()),
-        CtxPersist::new(ctx.clone(), "planner"),
+        CtxQueue::runner(crate::ctx_call::wrap(ctx.clone())),
+        CtxPersist::new(crate::ctx_call::wrap(ctx.clone()), "planner"),
     );
     let handler = TaskHandler {
         ctx: ctx.clone(),

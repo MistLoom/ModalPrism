@@ -11,7 +11,7 @@ publish = false
 ability-core.workspace = true
 ability-support.workspace = true
 async-trait.workspace = true
-collector-assembly = { path = "../../crates/collector-assembly" }
+modalprism-assembly = { path = "../modalprism-assembly" }
 collector-runtime = { path = "../../crates/collector-runtime" }
 config = { path = "../../crates/config" }
 frame-core.workspace = true

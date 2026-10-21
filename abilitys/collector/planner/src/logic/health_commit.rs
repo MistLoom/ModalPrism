@@ -7,8 +7,8 @@ use strata_model::Timestamp;
 pub async fn health_commit(ctx: &dyn AbilityCtx, _args: Value) -> Result<Value> {
     let ctx = ctx.retain();
     let planner = Planner::new(
-        CtxQueue::new(ctx.clone()),
-        CtxPersist::new(ctx.clone(), "planner"),
+        CtxQueue::new(crate::ctx_call::wrap(ctx.clone())),
+        CtxPersist::new(crate::ctx_call::wrap(ctx.clone()), "planner"),
     );
     planner
         .commit_snapshot(Timestamp::now())

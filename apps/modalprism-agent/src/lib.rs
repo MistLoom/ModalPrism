@@ -6,7 +6,7 @@ use std::sync::Arc;
 use ability_core::AbilityHost;
 use ability_support::{InstanceId, MethodId};
 use async_trait::async_trait;
-use collector_assembly::{
+use modalprism_assembly::{
     McpReadGateway, READ_AGENT_MCP_INSTANCES, install_read_agent, read_agent_expose,
 };
 use collector_runtime::refuse_remote;
