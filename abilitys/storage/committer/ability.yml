@@ -2,7 +2,8 @@ framework_version: "1"
 id: committer
 open: false
 protocols: [fun]
-depends: []
+depends:
+  - config
 stateful: true
 factory: true
 description: 发布快照并恢复存储
@@ -29,5 +30,9 @@ methods:
       type: object
   - id: status
     description: 返回控制库、Lance 和暂存区路径
+    input:
+      type: object
+  - id: hotlist_apply
+    description: 提交热榜差量变更集
     input:
       type: object

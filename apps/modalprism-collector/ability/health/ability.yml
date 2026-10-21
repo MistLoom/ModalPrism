@@ -1,0 +1,23 @@
+framework_version: "1"
+id: health
+open: false
+protocols: [fun, http]
+depends:
+  - config
+  - planner
+  - strata_write
+stateful: false
+factory: false
+description: 信源健康评估
+methods:
+  - id: evaluate
+    description: 把健康写入存储
+    input:
+      type: object
+  - id: status
+    description: 读取信源健康
+    input:
+      type: object
+      properties:
+        source: { type: string }
+      required: [source]

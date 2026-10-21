@@ -18,6 +18,8 @@ use strata_model::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -37,6 +39,7 @@ fn config_dir(dir: &Path) {
 
 #[tokio::test]
 async fn one_click_boot_serves_generation_and_releases_leases() {
+    let _guard = BOOT_LOCK.lock().unwrap();
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
@@ -55,7 +58,16 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
     assert!(data.path().join("lance").is_dir());
     assert!(data.path().join("staging").is_dir());
 
-    assert_eq!(running.services().config().snapshot().generation, 1);
+    let generation = running
+        .host()
+        .invoke(InvokeRequest::new(
+            InstanceId::new("config").unwrap(),
+            MethodId::new("generation").unwrap(),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(generation.data["generation"], 1);
 
     let mut stream = TcpStream::connect(running.http()).await.unwrap();
     stream
@@ -92,11 +104,6 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
             .iter()
             .any(|entry| entry.instance.as_str() == "planner")
     );
-    assert!(
-        catalog
-            .iter()
-            .all(|entry| entry.instance.as_str() != "strata_write")
-    );
     let denied = running
         .gateway()
         .invoke(InvokeRequest::new(
@@ -125,15 +132,25 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
         generation: 1,
     };
     running
-        .services()
-        .strata()
-        .enqueue(std::slice::from_ref(&task))
+        .gateway()
+        .invoke(InvokeRequest::new(
+            InstanceId::new("strata_queue").unwrap(),
+            MethodId::new("enqueue").unwrap(),
+            json!({ "tasks": [task] }),
+        ))
         .await
         .unwrap();
     running
-        .services()
-        .strata()
-        .lease_id(&task_id, Duration::from_secs(30), Timestamp::now())
+        .gateway()
+        .invoke(InvokeRequest::new(
+            InstanceId::new("strata_queue").unwrap(),
+            MethodId::new("lease_id").unwrap(),
+            json!({
+                "taskId": task_id.to_string(),
+                "leaseMs": 30_000,
+                "now": Timestamp::now().to_string(),
+            }),
+        ))
         .await
         .unwrap();
     let root = data.path().to_path_buf();
@@ -152,6 +169,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
 
 #[tokio::test]
 async fn visible_flush_commits_the_hotlist_changeset() {
+    let _guard = BOOT_LOCK.lock().unwrap();
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
@@ -163,7 +181,9 @@ async fn visible_flush_commits_the_hotlist_changeset() {
     let running = boot(data.path(), config.path(), binds_zero())
         .await
         .unwrap();
-    let strata = running.services().strata();
+    let strata = strata_client::Strata::open(data.path(), strata_client::Options::default())
+        .await
+        .unwrap();
     store(
         &strata,
         vec![ensure("ext:list:board", "list"), ensure("ext:item:a", "a")],
@@ -188,7 +208,7 @@ async fn visible_flush_commits_the_hotlist_changeset() {
     wait_past(&stamp).await;
     store(&strata, snapshot("ext:snap:2", "s2", &list, &item, 2)).await;
     strata.flush().await.unwrap();
-    assert!(apply_hotlist(running.services()).await.unwrap());
+    assert!(apply_hotlist(running.host()).await.unwrap());
     let listed = running
         .host()
         .invoke(InvokeRequest::new(

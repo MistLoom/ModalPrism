@@ -18,6 +18,12 @@ pub struct BindConfig {
     pub proxy_url: Option<String>,
     #[serde(default)]
     pub browser_program: Option<PathBuf>,
+    /// 正向代理监听地址（环回），由 egress Ability 在生命周期内绑定。
+    #[serde(default)]
+    pub proxy_listen: Option<String>,
+    /// Push 入站监听地址（环回），由 push_ingress Ability 绑定。
+    #[serde(default)]
+    pub push_listen: Option<String>,
 }
 
 impl BindConfig {

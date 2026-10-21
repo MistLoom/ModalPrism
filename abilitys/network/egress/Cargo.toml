@@ -21,6 +21,7 @@ collector-gateway = { path = "../../../crates/collector-gateway" }
 egress = { path = "../../../crates/egress" }
 serde_json.workspace = true
 strata-shared = { path = "../../storage/strata-shared" }
+tokio.workspace = true
 url.workspace = true
 
 [build-dependencies]

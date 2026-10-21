@@ -1,4 +1,4 @@
-//! 采集进程。组合根直接链接 Ability，并持有调度、发布和健康循环。
+//! 采集进程组合根：启动参数、Ability 装配、运维 HTTP 与后台循环（经 Gateway）。
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -9,9 +9,8 @@ use std::time::Duration;
 
 use ability_core::{AbilityGrant, AbilityHost};
 use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
-use collector_boot::{BootResources, flush_interval, serve_egress_proxy};
-use collector_gateway::policy_of;
-use collector_runtime::{Binds, Error, serve_push};
+use collector_runtime::{Binds, Error, refuse_remote, require_loopback};
+use config::LoadOptions;
 use frame_core::{AbilityExpose, AccessKind, Gateway, InvokeRequest};
 use frame_port_http::HttpPort;
 use serde_json::{Value, json};
@@ -19,10 +18,8 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 mod console_static;
-mod providers;
 
 pub struct Running {
-    services: Arc<BootResources>,
     host: Arc<AbilityHost>,
     gateway: Arc<dyn Gateway>,
     http: SocketAddr,
@@ -30,14 +27,9 @@ pub struct Running {
     push: SocketAddr,
     stop: Arc<AtomicBool>,
     tasks: Vec<JoinHandle<()>>,
-    _watch: config::WatchHandle,
 }
 
 impl Running {
-    pub fn services(&self) -> &BootResources {
-        &self.services
-    }
-
     pub fn host(&self) -> &AbilityHost {
         &self.host
     }
@@ -63,64 +55,60 @@ impl Running {
         for task in &self.tasks {
             task.abort();
         }
-        self.services.shutdown().await
+        let _ = invoke_host(&self.host, "planner", "shutdown", json!({})).await;
+        Ok(())
     }
 }
 
-pub async fn boot(
-    data: &Path,
-    config_dir: &Path,
-    binds: Binds,
-) -> Result<Running, Error> {
-    let http_addr = binds.http;
-    let proxy_addr = binds.proxy;
-    let push_addr = binds.push;
-    let services = BootResources::open(data, config_dir, binds).await?;
-    let proxy_listener = TcpListener::bind(proxy_addr)
-        .await
-        .map_err(|source| Error::with_source("监听", source))?;
-    let proxy = proxy_listener
-        .local_addr()
-        .map_err(|source| Error::with_source("监听", source))?;
-    services.set_proxy(format!("http://{proxy}"));
-    let push_listener = TcpListener::bind(push_addr)
-        .await
-        .map_err(|source| Error::with_source("监听", source))?;
-    let push = push_listener
-        .local_addr()
-        .map_err(|source| Error::with_source("监听", source))?;
-    let http = reserved_http(http_addr).await?;
-    let host = link(Arc::clone(&services)).await?;
-    host.set_access_gate(Some(AccessKind::Http));
+pub async fn boot(data: &Path, config_dir: &Path, binds: Binds) -> Result<Running, Error> {
+    let load_options = LoadOptions::from_process();
+    let snapshot = config::validate(config_dir, &load_options)?;
+    refuse_remote(&snapshot, data)?;
+    require_loopback(binds.http)?;
+    require_loopback(binds.proxy)?;
+    require_loopback(binds.push)?;
+
+    let data_dir = collector_runtime::normalize(data);
+    let http = reserve_addr(binds.http).await?;
+    let proxy = reserve_addr(binds.proxy).await?;
+    let push = reserve_addr(binds.push).await?;
+    let proxy_url = format!("http://{proxy}");
+    let browser = std::env::var("MODALPRISM_MOLI").unwrap_or_else(|_| "moli".into());
+
+    let bind = json!({
+        "dataDir": data_dir,
+        "configDir": config_dir,
+        "system": snapshot.system,
+        "proxyUrl": proxy_url,
+        "browserProgram": browser,
+        "proxyListen": proxy.to_string(),
+        "pushListen": push.to_string(),
+    });
+    let strata_config = json!({
+        "dataDir": data_dir,
+        "system": snapshot.system,
+    });
+
+    let host = link(bind, strata_config).await?;
     let gateway: Arc<dyn Gateway> = host.as_ref().clone().into_gateway();
     let stop = Arc::new(AtomicBool::new(false));
-    let mut tasks = Vec::new();
-    let proxy_gateway = services.egress_gateway();
-    let proxy_services = Arc::clone(&services);
-    tasks.push(tokio::spawn(async move {
-        serve_egress_proxy(proxy_gateway, proxy_listener, move || {
-            policy_of(&proxy_services.config().applied().system)
-        })
-        .await;
-    }));
-    let push_services = Arc::clone(&services);
-    tasks.push(tokio::spawn(async move {
-        serve_push(push_services, push_listener).await;
-    }));
+
+    let _ = invoke_host(&host, "committer", "maintain", json!({})).await;
+
     let http_gateway = Arc::clone(&gateway);
-    let http_services = Arc::clone(&services);
-    tasks.push(tokio::spawn(async move {
-        serve_ops(http, http_gateway, http_services).await;
-    }));
+    let http_task = tokio::spawn(async move {
+        serve_ops(http, http_gateway).await;
+    });
     wait_http(http).await?;
-    tasks.extend(spawn_loops(
-        Arc::clone(&host),
-        Arc::clone(&services),
-        Arc::clone(&stop),
-    ));
-    let watch = config::watch(services.config(), Duration::from_secs(2))?;
+
+    let tasks = vec![
+        http_task,
+        spawn_planner_loop(Arc::clone(&host), Arc::clone(&stop)),
+        spawn_flush_loop(Arc::clone(&host), Arc::clone(&stop)),
+        spawn_health_loop(Arc::clone(&host), Arc::clone(&stop)),
+    ];
+
     Ok(Running {
-        services,
         host,
         gateway,
         http,
@@ -128,11 +116,10 @@ pub async fn boot(
         push,
         stop,
         tasks,
-        _watch: watch,
     })
 }
 
-async fn reserved_http(addr: SocketAddr) -> Result<SocketAddr, Error> {
+async fn reserve_addr(addr: SocketAddr) -> Result<SocketAddr, Error> {
     if addr.port() != 0 {
         return Ok(addr);
     }
@@ -159,16 +146,6 @@ async fn wait_http(addr: SocketAddr) -> Result<(), Error> {
     ))
 }
 
-fn bind_config(services: &BootResources) -> Value {
-    json!({
-        "dataDir": services.data_dir(),
-        "configDir": services.config_dir(),
-        "system": services.config().applied().system,
-        "proxyUrl": services.proxy_url(),
-        "browserProgram": services.browser_program(),
-    })
-}
-
 fn ops_expose() -> AbilityExpose {
     AbilityExpose::from_value(&json!({
         "abilities": {
@@ -181,22 +158,18 @@ fn ops_expose() -> AbilityExpose {
     .expect("expose")
 }
 
-async fn link(services: Arc<BootResources>) -> Result<Arc<AbilityHost>, Error> {
+async fn link(bind: Value, strata_config: Value) -> Result<Arc<AbilityHost>, Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
     host.set_expose(ops_expose());
-    let bind = bind_config(&services);
-    let strata_config = json!({
-        "dataDir": services.data_dir(),
-        "system": services.config().applied().system,
-    });
     let grant = AbilityGrant {
         app: "modalprism".into(),
         open: false,
     };
+
     let providers: Vec<(
         &str,
-        std::sync::Arc<dyn ability_support::AbilityProvider>,
+        Arc<dyn ability_support::AbilityProvider>,
         bool,
         Option<Value>,
     )> = vec![
@@ -225,12 +198,6 @@ async fn link(services: Arc<BootResources>) -> Result<Arc<AbilityHost>, Error> {
             Some(strata_config.clone()),
         ),
         (
-            "committer",
-            ability_committer::provider(),
-            false,
-            Some(strata_config.clone()),
-        ),
-        (
             "config",
             ability_config::provider(),
             false,
@@ -241,6 +208,12 @@ async fn link(services: Arc<BootResources>) -> Result<Arc<AbilityHost>, Error> {
             ability_config_inspect::provider(),
             true,
             Some(bind.clone()),
+        ),
+        (
+            "committer",
+            ability_committer::provider(),
+            false,
+            Some(strata_config.clone()),
         ),
         (
             "egress",
@@ -268,59 +241,66 @@ async fn link(services: Arc<BootResources>) -> Result<Arc<AbilityHost>, Error> {
         ),
         (
             "health",
-            providers::health::provider(Arc::clone(&services)),
+            ability_health::provider(),
             true,
-            None,
+            Some(bind.clone()),
+        ),
+        (
+            "push_ingress",
+            ability_push_ingress::provider(),
+            false,
+            Some(bind.clone()),
         ),
         (
             "accessor_http",
-            providers::accessor::provider(Arc::clone(&services), "accessor_http", "http"),
+            ability_accessor_http::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "accessor_rss",
-            providers::accessor::provider(Arc::clone(&services), "accessor_rss", "rss"),
+            ability_accessor_rss::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "accessor_api",
-            providers::accessor::provider(Arc::clone(&services), "accessor_api", "api"),
+            ability_accessor_api::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "accessor_paid_api",
-            providers::accessor::provider(Arc::clone(&services), "accessor_paid_api", "paid-api"),
+            ability_accessor_paid_api::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "accessor_search",
-            providers::accessor::provider(Arc::clone(&services), "accessor_search", "search"),
+            ability_accessor_search::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "accessor_push",
-            providers::accessor::provider(Arc::clone(&services), "accessor_push", "push"),
+            ability_accessor_push::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "accessor_file",
-            providers::accessor::provider(Arc::clone(&services), "accessor_file", "file"),
+            ability_accessor_file::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
         (
             "accessor_browser",
-            providers::accessor::provider(Arc::clone(&services), "accessor_browser", "browser"),
+            ability_accessor_browser::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
     ];
+
     for (id, provider, http, bind_config) in providers {
         host.set_ability_grant(id, grant.clone());
         host.install_str(id, provider)
@@ -333,30 +313,20 @@ async fn link(services: Arc<BootResources>) -> Result<Arc<AbilityHost>, Error> {
         };
         host.set_protocol_support(id, kinds);
         let source = SourceId::new(id).map_err(|error| Error::new(error.to_string()))?;
-        let instance =
-            InstanceId::new(id).map_err(|error| Error::new(error.to_string()))?;
+        let instance = InstanceId::new(id).map_err(|error| Error::new(error.to_string()))?;
         let spec = LoadSpec::new(source, instance);
         let spec = match bind_config {
             Some(config) => spec.with_config(config),
             None => spec,
         };
         let spec = match id {
-            "planner" => {
-                let mut bindings = BTreeMap::new();
-                for dep in ["config", "strata_queue", "control_state"] {
-                    bindings.insert(
-                        dep.to_string(),
-                        InstanceId::new(dep).map_err(|error| Error::new(error.to_string()))?,
-                    );
-                }
-                LoadSpec {
-                    bindings: Some(bindings),
-                    ..spec
-                }
-            }
-            "runner" => {
-                let mut bindings = BTreeMap::new();
-                for dep in [
+            "planner" => with_bindings(
+                spec,
+                &["config", "strata_queue", "control_state"],
+            )?,
+            "runner" => with_bindings(
+                spec,
+                &[
                     "config",
                     "strata_queue",
                     "strata_write",
@@ -372,17 +342,14 @@ async fn link(services: Arc<BootResources>) -> Result<Arc<AbilityHost>, Error> {
                     "accessor_push",
                     "accessor_file",
                     "accessor_browser",
-                ] {
-                    bindings.insert(
-                        dep.to_string(),
-                        InstanceId::new(dep).map_err(|error| Error::new(error.to_string()))?,
-                    );
-                }
-                LoadSpec {
-                    bindings: Some(bindings),
-                    ..spec
-                }
-            }
+                ],
+            )?,
+            "health" => with_bindings(spec, &["config", "planner", "strata_write"])?,
+            "push_ingress" => with_bindings(
+                spec,
+                &["config", "egress", "paid_gateway", "strata_write"],
+            )?,
+            "committer" => with_bindings(spec, &["config"])?,
             _ => spec,
         };
         host.load(spec)
@@ -392,28 +359,37 @@ async fn link(services: Arc<BootResources>) -> Result<Arc<AbilityHost>, Error> {
     Ok(host)
 }
 
-fn spawn_loops(
-    host: Arc<AbilityHost>,
-    services: Arc<BootResources>,
-    stop: Arc<AtomicBool>,
-) -> Vec<JoinHandle<()>> {
-    let host_tick = Arc::clone(&host);
-    let stop_tick = Arc::clone(&stop);
-    let tick = tokio::spawn(async move {
+fn with_bindings(spec: LoadSpec, deps: &[&str]) -> Result<LoadSpec, Error> {
+    let mut bindings = BTreeMap::new();
+    for dep in deps {
+        bindings.insert(
+            (*dep).to_string(),
+            InstanceId::new(*dep).map_err(|error| Error::new(error.to_string()))?,
+        );
+    }
+    Ok(LoadSpec {
+        bindings: Some(bindings),
+        ..spec
+    })
+}
+
+fn spawn_planner_loop(host: Arc<AbilityHost>, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+    tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            if stop_tick.load(Ordering::Relaxed) {
+            if stop.load(Ordering::Relaxed) {
                 break;
             }
-            let Ok(value) = invoke(&host_tick, "planner", "tick", json!({})).await else {
+            let Ok(value) = invoke_host(&host, "planner", "tick", json!({})).await else {
                 continue;
             };
             let Some(tasks) = value.as_array() else {
                 continue;
             };
             for task in tasks {
-                let Ok(value) = invoke(&host_tick, "runner", "run_task", json!({ "task": task })).await
+                let Ok(value) =
+                    invoke_host(&host, "runner", "run_task", json!({ "task": task })).await
                 else {
                     continue;
                 };
@@ -423,10 +399,10 @@ fn spawn_loops(
                 if follows.is_empty() {
                     continue;
                 }
-                let _ = invoke(&host_tick, "committer", "flush", json!({})).await;
+                let _ = invoke_host(&host, "committer", "flush", json!({})).await;
                 for follow in follows {
-                    let _ = invoke(
-                        &host_tick,
+                    let _ = invoke_host(
+                        &host,
                         "runner",
                         "run_task",
                         json!({ "task": follow }),
@@ -435,68 +411,83 @@ fn spawn_loops(
                 }
             }
         }
-    });
-    let host_flush = Arc::clone(&host);
-    let services_flush = Arc::clone(&services);
-    let stop_flush = Arc::clone(&stop);
-    let flush = tokio::spawn(async move {
+    })
+}
+
+fn spawn_flush_loop(host: Arc<AbilityHost>, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+    tokio::spawn(async move {
         loop {
-            let wait = flush_interval(&services_flush.config().applied());
+            let applied = match invoke_host(&host, "config", "applied", json!({})).await {
+                Ok(value) => value,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            let wait = flush_interval_from_applied(&applied);
             tokio::time::sleep(wait).await;
-            if stop_flush.load(Ordering::Relaxed) {
+            if stop.load(Ordering::Relaxed) {
                 break;
             }
-            let Ok(value) = invoke(&host_flush, "committer", "flush", json!({})).await else {
+            let Ok(value) = invoke_host(&host, "committer", "flush", json!({})).await else {
                 continue;
             };
             if value.get("snapshot").is_some_and(|item| !item.is_null()) {
-                let _ = apply_hotlist(&services_flush).await;
+                let _ = apply_hotlist(&host).await;
             }
         }
-    });
-    let stop_health = stop;
-    let health = tokio::spawn(async move {
+    })
+}
+
+fn spawn_health_loop(host: Arc<AbilityHost>, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+    tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
-            if stop_health.load(Ordering::Relaxed) {
+            if stop.load(Ordering::Relaxed) {
                 break;
             }
-            let _ = invoke(&host, "health", "evaluate", json!({})).await;
+            let _ = invoke_host(&host, "health", "evaluate", json!({})).await;
         }
-    });
-    vec![tick, flush, health]
+    })
 }
 
-pub async fn apply_hotlist(services: &BootResources) -> Result<bool, types::Error> {
-    let applied = services.config().applied();
-    let value = types::HotList::on_commit(services.strata().as_ref(), applied.as_ref()).await?;
-    if value.is_null() {
-        return Ok(false);
-    }
-    let changeset = serde_json::from_value(value)
-        .map_err(|source| types::Error::with_source(source.to_string(), source))?;
-    services
-        .strata()
-        .apply(changeset, strata_model::ApplyOpts::default())
-        .await
-        .map_err(|error| types::Error::new(error.to_string()))?;
-    services
-        .strata()
-        .flush()
-        .await
-        .map_err(|error| types::Error::new(error.to_string()))?;
-    Ok(true)
+fn flush_interval_from_applied(applied: &Value) -> Duration {
+    let generation = applied
+        .get("generation")
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    let system = applied.get("system").cloned().unwrap_or(json!({}));
+    let modules = applied
+        .get("modules")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let snapshot = config::Snapshot {
+        generation,
+        system,
+        modules,
+        origins: BTreeMap::new(),
+    };
+    collector_runtime::plans::flush_interval(&snapshot)
 }
 
-async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>, services: Arc<BootResources>) {
+pub async fn apply_hotlist(host: &AbilityHost) -> Result<bool, types::Error> {
+    let value = invoke_host(host, "committer", "hotlist_apply", json!({}))
+        .await
+        .map_err(|e| types::Error::new(e.to_string()))?;
+    Ok(value
+        .get("applied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false))
+}
+
+async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>) {
     use std::path::PathBuf;
     use axum::response::Redirect;
     use tower_http::services::{ServeDir, ServeFile};
 
     let state = console_api::ConsoleState {
         gateway: Arc::clone(&gateway),
-        services,
         http_addr: addr.to_string(),
     };
     let console = if let Ok(dist) = std::env::var("MODALPRISM_CONSOLE_DIST") {
@@ -569,7 +560,7 @@ fn cors_vary(token: &str) -> bool {
         || token.eq_ignore_ascii_case("access-control-request-headers")
 }
 
-async fn invoke(
+async fn invoke_host(
     host: &AbilityHost,
     instance: &str,
     method: &str,
@@ -582,5 +573,20 @@ async fn invoke(
     let response = host
         .invoke(InvokeRequest::new(instance, method, args))
         .await?;
+    Ok(response.data)
+}
+
+async fn invoke_gateway(
+    gateway: &Arc<dyn Gateway>,
+    instance: &str,
+    method: &str,
+    args: Value,
+) -> Result<Value, String> {
+    let instance = InstanceId::new(instance).map_err(|e| e.to_string())?;
+    let method = MethodId::new(method).map_err(|e| e.to_string())?;
+    let response = gateway
+        .invoke(InvokeRequest::new(instance, method, args))
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(response.data)
 }

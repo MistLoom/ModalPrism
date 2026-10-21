@@ -1,9 +1,10 @@
 use collector_runtime::plans::capacities;
+use crate::context;
 use crate::invoke;
-use egress::circuit_open;
+use crate::strata_port;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use strata_model::{AsOf, Expr, FacetKind, FacetRef, Query as StrataQuery, QueryFrom, VersionSel};
+use strata_model::{AsOf, Expr, FacetKind, Query as StrataQuery, QueryFrom};
 
 use crate::config_path::{list_whitelist_files, normalize_rel_path, resolve_config_file};
 use crate::copy::{
@@ -150,7 +151,7 @@ pub async fn source_get(
         return Err(ConsoleError::not_found("信源不存在"));
     };
     let recent = recent_records_for_source(ctx, &key, 8).await?;
-    let requirements = source_requirements(ctx, &key);
+    let requirements = source_requirements(ctx, &key).await?;
     Ok(json!({
         "source": item,
         "recentRecords": recent,
@@ -203,11 +204,11 @@ pub async fn source_patch(
         .ok_or_else(|| ConsoleError::bad_request("需要 enabled 字段"))?;
     let rel = format!("sources/{}.yaml", key.strip_prefix("source/").unwrap_or(&key));
     let rel_path = normalize_rel_path(&rel)?;
-    let path = resolve_config_file(ctx, &rel_path)?;
+    let path = resolve_config_file(ctx, &rel_path).await?;
     let text = tokio::fs::read_to_string(&path)
         .await
         .map_err(|e| ConsoleError::not_found(e.to_string()))?;
-    write_backup(ctx, &rel, &text)?;
+    write_backup(ctx, &rel, &text).await?;
     let updated = set_enabled_line(&text, enabled);
     tokio::fs::write(&path, updated)
         .await
@@ -262,15 +263,10 @@ pub async fn records_list(
         select: vec![],
         as_of: as_of.clone(),
     };
-    let page = ctx
-        .services
-        .strata()
-        .query(query)
-        .await
-        .map_err(|e| ConsoleError::internal(e.to_string()))?;
+    let (rows, next_cursor) = strata_port::query(ctx, query).await?;
+    let page_rows = rows;
     let needle = q.q.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
-    let mut items: Vec<Value> = page
-        .rows
+    let mut items: Vec<Value> = page_rows
         .into_iter()
         .take(limit as usize)
         .map(|row| record_summary(&row))
@@ -281,9 +277,9 @@ pub async fn records_list(
     }
     Ok(json!({
         "items": items,
-        "nextCursor": page.next_cursor,
+        "nextCursor": next_cursor,
         "readOnly": q.as_of_snapshot.is_some(),
-        "sourceOptions": source_filter_options(ctx),
+        "sourceOptions": source_filter_options(ctx).await?,
     }))
 }
 
@@ -307,40 +303,30 @@ pub async fn governance_egress(
     q: AsOfQuery,
 ) -> ConsoleResult<Value> {
     let historical = q.as_of_snapshot.is_some();
-    let db = ctx
-        .services
-        .egress_gateway()
-        .egress_db()
+    let egress = invoke::call(&ctx.gateway, "egress.governance_domains", json!({}))
         .await
-        .map_err(|e| ConsoleError::internal(e.message))?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    let domains: Vec<Value> = db
-        .circuits
-        .iter()
-        .map(|(host, row)| {
-            let open = circuit_open(&db, host, now);
-            let state_label = if open {
-                "open"
-            } else if row.open_until.is_some() {
-                "half-open"
-            } else {
-                "closed"
-            };
-            json!({
-                "host": host,
-                "circuit": state_label,
-                "circuitLabel": circuit_label(state_label),
-                "consecutiveFailures": row.consecutive,
-                "cooldownMs": row.cooldown_ms,
-            })
-        })
-        .collect();
+        .map_err(|e| ConsoleError::internal(e))?;
+    let proxy = egress
+        .get("proxy")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut domains: Vec<Value> = egress
+        .get("domains")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for row in &mut domains {
+        if let Some(obj) = row.as_object_mut() {
+            let state_label = obj
+                .get("circuit")
+                .and_then(Value::as_str)
+                .unwrap_or("closed");
+            obj.insert("circuitLabel".into(), json!(circuit_label(state_label)));
+        }
+    }
     Ok(json!({
         "domains": domains,
-        "proxy": ctx.services.proxy_url(),
+        "proxy": proxy,
         "historicalMode": historical,
         "viewNote": historical.then_some("该视图显示实时状态"),
         "readOnly": historical,
@@ -361,12 +347,13 @@ pub async fn reset_circuit(
     if body.is_some_and(|b| !b.confirm) {
         return Err(ConsoleError::bad_request("需要 confirm: true"));
     }
-    ctx
-        .services
-        .egress_gateway()
-        .reset_circuit(&host)
-        .await
-        .map_err(|e| ConsoleError::internal(e.message))?;
+    invoke::call(
+        &ctx.gateway,
+        "egress.reset_circuit",
+        json!({ "host": host }),
+    )
+    .await
+    .map_err(|e| ConsoleError::internal(e))?;
     Ok(json!({ "ok": true, "host": host }))
 }
 
@@ -399,9 +386,9 @@ pub async fn config_reload(ctx: &ConsoleContext) -> ConsoleResult<Value> {
 }
 
 pub async fn config_files_list(ctx: &ConsoleContext) -> ConsoleResult<Value> {
-    let paths = list_whitelist_files(ctx)?;
-    let snapshot = ctx.services.config().applied();
-    let groups = config_file_groups(&paths, snapshot.as_ref());
+    let paths = list_whitelist_files(ctx).await?;
+    let snapshot = context::applied(ctx).await?;
+    let groups = config_file_groups(&paths, &snapshot);
     Ok(json!({ "items": paths, "groups": groups }))
 }
 
@@ -410,11 +397,11 @@ pub async fn config_file_get(
     path: String,
 ) -> ConsoleResult<Value> {
     let rel = normalize_rel_path(&path)?;
-    let file = resolve_config_file(ctx, &rel)?;
+    let file = resolve_config_file(ctx, &rel).await?;
     let text = tokio::fs::read_to_string(&file)
         .await
         .map_err(|e| ConsoleError::not_found(e.to_string()))?;
-    let has_backup = backup_path(ctx, &path).is_file();
+    let has_backup = backup_path(ctx, &path).await?.is_file();
     Ok(json!({
         "path": path,
         "text": text,
@@ -440,7 +427,7 @@ pub async fn config_file_validate_text(
     body: FileValidateBody,
 ) -> ConsoleResult<Value> {
     let rel = normalize_rel_path(&body.path)?;
-    let file = resolve_config_file(ctx, &rel)?;
+    let file = resolve_config_file(ctx, &rel).await?;
     let original = if file.is_file() {
         tokio::fs::read_to_string(&file)
             .await
@@ -479,7 +466,7 @@ pub async fn config_file_put(
         return Err(ConsoleError::bad_request("需要 confirm: true"));
     }
     let rel = normalize_rel_path(&path)?;
-    let file = resolve_config_file(ctx, &rel)?;
+    let file = resolve_config_file(ctx, &rel).await?;
     let original = if file.is_file() {
         tokio::fs::read_to_string(&file)
             .await
@@ -487,7 +474,7 @@ pub async fn config_file_put(
     } else {
         String::new()
     };
-    write_backup(ctx, &path.to_string(), &original)?;
+    write_backup(ctx, &path.to_string(), &original).await?;
     tokio::fs::write(&file, &body.text)
         .await
         .map_err(|e| ConsoleError::internal(e.to_string()))?;
@@ -515,8 +502,8 @@ pub async fn config_file_rollback(
         return Err(ConsoleError::bad_request("需要 confirm: true"));
     }
     let rel = normalize_rel_path(&body.path)?;
-    let file = resolve_config_file(ctx, &rel)?;
-    let backup = backup_path(ctx, &body.path);
+    let file = resolve_config_file(ctx, &rel).await?;
+    let backup = backup_path(ctx, &body.path).await?;
     if !backup.is_file() {
         return Err(ConsoleError::not_found("没有可回滚的备份"));
     }
@@ -540,17 +527,14 @@ async fn validate_and_reload(state: &ConsoleContext) -> ConsoleResult<()> {
     Ok(())
 }
 
-fn backup_path(state: &ConsoleContext, rel_path: &str) -> std::path::PathBuf {
+async fn backup_path(state: &ConsoleContext, rel_path: &str) -> ConsoleResult<std::path::PathBuf> {
     let safe = rel_path.replace('/', "__");
-    state
-        .services
-        .data_dir()
-        .join(".console-config-backups")
-        .join(safe)
+    let (data_dir, _) = context::layout(state).await?;
+    Ok(data_dir.join(".console-config-backups").join(safe))
 }
 
-fn write_backup(state: &ConsoleContext, rel_path: &str, text: &str) -> ConsoleResult<()> {
-    let path = backup_path(state, rel_path);
+async fn write_backup(state: &ConsoleContext, rel_path: &str, text: &str) -> ConsoleResult<()> {
+    let path = backup_path(state, rel_path).await?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConsoleError::internal(e.to_string()))?;
     }
@@ -571,7 +555,7 @@ fn normalize_source_id(id: &str) -> ConsoleResult<String> {
 }
 
 async fn source_summaries(state: &ConsoleContext) -> ConsoleResult<Vec<Value>> {
-    let snapshot = state.services.config().applied();
+    let snapshot = context::applied(state).await?;
     let mut out = Vec::new();
     for (id, module) in &snapshot.modules {
         if module.get("kind").and_then(Value::as_str) != Some("source") {
@@ -660,8 +644,10 @@ fn record_matches_query(row: &Value, needle: &str) -> bool {
         || source_name.to_lowercase().contains(needle)
 }
 
-fn source_name_map(state: &ConsoleContext) -> std::collections::HashMap<String, String> {
-    let snapshot = state.services.config().applied();
+async fn source_name_map(
+    state: &ConsoleContext,
+) -> ConsoleResult<std::collections::HashMap<String, String>> {
+    let snapshot = context::applied(state).await?;
     let mut out = std::collections::HashMap::new();
     for (id, module) in &snapshot.modules {
         if module.get("kind").and_then(Value::as_str) != Some("source") {
@@ -674,14 +660,15 @@ fn source_name_map(state: &ConsoleContext) -> std::collections::HashMap<String, 
             .to_string();
         out.insert(id.clone(), name);
     }
-    out
+    Ok(out)
 }
 
-fn source_filter_options(state: &ConsoleContext) -> Vec<Value> {
-    source_name_map(state)
+async fn source_filter_options(state: &ConsoleContext) -> ConsoleResult<Vec<Value>> {
+    Ok(source_name_map(state)
+        .await?
         .into_iter()
         .map(|(id, name)| json!({ "id": id, "name": name }))
-        .collect()
+        .collect())
 }
 
 async fn enrich_record_summaries(
@@ -689,8 +676,7 @@ async fn enrich_record_summaries(
     items: &mut [Value],
     as_of: Option<AsOf>,
 ) -> ConsoleResult<()> {
-    let names = source_name_map(state);
-    let strata = state.services.strata();
+    let names = source_name_map(state).await?;
     for item in items {
         let rid = item
             .get("id")
@@ -701,8 +687,8 @@ async fn enrich_record_summaries(
             continue;
         }
         let parsed = strata_model::Rid::parse(&rid).map_err(|_| ConsoleError::bad_request("记录无效"))?;
-        let discovery = facet_get_at(
-            strata.as_ref(),
+        let discovery = strata_port::facet_get_at(
+            state,
             &parsed,
             FacetKind::Struct,
             Some("discovery"),
@@ -804,17 +790,16 @@ async fn load_record_detail(
 ) -> ConsoleResult<Value> {
     let rid = strata_model::Rid::parse(rid_text)
         .map_err(|_| ConsoleError::bad_request("记录 ID 无效"))?;
-    let strata = state.services.strata();
-    let discovery = facet_get_at(
-        strata.as_ref(),
+    let discovery = strata_port::facet_get_at(
+        state,
         &rid,
         FacetKind::Struct,
         Some("discovery"),
         as_of.clone(),
     )
     .await?;
-    let page = facet_get_at(
-        strata.as_ref(),
+    let page = strata_port::facet_get_at(
+        state,
         &rid,
         FacetKind::Struct,
         Some("page"),
@@ -838,7 +823,7 @@ async fn load_record_detail(
         .await
         .ok()
         .unwrap_or(Value::Array(vec![]));
-    let names = source_name_map(state);
+    let names = source_name_map(state).await?;
     let source_id = discovery
         .as_ref()
         .and_then(|f| f.value.as_ref())
@@ -866,57 +851,6 @@ async fn load_record_detail(
     }))
 }
 
-async fn facet_get(
-    strata: &strata_client::Strata,
-    reference: &FacetRef,
-) -> ConsoleResult<Option<strata_client::Facet>> {
-    match strata.get(reference, true).await {
-        Ok(facet) => Ok(facet),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("Not found") || msg.contains("not found") {
-                Ok(None)
-            } else {
-                Err(ConsoleError::internal(msg))
-            }
-        }
-    }
-}
-
-async fn facet_get_at(
-    strata: &strata_client::Strata,
-    rid: &strata_model::Rid,
-    kind: FacetKind,
-    variant: Option<&str>,
-    as_of: Option<AsOf>,
-) -> ConsoleResult<Option<strata_client::Facet>> {
-    let variant_owned = variant.map(str::to_string);
-    let version = match as_of {
-        None => VersionSel::Latest,
-        Some(AsOf::Snapshot(seq)) => {
-            let facet_latest = FacetRef::new(
-                rid.clone(),
-                kind.clone(),
-                variant_owned.clone(),
-                VersionSel::Latest,
-            )
-            .map_err(|_| ConsoleError::bad_request("记录 ID 无效"))?;
-            let history = strata.history(&facet_latest).await.map_err(|e| ConsoleError::internal(e.to_string()))?;
-            let picked = history
-                .iter()
-                .filter(|item| item.seq <= seq)
-                .max_by_key(|item| item.seq);
-            picked
-                .map(|item| VersionSel::Exact(item.version))
-                .unwrap_or(VersionSel::Latest)
-        }
-        Some(_) => VersionSel::Latest,
-    };
-    let reference = FacetRef::new(rid.clone(), kind.clone(), variant_owned, version)
-        .map_err(|_| ConsoleError::bad_request("记录 ID 无效"))?;
-    facet_get(strata, &reference).await
-}
-
 struct DiscoveryFields {
     title: Option<String>,
     url: Option<String>,
@@ -925,7 +859,7 @@ struct DiscoveryFields {
     author: Option<String>,
 }
 
-fn parse_discovery(facet: &Option<strata_client::Facet>) -> DiscoveryFields {
+fn parse_discovery(facet: &Option<strata_port::FacetView>) -> DiscoveryFields {
     let value = facet.as_ref().and_then(|f| f.value.as_ref());
     let hints = value.and_then(|v| v.pointer("/hints"));
     let title = hints.and_then(|h| h.get("title")).and_then(Value::as_str).map(String::from);
@@ -988,22 +922,17 @@ async fn record_stats_by_source(state: &ConsoleContext) -> ConsoleResult<std::co
         select: vec![],
         as_of: None,
     };
-    let page = state
-        .services
-        .strata()
-        .query(query)
-        .await
-        .map_err(|e| ConsoleError::internal(e.to_string()))?;
+    let (rows, _) = strata_port::query(state, query).await?;
     let mut out: std::collections::HashMap<String, SourceRecordStats> = std::collections::HashMap::new();
-    let names = source_name_map(state);
-    for row in page.rows {
+    let names = source_name_map(state).await?;
+    for row in rows {
         let rid = row.get("rid").and_then(Value::as_str).unwrap_or("");
         if rid.is_empty() {
             continue;
         }
         let parsed = strata_model::Rid::parse(rid).map_err(|_| ConsoleError::internal("记录无效"))?;
-        let discovery = facet_get_at(
-            state.services.strata().as_ref(),
+        let discovery = strata_port::facet_get_at(
+            state,
             &parsed,
             FacetKind::Struct,
             Some("discovery"),
@@ -1053,7 +982,7 @@ async fn resolve_record_source_id(
     state: &ConsoleContext,
     rid_text: &str,
     row_source: Option<&Value>,
-    discovery: &Option<strata_client::Facet>,
+    discovery: &Option<strata_port::FacetView>,
 ) -> ConsoleResult<Option<String>> {
     if let Some(sid) = row_source.and_then(Value::as_str).filter(|s| !s.is_empty()) {
         return Ok(Some(sid.to_string()));
@@ -1104,13 +1033,8 @@ async fn lookup_resource_source_id(state: &ConsoleContext, resource_rid: &str) -
         select: vec![],
         as_of: None,
     };
-    let page = state
-        .services
-        .strata()
-        .query(query)
-        .await
-        .map_err(|e| ConsoleError::internal(e.to_string()))?;
-    let Some(row) = page.rows.first() else {
+    let (rows, _) = strata_port::query(state, query).await?;
+    let Some(row) = rows.first() else {
         return Ok(None);
     };
     Ok(row
@@ -1135,21 +1059,16 @@ async fn recent_records_for_source(state: &ConsoleContext, source_id: &str, limi
         select: vec![],
         as_of: None,
     };
-    let page = state
-        .services
-        .strata()
-        .query(query)
-        .await
-        .map_err(|e| ConsoleError::internal(e.to_string()))?;
-    let mut items: Vec<Value> = page.rows.into_iter().map(|row| record_summary(&row)).collect();
+    let (rows, _) = strata_port::query(state, query).await?;
+    let mut items: Vec<Value> = rows.into_iter().map(|row| record_summary(&row)).collect();
     enrich_record_summaries(state, &mut items, None).await?;
     Ok(items)
 }
 
-fn source_requirements(state: &ConsoleContext, source_id: &str) -> Vec<Value> {
-    let snapshot = state.services.config().applied();
+async fn source_requirements(state: &ConsoleContext, source_id: &str) -> ConsoleResult<Vec<Value>> {
+    let snapshot = context::applied(state).await?;
     let Some(module) = snapshot.modules.get(source_id) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut out = Vec::new();
     let accessor = module.pointer("/access/accessor").and_then(Value::as_str).unwrap_or("");
@@ -1173,7 +1092,7 @@ fn source_requirements(state: &ConsoleContext, source_id: &str) -> Vec<Value> {
             "detail": "启用后才会参与调度。",
         }));
     }
-    out
+    Ok(out)
 }
 
 pub async fn dispatch(ctx: &ConsoleContext, op: &str, args: Value) -> ConsoleResult<Value> {

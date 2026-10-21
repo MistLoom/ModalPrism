@@ -1,0 +1,23 @@
+[package]
+name = "collector-accessor-shared"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "内置访问器 Ability 共用逻辑"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+accessors = { path = "../../../crates/accessors" }
+async-trait.workspace = true
+collector-bind = { path = "../bind" }
+collector-gateway = { path = "../../../crates/collector-gateway" }
+collector-runtime = { path = "../../../crates/collector-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+strata-model = { path = "../../../crates/strata-model" }
+ability-collector-runner = { path = "../runner" }
+
+[lints]
+workspace = true

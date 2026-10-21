@@ -12,6 +12,7 @@ config_schema:
     dataDir: { type: string }
     system: { type: object }
     proxyUrl: { type: string }
+    proxyListen: { type: string }
   required: [dataDir]
 methods:
   - id: check
@@ -25,3 +26,15 @@ methods:
     description: 当前代理地址
     input:
       type: object
+  - id: governance_domains
+    description: 出站熔断域列表
+    input:
+      type: object
+  - id: reset_circuit
+    description: 重置指定主机的熔断器
+    input:
+      type: object
+      properties:
+        host: { type: string }
+        confirm: { type: boolean }
+      required: [host]

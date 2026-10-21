@@ -1,0 +1,25 @@
+framework_version: "1"
+id: push_ingress
+open: false
+protocols: [fun]
+depends:
+  - config
+  - egress
+  - paid_gateway
+  - strata_write
+stateful: true
+factory: true
+description: Push 入站 HTTP 监听
+config_schema:
+  type: object
+  properties:
+    dataDir: { type: string }
+    configDir: { type: string }
+    system: { type: object }
+    pushListen: { type: string }
+  required: [dataDir, configDir]
+methods:
+  - id: status
+    description: 监听状态
+    input:
+      type: object

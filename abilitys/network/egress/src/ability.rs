@@ -1,20 +1,23 @@
 use std::sync::Arc;
 
 use ability_support::{
-    Ability, AbilityCtx, AbilityManifest, AbilityProvider, AbilitySpec, Error, MethodId, Result,
+    Ability, AbilityCtx, AbilityManifest, AbilityProvider, AbilitySpec, Error, Lifecycle, MethodId,
+    Result,
 };
 use async_trait::async_trait;
 use collector_bind::BindConfig;
 use collector_gateway::{HttpTransport, SystemResolver, policy_of};
-use egress::TcpDial;
-use crate::hot::Hot;
-use egress::Resolver;
+use egress::{Resolver, TcpDial};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
-pub(crate) type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, TcpDial>;
+use crate::hot::Hot;
 use serde_json::{Value, json};
-use strata_shared::open_strata;
+use strata_shared::{open_strata, text_field};
 
 use crate::generated::manifest;
+
+pub(crate) type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, TcpDial>;
 
 pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::from_manifest(manifest::manifest()).into_factory(|config| async move {
@@ -34,6 +37,8 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
             proxy_url: bind.proxy_url.unwrap_or_default(),
             system: bind.system,
             opening,
+            proxy_listen: bind.proxy_listen,
+            listener: Mutex::new(None),
         }) as Arc<dyn Ability>)
     })
 }
@@ -44,12 +49,40 @@ struct EgressAbility {
     proxy_url: String,
     system: Value,
     opening: egress::Policy,
+    proxy_listen: Option<String>,
+    listener: Mutex<Option<JoinHandle<()>>>,
 }
 
 #[async_trait]
 impl Ability for EgressAbility {
     fn manifest(&self) -> &AbilityManifest {
         &self.manifest
+    }
+
+    async fn on_lifecycle(&self, phase: Lifecycle, _ctx: &dyn AbilityCtx) -> Result<()> {
+        match phase {
+            Lifecycle::Started => {
+                let Some(addr) = self.proxy_listen.as_deref() else {
+                    return Ok(());
+                };
+                let listener = tokio::net::TcpListener::bind(addr)
+                    .await
+                    .map_err(|e| Error::failed(e.to_string()))?;
+                let gateway = Arc::clone(&self.gateway);
+                let system = self.system.clone();
+                let task = tokio::spawn(async move {
+                    egress::serve_each(&gateway, listener, move || policy_of(&system)).await;
+                });
+                *self.listener.lock().await = Some(task);
+            }
+            Lifecycle::Stopped => {
+                if let Some(task) = self.listener.lock().await.take() {
+                    task.abort();
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     async fn invoke(
@@ -80,6 +113,20 @@ impl Ability for EgressAbility {
                 Ok(json!({ "blocked": blocked, "addresses": rendered }))
             }
             "status" => Ok(json!({ "proxy": self.proxy_url })),
+            "governance_domains" => {
+                crate::logic::governance::domains(&self.gateway, &self.proxy_url).await
+            }
+            "reset_circuit" => {
+                let host = text_field(&args, "host")?;
+                let confirm = args
+                    .get("confirm")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if !confirm {
+                    return Err(Error::invalid_args("需要 confirm: true"));
+                }
+                crate::logic::governance::reset_circuit(&self.gateway, &host).await
+            }
             "http_request" => {
                 crate::logic::http_request::run(&self.gateway, self.opening.clone(), &args).await
             }

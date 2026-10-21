@@ -1,0 +1,30 @@
+[package]
+name = "ability-push-ingress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Push 入站监听"
+publish = false
+build = "build.rs"
+
+[dependencies]
+ability-support.workspace = true
+accessors-builtin = { path = "../../../../crates/accessors-builtin" }
+async-trait.workspace = true
+collector-bind = { path = "../../../../abilitys/collector/bind" }
+collector-gateway = { path = "../../../../crates/collector-gateway" }
+collector-runtime = { path = "../../../../crates/collector-runtime" }
+collector-ports = { path = "../../../../crates/collector-ports" }
+ability-collector-runner = { path = "../../../../abilitys/collector/runner" }
+config = { path = "../../../../crates/config" }
+strata-model = { path = "../../../../crates/strata-model" }
+accessors = { path = "../../../../crates/accessors" }
+serde_json.workspace = true
+tokio.workspace = true
+
+[build-dependencies]
+ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+
+[lints]
+workspace = true

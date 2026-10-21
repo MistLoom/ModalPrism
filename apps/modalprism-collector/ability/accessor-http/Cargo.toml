@@ -1,0 +1,22 @@
+[package]
+name = "ability-accessor-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "内置访问器 http"
+publish = false
+build = "build.rs"
+
+[dependencies]
+ability-support.workspace = true
+async-trait.workspace = true
+collector-accessor-shared = { path = "../../../../abilitys/collector/accessor-shared" }
+collector-bind = { path = "../../../../abilitys/collector/bind" }
+serde_json.workspace = true
+
+[build-dependencies]
+ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+
+[lints]
+workspace = true

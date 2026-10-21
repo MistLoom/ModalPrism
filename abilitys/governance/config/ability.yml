@@ -25,6 +25,10 @@ methods:
     description: 当前代次
     input:
       type: object
+  - id: layout
+    description: 数据与配置目录
+    input:
+      type: object
   - id: applied
     description: 已应用快照摘要
     input:

@@ -1,0 +1,23 @@
+[package]
+name = "ability-health"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "信源健康"
+publish = false
+build = "build.rs"
+
+[dependencies]
+ability-support.workspace = true
+ability-core = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-model = { path = "../../../../crates/strata-model" }
+
+[build-dependencies]
+ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+
+[lints]
+workspace = true

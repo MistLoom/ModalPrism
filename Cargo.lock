@@ -3,6 +3,102 @@
 version = 4
 
 [[package]]
+name = "ability-accessor-api"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-accessor-browser"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-accessor-file"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-accessor-http"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-accessor-paid-api"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-accessor-push"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-accessor-rss"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
+name = "ability-accessor-search"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-accessor-shared",
+ "collector-bind",
+ "serde_json",
+]
+
+[[package]]
 name = "ability-collector-planner"
 version = "0.1.0"
 dependencies = [
@@ -59,13 +155,16 @@ dependencies = [
  "ability-strata-read",
  "ability-support",
  "async-trait",
+ "config",
  "frame-core",
  "serde",
  "serde_json",
  "strata-client",
+ "strata-model",
  "strata-shared",
  "tempfile",
  "tokio",
+ "types",
 ]
 
 [[package]]
@@ -78,6 +177,7 @@ dependencies = [
  "collector-bind",
  "config",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -137,7 +237,21 @@ dependencies = [
  "strata-client",
  "strata-model",
  "strata-shared",
+ "tokio",
  "url",
+]
+
+[[package]]
+name = "ability-health"
+version = "0.1.0"
+dependencies = [
+ "ability-core",
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "strata-model",
 ]
 
 [[package]]
@@ -159,6 +273,26 @@ dependencies = [
  "strata-model",
  "strata-shared",
  "url",
+]
+
+[[package]]
+name = "ability-push-ingress"
+version = "0.1.0"
+dependencies = [
+ "ability-collector-runner",
+ "ability-sdk-codegen",
+ "ability-support",
+ "accessors",
+ "accessors-builtin",
+ "async-trait",
+ "collector-bind",
+ "collector-gateway",
+ "collector-ports",
+ "collector-runtime",
+ "config",
+ "serde_json",
+ "strata-model",
+ "tokio",
 ]
 
 [[package]]
@@ -1538,6 +1672,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "collector-accessor-shared"
+version = "0.1.0"
+dependencies = [
+ "ability-collector-runner",
+ "ability-support",
+ "accessors",
+ "async-trait",
+ "collector-bind",
+ "collector-gateway",
+ "collector-runtime",
+ "serde",
+ "serde_json",
+ "strata-model",
+]
+
+[[package]]
 name = "collector-bind"
 version = "0.1.0"
 dependencies = [
@@ -1545,27 +1695,6 @@ dependencies = [
  "config",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "collector-boot"
-version = "0.1.0"
-dependencies = [
- "accessors",
- "accessors-builtin",
- "async-trait",
- "collector-gateway",
- "collector-runtime",
- "config",
- "egress",
- "paid",
- "planner",
- "serde_json",
- "strata-client",
- "strata-model",
- "strata-shared",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -1692,14 +1821,11 @@ name = "console"
 version = "0.1.0"
 dependencies = [
  "ability-support",
- "collector-boot",
  "collector-runtime",
  "config",
- "egress",
  "frame-core",
  "serde",
  "serde_json",
- "strata-client",
  "strata-model",
  "tokio",
 ]
@@ -1709,7 +1835,6 @@ name = "console-api"
 version = "0.1.0"
 dependencies = [
  "axum",
- "collector-boot",
  "collector-runtime",
  "config",
  "console",
@@ -5785,6 +5910,14 @@ dependencies = [
 name = "modalprism-collector"
 version = "0.1.0"
 dependencies = [
+ "ability-accessor-api",
+ "ability-accessor-browser",
+ "ability-accessor-file",
+ "ability-accessor-http",
+ "ability-accessor-paid-api",
+ "ability-accessor-push",
+ "ability-accessor-rss",
+ "ability-accessor-search",
  "ability-collector-planner",
  "ability-collector-runner",
  "ability-committer",
@@ -5793,15 +5926,15 @@ dependencies = [
  "ability-control-state",
  "ability-core",
  "ability-egress",
+ "ability-health",
  "ability-paid-gateway",
+ "ability-push-ingress",
  "ability-strata-queue",
  "ability-strata-read",
  "ability-strata-write",
  "ability-support",
- "accessors",
  "async-trait",
  "axum",
- "collector-boot",
  "collector-gateway",
  "collector-runtime",
  "config",

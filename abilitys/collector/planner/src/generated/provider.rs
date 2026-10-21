@@ -45,5 +45,29 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
             serde_json::json!({"properties":{"source":{"type":"string"}},"required":["source"],"type":"object"}),
             handler_impl!(next),
         )
+        .on(
+            "source_status",
+            "读取信源健康状态",
+            serde_json::json!({"properties":{"source":{"type":"string"}},"required":["source"],"type":"object"}),
+            handler_impl!(source_status),
+        )
+        .on(
+            "health_snapshot",
+            "生成健康快照变更操作",
+            serde_json::json!({"type":"object"}),
+            handler_impl!(health_snapshot),
+        )
+        .on(
+            "health_commit",
+            "提交健康快照游标",
+            serde_json::json!({"type":"object"}),
+            handler_impl!(health_commit),
+        )
+        .on(
+            "shutdown",
+            "释放租约并持久化调度状态",
+            serde_json::json!({"type":"object"}),
+            handler_impl!(shutdown),
+        )
         .into_provider()
 }

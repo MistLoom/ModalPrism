@@ -28,3 +28,22 @@ methods:
       properties:
         source: { type: string }
       required: [source]
+  - id: source_status
+    description: 读取信源健康状态
+    input:
+      type: object
+      properties:
+        source: { type: string }
+      required: [source]
+  - id: health_snapshot
+    description: 生成健康快照变更操作
+    input:
+      type: object
+  - id: health_commit
+    description: 提交健康快照游标
+    input:
+      type: object
+  - id: shutdown
+    description: 释放租约并持久化调度状态
+    input:
+      type: object

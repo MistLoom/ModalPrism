@@ -35,8 +35,8 @@ pub fn normalize_rel_path(path: &str) -> ConsoleResult<PathBuf> {
 }
 
 /// 解析为磁盘路径，并确认落在配置目录内（含符号链接解析）。
-pub fn resolve_config_file(state: &ConsoleContext, rel: &Path) -> ConsoleResult<PathBuf> {
-    let config_dir = state.services.config_dir();
+pub async fn resolve_config_file(state: &ConsoleContext, rel: &Path) -> ConsoleResult<PathBuf> {
+    let (_, config_dir) = crate::context::layout(state).await?;
     let joined = config_dir.join(rel);
     let canonical_root = config_dir
         .canonicalize()
@@ -68,11 +68,11 @@ pub fn resolve_config_file(state: &ConsoleContext, rel: &Path) -> ConsoleResult<
     Ok(canonical_file)
 }
 
-pub fn list_whitelist_files(state: &ConsoleContext) -> ConsoleResult<Vec<String>> {
-    let root = state.services.config_dir();
+pub async fn list_whitelist_files(state: &ConsoleContext) -> ConsoleResult<Vec<String>> {
+    let (_, root) = crate::context::layout(state).await?;
     let mut paths = Vec::new();
     for dir in ALLOWED_ROOTS {
-        collect_yaml(root, Path::new(dir), &mut paths)?;
+        collect_yaml(&root, Path::new(dir), &mut paths)?;
     }
     paths.sort();
     paths.dedup();
