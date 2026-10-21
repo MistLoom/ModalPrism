@@ -196,9 +196,9 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
         ),
         (
             "committer",
-            committer::provider(Arc::clone(&services)),
+            ability_committer::provider(),
             false,
-            None,
+            Some(strata_config.clone()),
         ),
         (
             "planner",

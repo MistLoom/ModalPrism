@@ -3,6 +3,24 @@
 version = 4
 
 [[package]]
+name = "ability-committer"
+version = "0.1.0"
+dependencies = [
+ "ability-core",
+ "ability-sdk-codegen",
+ "ability-strata-read",
+ "ability-support",
+ "async-trait",
+ "frame-core",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-shared",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ability-config"
 version = "0.1.0"
 dependencies = [
@@ -1519,15 +1537,6 @@ checksum = "958c5d6ecf1f214b4c2bbbbf6ab9523a864bd136dcf71a7e8904799acfe1ad47"
 dependencies = [
  "unicode-segmentation",
  "unicode-width",
-]
-
-[[package]]
-name = "committer"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "host",
- "serde_json",
 ]
 
 [[package]]
@@ -5705,6 +5714,7 @@ dependencies = [
 name = "modalprism-collector"
 version = "0.1.0"
 dependencies = [
+ "ability-committer",
  "ability-config",
  "ability-core",
  "ability-egress",
@@ -5723,7 +5733,6 @@ dependencies = [
  "accessor_search",
  "async-trait",
  "axum",
- "committer",
  "config",
  "config_inspect",
  "console-api",

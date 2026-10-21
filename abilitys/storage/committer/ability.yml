@@ -1,10 +1,19 @@
 framework_version: "1"
 id: committer
-open: true
+open: false
 protocols: [fun]
 depends: []
 stateful: true
+factory: true
 description: 发布快照并恢复存储
+config_schema:
+  type: object
+  properties:
+    dataDir:
+      type: string
+    system:
+      type: object
+  required: [dataDir]
 methods:
   - id: flush
     description: 发布已接受的变更

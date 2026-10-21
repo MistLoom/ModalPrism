@@ -19,7 +19,7 @@ members = [
     "abilitys/storage/strata-read",
     "abilitys/storage/strata-write",
     "abilitys/storage/strata-queue",
-    "ability/committer",
+    "abilitys/storage/committer",
     "ability/planner",
     "ability/runner",
     "ability/health",
