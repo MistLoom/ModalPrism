@@ -13,12 +13,14 @@ use crate::generated::manifest;
 pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::from_manifest(manifest::manifest()).into_factory(|config| async move {
         let bind = BindConfig::parse(&config)?;
-        let store = ConfigStore::open(&bind.config_dir, bind.load_options())
+        let load_options = bind.load_options();
+        let config_dir = bind.config_dir.clone();
+        let store = ConfigStore::open(&bind.config_dir, load_options.clone())
             .map_err(|e| Error::failed(e.to_string()))?;
         Ok(Arc::new(InspectAbility {
             manifest: manifest::manifest(),
-            config_dir: bind.config_dir,
-            load_options: bind.load_options(),
+            config_dir,
+            load_options,
             store: Arc::new(store),
         }) as Arc<dyn Ability>)
     })
