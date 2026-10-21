@@ -4,7 +4,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use host::Binds;
+use collector_runtime::Binds;
 use modalprism_collector::boot;
 
 #[tokio::main]
@@ -15,7 +15,7 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), host::Error> {
+async fn run() -> Result<(), collector_runtime::Error> {
     let mut data = PathBuf::from("var");
     let mut config = PathBuf::from("config");
     let mut http: SocketAddr = "127.0.0.1:17880".parse().expect("http");
@@ -24,7 +24,7 @@ async fn run() -> Result<(), host::Error> {
     let mut args = env::args().skip(1);
     while let Some(flag) = args.next() {
         let Some(value) = args.next() else {
-            return Err(host::Error::new(format!("缺少参数值: {flag}")));
+            return Err(collector_runtime::Error::new(format!("缺少参数值: {flag}")));
         };
         match flag.as_str() {
             "--data" => data = PathBuf::from(value),
@@ -32,13 +32,13 @@ async fn run() -> Result<(), host::Error> {
             "--http" => http = parse_addr(&value)?,
             "--proxy" => proxy = parse_addr(&value)?,
             "--push" => push = parse_addr(&value)?,
-            _ => return Err(host::Error::new(format!("未知参数: {flag}"))),
+            _ => return Err(collector_runtime::Error::new(format!("未知参数: {flag}"))),
         }
     }
     let running = boot(&data, &config, Binds { http, proxy, push }).await?;
     tokio::select! {
         result = tokio::signal::ctrl_c() => {
-            result.map_err(|source| host::Error::with_source("信号", source))?;
+            result.map_err(|source| collector_runtime::Error::with_source("信号", source))?;
         }
         result = wait_term() => {
             result?;
@@ -47,18 +47,18 @@ async fn run() -> Result<(), host::Error> {
     running.shutdown().await
 }
 
-fn parse_addr(value: &str) -> Result<SocketAddr, host::Error> {
+fn parse_addr(value: &str) -> Result<SocketAddr, collector_runtime::Error> {
     value
         .parse()
-        .map_err(|_| host::Error::new(format!("监听地址无效: {value}")))
+        .map_err(|_| collector_runtime::Error::new(format!("监听地址无效: {value}")))
 }
 
-async fn wait_term() -> Result<(), host::Error> {
+async fn wait_term() -> Result<(), collector_runtime::Error> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
         let mut term = signal(SignalKind::terminate())
-            .map_err(|source| host::Error::with_source("信号", source))?;
+            .map_err(|source| collector_runtime::Error::with_source("信号", source))?;
         term.recv().await;
         Ok(())
     }

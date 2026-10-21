@@ -26,6 +26,7 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::try_new(ABILITY_ID).expect("id")
         .depends_id("config")
         .depends_id("strata_queue")
+        .depends_id("control_state")
         .on(
             "tick",
             "派出到期任务",

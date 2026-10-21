@@ -3,7 +3,6 @@ pub mod active;
 pub mod apply;
 pub mod enqueue;
 pub mod extend;
-pub mod hot;
 pub mod lease;
 pub mod lease_follows;
 pub mod lease_id;

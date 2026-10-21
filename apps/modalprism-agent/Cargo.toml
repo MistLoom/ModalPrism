@@ -15,8 +15,8 @@ frame-core.workspace = true
 frame-port-mcp.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-type_article = { path = "../../ability/type_article" }
-type_hotlist = { path = "../../ability/type_hotlist" }
+type_article = { path = "../../abilitys/project/type-article" }
+type_hotlist = { path = "../../abilitys/project/type-hotlist" }
 types = { path = "../../crates/types" }
 
 [dev-dependencies]

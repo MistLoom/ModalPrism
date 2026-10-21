@@ -36,6 +36,12 @@ pub async fn run(
         .call_governed(
             &policy,
             accessors::PaidCall {
+                service: args
+                    .params
+                    .get("service")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 endpoint: args.endpoint,
                 headers: args.headers,
                 body: bytes::Bytes::from(body),

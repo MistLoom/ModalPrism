@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use ability_support::{InstanceId, MethodId};
-use host::Binds;
+use collector_runtime::Binds;
 use config::builtin_presets;
 use frame_core::{Gateway, InvokeRequest};
 use modalprism_collector::{apply_hotlist, boot};
@@ -55,16 +55,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
     assert!(data.path().join("lance").is_dir());
     assert!(data.path().join("staging").is_dir());
 
-    let response = running
-        .host()
-        .invoke(InvokeRequest::new(
-            InstanceId::new("config").unwrap(),
-            MethodId::new("generation").unwrap(),
-            json!({}),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.data["generation"], 1);
+    assert_eq!(running.services().config().snapshot().generation, 1);
 
     let mut stream = TcpStream::connect(running.http()).await.unwrap();
     stream

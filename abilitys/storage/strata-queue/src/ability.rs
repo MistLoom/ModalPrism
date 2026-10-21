@@ -54,8 +54,6 @@ impl Ability for StrataQueueAbility {
             "apply" => crate::logic::apply::run(&self.strata, &args).await,
             "accepted_cursor" => crate::logic::accepted_cursor::run(&self.strata, &args).await,
             "visible_cursor" => crate::logic::visible_cursor::run(&self.strata, &args).await,
-            "hot_load" => crate::logic::hot::load(&self.strata, &args).await,
-            "hot_store" => crate::logic::hot::store(&self.strata, &args).await,
             _ => Err(Error::unavailable("方法不存在")),
         }
     }

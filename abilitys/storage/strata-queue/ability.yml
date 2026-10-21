@@ -70,11 +70,3 @@ methods:
     description: 可见游标
     input:
       type: object
-  - id: hot_load
-    description: 读取控制热数据
-    input:
-      type: object
-  - id: hot_store
-    description: 写入控制热数据
-    input:
-      type: object

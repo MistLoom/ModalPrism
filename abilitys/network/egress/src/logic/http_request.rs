@@ -12,6 +12,7 @@ use crate::ability::EgressGw;
 
 pub async fn run(gateway: &Arc<EgressGw>, policy: Policy, args: &Value) -> Result<Value> {
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct Args {
         method: String,
         url: String,

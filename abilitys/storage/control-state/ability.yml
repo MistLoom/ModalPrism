@@ -1,0 +1,46 @@
+framework_version: "1"
+id: control_state
+open: false
+protocols: [fun]
+depends: []
+stateful: true
+factory: true
+description: 控制面热数据读写（按拥有者分区，不进入可见快照）
+config_schema:
+  type: object
+  properties:
+    dataDir:
+      type: string
+    system:
+      type: object
+  required: [dataDir]
+methods:
+  - id: load
+    description: 读取拥有者的控制状态条目
+    input:
+      type: object
+      properties:
+        owner:
+          type: string
+          description: 拥有该状态的 Ability 逻辑名（如 planner、egress）
+        key:
+          type: string
+          description: 条目键，调度状态固定为 state
+      required: [owner, key]
+    output:
+      type: object
+      properties:
+        value: {}
+  - id: store
+    description: 写入拥有者的控制状态条目
+    input:
+      type: object
+      properties:
+        owner:
+          type: string
+        key:
+          type: string
+        value: {}
+      required: [owner, key, value]
+    output:
+      type: object

@@ -8,16 +8,18 @@ description = "ModalPrism Web 控制台 HTTP API"
 publish = false
 
 [dependencies]
-host = { path = "../host" }
+collector-boot = { path = "../collector-boot" }
 axum = { version = "0.8", features = ["json"] }
 console = { path = "../console" }
+frame-core.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 
 [dev-dependencies]
-host = { path = "../host" }
+collector-boot = { path = "../collector-boot" }
+collector-runtime = { path = "../collector-runtime" }
 axum = "0.8"
 config = { path = "../config" }
 tempfile.workspace = true
