@@ -121,10 +121,14 @@ version = "0.1.0"
 dependencies = [
  "ability-collector-planner",
  "ability-config",
+ "ability-control-state",
  "ability-core",
+ "ability-egress",
  "ability-paid-gateway",
  "ability-sdk-codegen",
  "ability-strata-queue",
+ "ability-strata-read",
+ "ability-strata-write",
  "ability-support",
  "accessors",
  "async-trait",
@@ -150,6 +154,7 @@ dependencies = [
 name = "ability-committer"
 version = "0.1.0"
 dependencies = [
+ "ability-config",
  "ability-core",
  "ability-sdk-codegen",
  "ability-strata-read",
@@ -1685,6 +1690,43 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-model",
+]
+
+[[package]]
+name = "collector-assembly"
+version = "0.1.0"
+dependencies = [
+ "ability-accessor-api",
+ "ability-accessor-browser",
+ "ability-accessor-file",
+ "ability-accessor-http",
+ "ability-accessor-paid-api",
+ "ability-accessor-push",
+ "ability-accessor-rss",
+ "ability-accessor-search",
+ "ability-collector-planner",
+ "ability-collector-runner",
+ "ability-committer",
+ "ability-config",
+ "ability-config-inspect",
+ "ability-control-state",
+ "ability-core",
+ "ability-egress",
+ "ability-health",
+ "ability-paid-gateway",
+ "ability-push-ingress",
+ "ability-strata-queue",
+ "ability-strata-read",
+ "ability-strata-write",
+ "ability-support",
+ "async-trait",
+ "collector-runtime",
+ "config",
+ "frame-core",
+ "serde_json",
+ "tokio",
+ "type_article",
+ "type_hotlist",
 ]
 
 [[package]]
@@ -5895,14 +5937,14 @@ dependencies = [
  "ability-core",
  "ability-support",
  "async-trait",
+ "collector-assembly",
+ "collector-runtime",
  "config",
  "frame-core",
  "frame-port-mcp",
  "serde_json",
  "tempfile",
  "tokio",
- "type_article",
- "type_hotlist",
  "types",
 ]
 
@@ -5910,40 +5952,18 @@ dependencies = [
 name = "modalprism-collector"
 version = "0.1.0"
 dependencies = [
- "ability-accessor-api",
- "ability-accessor-browser",
- "ability-accessor-file",
- "ability-accessor-http",
- "ability-accessor-paid-api",
- "ability-accessor-push",
- "ability-accessor-rss",
- "ability-accessor-search",
- "ability-collector-planner",
- "ability-collector-runner",
- "ability-committer",
- "ability-config",
- "ability-config-inspect",
- "ability-control-state",
  "ability-core",
- "ability-egress",
- "ability-health",
- "ability-paid-gateway",
- "ability-push-ingress",
- "ability-strata-queue",
- "ability-strata-read",
- "ability-strata-write",
  "ability-support",
- "async-trait",
  "axum",
- "collector-gateway",
+ "collector-assembly",
  "collector-runtime",
  "config",
  "console-api",
  "frame-core",
  "frame-port-http",
  "mime_guess",
+ "reqwest 0.12.28",
  "rust-embed",
- "serde",
  "serde_json",
  "strata-client",
  "strata-model",
@@ -9592,6 +9612,7 @@ version = "0.1.0"
 dependencies = [
  "ability-support",
  "serde_json",
+ "strata-model",
  "types",
 ]
 
@@ -9601,6 +9622,7 @@ version = "0.1.0"
 dependencies = [
  "ability-support",
  "serde_json",
+ "strata-model",
  "types",
 ]
 

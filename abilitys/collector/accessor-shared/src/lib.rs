@@ -1,3 +1,4 @@
+#![allow(dead_code, non_camel_case_types, unused_imports)]
 //! 内置访问器 validate/access，经 AbilityCtx 调用 egress 与 paid_gateway。
 
 use std::sync::Arc;

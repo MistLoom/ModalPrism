@@ -18,7 +18,7 @@ use strata_model::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -39,7 +39,7 @@ fn config_dir(dir: &Path) {
 
 #[tokio::test]
 async fn one_click_boot_serves_generation_and_releases_leases() {
-    let _guard = BOOT_LOCK.lock().unwrap();
+    let _guard = BOOT_LOCK.lock().await;
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
@@ -105,7 +105,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
             .any(|entry| entry.instance.as_str() == "planner")
     );
     let denied = running
-        .gateway()
+        .http_ops_gateway()
         .invoke(InvokeRequest::new(
             InstanceId::new("strata_write").unwrap(),
             MethodId::new("apply").unwrap(),
@@ -113,6 +113,17 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
         ))
         .await;
     assert!(denied.is_err());
+    for blocked in ["strata_queue", "committer", "runner", "egress"] {
+        let denied = running
+            .http_ops_gateway()
+            .invoke(InvokeRequest::new(
+                InstanceId::new(blocked).unwrap(),
+                MethodId::new("flush").unwrap(),
+                json!({}),
+            ))
+            .await;
+        assert!(denied.is_err(), "{blocked} 应被 HTTP 表面拒绝");
+    }
 
     let task_id = TaskId::new("task-boot").unwrap();
     let task = AccessTask {
@@ -169,7 +180,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
 
 #[tokio::test]
 async fn visible_flush_commits_the_hotlist_changeset() {
-    let _guard = BOOT_LOCK.lock().unwrap();
+    let _guard = BOOT_LOCK.lock().await;
     let data = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());

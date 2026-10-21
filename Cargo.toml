@@ -14,6 +14,7 @@ members = [
     "crates/collector-gateway",
     "crates/collector-ports",
     "crates/collector-runtime",
+    "crates/collector-assembly",
     "abilitys/collector/accessor-shared",
     "apps/modalprism-collector/ability/accessor-api",
     "apps/modalprism-collector/ability/accessor-browser",

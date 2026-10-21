@@ -21,7 +21,7 @@ pub async fn query(
         json!({ "query": query }),
     )
     .await
-    .map_err(|e| ConsoleError::internal(e))?;
+    .map_err(ConsoleError::internal)?;
     let rows = page
         .get("rows")
         .and_then(Value::as_array)
@@ -58,7 +58,7 @@ pub async fn facet_get_at(
                 json!({ "facet": latest.to_string() }),
             )
             .await
-            .map_err(|e| ConsoleError::internal(e))?;
+            .map_err(ConsoleError::internal)?;
             let picked = history
                 .as_array()
                 .into_iter()
@@ -80,7 +80,7 @@ pub async fn facet_get_at(
         json!({ "facet": reference.to_string(), "lazy": true }),
     )
     .await
-    .map_err(|e| ConsoleError::internal(e))?;
+    .map_err(ConsoleError::internal)?;
     if data.is_null() {
         return Ok(None);
     }

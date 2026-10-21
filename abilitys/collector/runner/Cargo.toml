@@ -32,6 +32,10 @@ ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb61
 [dev-dependencies]
 ability-collector-planner = { path = "../planner" }
 ability-config = { path = "../../governance/config" }
+ability-control-state = { path = "../../storage/control-state" }
+ability-egress = { path = "../../network/egress" }
+ability-strata-read = { path = "../../storage/strata-read" }
+ability-strata-write = { path = "../../storage/strata-write" }
 ability-core.workspace = true
 ability-paid-gateway = { path = "../../network/paid-gateway" }
 ability-strata-queue = { path = "../../storage/strata-queue" }

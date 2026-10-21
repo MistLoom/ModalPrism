@@ -24,6 +24,8 @@ ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb61
 
 [dev-dependencies]
 ability-core.workspace = true
+ability-config = { path = "../../governance/config" }
+config = { path = "../../../crates/config" }
 ability-strata-read = { path = "../strata-read" }
 frame-core.workspace = true
 tempfile.workspace = true

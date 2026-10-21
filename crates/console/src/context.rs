@@ -13,7 +13,7 @@ use crate::ConsoleContext;
 pub async fn applied(ctx: &ConsoleContext) -> ConsoleResult<Snapshot> {
     let value = invoke::call(&ctx.gateway, "config.applied", serde_json::json!({}))
         .await
-        .map_err(|e| ConsoleError::internal(e))?;
+        .map_err(ConsoleError::internal)?;
     let generation = value
         .get("generation")
         .and_then(Value::as_u64)
@@ -34,7 +34,7 @@ pub async fn applied(ctx: &ConsoleContext) -> ConsoleResult<Snapshot> {
 pub async fn layout(ctx: &ConsoleContext) -> ConsoleResult<(PathBuf, PathBuf)> {
     let value = invoke::call(&ctx.gateway, "config.layout", serde_json::json!({}))
         .await
-        .map_err(|e| ConsoleError::internal(e))?;
+        .map_err(ConsoleError::internal)?;
     let data = value
         .get("dataDir")
         .and_then(Value::as_str)

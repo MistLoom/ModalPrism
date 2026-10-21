@@ -1049,13 +1049,13 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 | 采集运行时 | Strata、调度、任务执行、健康、配置、出站治理、付费调用治理，以及内置访问器与适配器 | 环回 HTTP 运维入口。目录只含 `strata_read`、`planner`、`health` |
 | 只读查询表面 | Strata 只读能力、健康、配置溯源、抽象类型投影 | MCP stdio。工具名是 `instance.method`。没有 Skill 入口 |
 
-组合根直接构造 `AbilityHost`，对本仓库的 Provider `install` 后再 `load`。不调用 `AppBuilder::bootstrap`，不运行 codegen，不放置 `info.yml`。Host 不设置单一的 `access_gate`。进程内调用直接使用 `AbilityHost`。运维端口的目录过滤在组合根的 Gateway 上完成。
+组合根经 `collector-assembly` 构造 `AbilityHost` 与 `ConsoleGateway` / `HttpOpsGateway` / `McpReadGateway`，对本仓库 Provider `install` 后再 `load`。不调用 `AppBuilder::bootstrap`。对外 HTTP 与 MCP 经 Expose 白名单、`unknown: deny` 与协议门控；控制台写路径只使用 `ConsoleGateway`。
 
 ### 11.4 实现要求
 
 | 事项 | 要求 |
 |---|---|
-| 工程接入方式 | Ability 放在本仓库 `ability/`。组合根在进程内 `install` 再 `load`。`WorkspaceCatalog::discover` 只扫描 LEAF 工作区的 `common/ability` 与 `apps/*/ability`，不承载本仓库的 Ability。LEAF 提交固定为 `ffabb6128ae6e006c6c3cee3a706532501f26219`。领域库不依赖 `frame-core`、`ability-core` 与 port。Ability crate 只依赖 `ability-support`。组合根依赖 `frame-core` 与 `ability-core`。 |
+| 工程接入方式 | 共享 Ability 在 `abilitys/<分类>/<name>/`，应用 Ability 在 `apps/modalprism-collector/ability/<name>/`。组合根在进程内 `install` 再 `load`。`WorkspaceCatalog::discover` 只扫描 LEAF 工作区的 `common/ability` 与 `apps/*/ability`，不承载本仓库的 Ability。LEAF 提交固定为 `ffabb6128ae6e006c6c3cee3a706532501f26219`。领域库不依赖 `frame-core`、`ability-core` 与 port。Ability crate 只依赖 `ability-support`。组合根依赖 `frame-core` 与 `ability-core`。 |
 | 二进制与大数据传递 | Gateway 的 `args` 为 JSON 值。原始部件与大文本以暂存引用传递。引用它的变更集可见之后才删除暂存文件。 |
 | 流式结果 | 访问器在一次调用中返回 `Vec<RawEnvelope>`。同一进程内传递，不经 Gateway 分帧。 |
 | 后台循环 | 调度节拍、任务执行、刷写、健康评估和配置监听由组合根驱动。进程收到中断或 `SIGTERM` 时调用 `Planner::shutdown`，释放租约。 |

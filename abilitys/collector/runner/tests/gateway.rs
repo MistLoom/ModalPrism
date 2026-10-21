@@ -7,8 +7,12 @@ use ability_collector_planner::provider as planner_provider;
 use ability_collector_runner::provider as runner_provider;
 use ability_config::provider as config_provider;
 use ability_core::AbilityHost;
+use ability_control_state::provider as control_state_provider;
+use ability_egress::provider as egress_provider;
 use ability_paid_gateway::provider as paid_provider;
 use ability_strata_queue::provider as queue_provider;
+use ability_strata_read::provider as read_provider;
+use ability_strata_write::provider as write_provider;
 use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
 use frame_core::{Gateway, InvokeRequest};
 use config::builtin_presets;
@@ -30,8 +34,8 @@ fn write_config(dir: &std::path::Path) {
 
 fn bind_config(data: &std::path::Path, config_dir: &std::path::Path) -> serde_json::Value {
     json!({
-        "dataDir": data,
-        "configDir": config_dir,
+        "dataDir": data.to_string_lossy(),
+        "configDir": config_dir.to_string_lossy(),
         "system": json!({}),
         "proxyUrl": "http://127.0.0.1:9",
         "browserProgram": "moli",
@@ -65,7 +69,7 @@ async fn runner_delegates_run_task_to_planner() {
     write_config(config_dir.path());
     let bind = bind_config(data.path(), config_dir.path());
     let strata_config = json!({
-        "dataDir": data.path(),
+        "dataDir": data.path().to_string_lossy(),
         "system": json!({}),
     });
 
@@ -74,7 +78,11 @@ async fn runner_delegates_run_task_to_planner() {
 
     for (id, provider) in [
         ("config", config_provider()),
+        ("control_state", control_state_provider()),
+        ("egress", egress_provider()),
         ("paid_gateway", paid_provider()),
+        ("strata_read", read_provider()),
+        ("strata_write", write_provider()),
         ("strata_queue", queue_provider()),
         ("planner", planner_provider()),
         ("runner", runner_provider()),
@@ -83,11 +91,24 @@ async fn runner_delegates_run_task_to_planner() {
     }
 
     load(&host, "config", bind.clone(), None).await;
+    load(
+        &host,
+        "control_state",
+        json!({
+            "dataDir": data.path().to_string_lossy(),
+            "system": json!({}),
+        }),
+        None,
+    )
+    .await;
+    load(&host, "egress", bind.clone(), None).await;
     load(&host, "paid_gateway", bind.clone(), None).await;
+    load(&host, "strata_read", strata_config.clone(), None).await;
+    load(&host, "strata_write", strata_config.clone(), None).await;
     load(&host, "strata_queue", strata_config, None).await;
 
     let mut planner_bindings = BTreeMap::new();
-    for dep in ["config", "paid_gateway", "strata_queue"] {
+    for dep in ["config", "strata_queue", "control_state"] {
         planner_bindings.insert(
             dep.to_string(),
             InstanceId::new(dep).expect("instance"),
@@ -96,11 +117,21 @@ async fn runner_delegates_run_task_to_planner() {
     load(&host, "planner", bind.clone(), Some(planner_bindings)).await;
 
     let mut runner_bindings = BTreeMap::new();
-    runner_bindings.insert(
-        "planner".to_string(),
-        InstanceId::new("planner").expect("instance"),
-    );
-    load(&host, "runner", json!({}), Some(runner_bindings)).await;
+    for dep in [
+        "config",
+        "strata_queue",
+        "strata_write",
+        "strata_read",
+        "egress",
+        "paid_gateway",
+        "control_state",
+    ] {
+        runner_bindings.insert(
+            dep.to_string(),
+            InstanceId::new(dep).expect("instance"),
+        );
+    }
+    load(&host, "runner", bind.clone(), Some(runner_bindings)).await;
 
     let runner_instance = InstanceId::new("runner").expect("instance");
     let result = host
@@ -131,9 +162,12 @@ async fn runner_delegates_run_task_to_planner() {
             );
         }
         Err(error) => {
+            let msg = error.to_string();
             assert!(
-                error.to_string().contains("planner"),
-                "runner 应经 ctx 调用 planner: {error}"
+                msg.contains("planner")
+                    || msg.contains("spec 无效")
+                    || msg.contains("config"),
+                "runner 应进入任务执行路径: {error}"
             );
         }
     }

@@ -305,7 +305,7 @@ pub async fn governance_egress(
     let historical = q.as_of_snapshot.is_some();
     let egress = invoke::call(&ctx.gateway, "egress.governance_domains", json!({}))
         .await
-        .map_err(|e| ConsoleError::internal(e))?;
+        .map_err(ConsoleError::internal)?;
     let proxy = egress
         .get("proxy")
         .and_then(Value::as_str)
@@ -353,7 +353,7 @@ pub async fn reset_circuit(
         json!({ "host": host }),
     )
     .await
-    .map_err(|e| ConsoleError::internal(e))?;
+    .map_err(ConsoleError::internal)?;
     Ok(json!({ "ok": true, "host": host }))
 }
 

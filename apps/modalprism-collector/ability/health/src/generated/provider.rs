@@ -26,7 +26,7 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
     AbilitySpec::try_new(ABILITY_ID).expect("id")
         .depends_id("config")
         .depends_id("planner")
-        .depends_id("strata_write")
+        .depends_optional("strata_write")
         .on(
             "evaluate",
             "把健康写入存储",

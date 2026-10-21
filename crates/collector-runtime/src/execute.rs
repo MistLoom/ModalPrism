@@ -14,7 +14,7 @@ use adapters::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use config::Snapshot;
-use planner::{Classified, Quality, ReceiptBody, TaskSuccess};
+use planner::{Classified, Quality, TaskSuccess};
 use serde_json::{Map, Value};
 use strata_model::{
     AccessTask, Body, ErrorClass, FacetKind, IdentityKey, LineageInput, Locator, Op, PartRole,
@@ -24,7 +24,7 @@ use strata_model::{
 use collector_gateway::{REQUEST_DEADLINE, EGRESS_POLICY};
 use egress::Policy;
 
-use crate::stage::{DiskStaging, read_part};
+use crate::stage::read_part;
 
 /// 任务抓取所需的非网关环境。
 pub struct FetchEnv {
@@ -79,7 +79,7 @@ pub async fn fetch(
             .and_then(Value::as_str)
             .unwrap_or(task.accessor.as_str())
     };
-    let implementation = env
+    let _implementation = env
         .snapshot
         .modules
         .get(accessor_id)
@@ -90,7 +90,7 @@ pub async fn fetch(
         .get("policy")
         .cloned()
         .unwrap_or_else(|| Value::Object(Map::new()));
-    let accessor_policy = env
+    let _accessor_policy = env
         .snapshot
         .modules
         .get(accessor_id)

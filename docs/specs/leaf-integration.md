@@ -9,7 +9,7 @@
 | 包 | 允许的依赖 | 禁止的依赖 |
 |---|---|---|
 | 领域库（`crates/`） | 本仓库 crate 与第三方库 | `ability-sdk`、`ability-support`、`frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
-| Ability crate（`ability/`） | `ability-support` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
+| Ability crate（`abilitys/`、`apps/<app>/ability/`） | `ability-support` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
 | 组合根（`apps/modalprism-collector`、`apps/modalprism-agent`） | `frame-core`、`ability-core`、`frame-port-http`、`frame-port-mcp` | Ability 的实现逻辑 |
 
 `ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-sdk` 在 LEAF workspace 的 exclude 列表中，Cargo 不能把它当作该仓库的 git 依赖。Ability crate 依赖同一提交的 `ability-support`。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。采集进程的运维 HTTP 端口依赖 `frame-port-http`。只读进程的工具面依赖 `frame-port-mcp`。该提交的 MCP Port 使用标准输入输出，把 Gateway 目录里的实例 id 当作工具名。只读进程交给该端口的目录把每个方法展开成实例 id 为 `instance.method` 的单独条目，因此列出的工具名是 `instance.method`。`AccessKind::Tools` 没有 Port。该提交没有 Skill Port。领域库与 Ability crate 不依赖 `frame-core` 与 `ability-core`。
@@ -120,7 +120,7 @@ LEAF 的范围是能力层运行时，应用主循环由使用方持有。生命
 
 ## Web 控制台（非 LEAF 表面）
 
-`docs/console.md` 描述的 Web UI 与 `/console/api/v1/*` 不属于 LEAF Ability 清单。实现为普通 HTTP 适配层（`console-api` → `console`），在采集进程内持有 `Arc<HostResources>`，通过文档化的 `HostResources::call("ability.method", …)` 调用采集后端，不实现 `AbilityProvider`，也不经 `/v1/abilities` 目录。LEAF 对齐范围仅覆盖 `ability/` 与组合根对 Ability 的 install/load、Gateway 循环与受限 ops 目录。
+`docs/console.md` 描述的 Web UI 与 `/console/api/v1/*` 不属于 LEAF Ability 清单。实现为普通 HTTP 适配层（`console-api` → `console`），在采集进程内持有 `ConsoleGateway`（`Arc<dyn Gateway>`），通过 `instance` + `method` + `args` 调用已加载 Ability，不实现 `AbilityProvider`，也不经对外 `HttpOpsGateway` 目录。LEAF 对齐范围覆盖 `abilitys/`、`apps/modalprism-collector/ability/` 与组合根对 Ability 的 install/load、Gateway 循环与受限 ops 目录。
 
 ## 未决项
 

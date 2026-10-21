@@ -2,7 +2,7 @@
 
 采集进程在环回地址上提供 Web 控制台，用于观察采集状态、浏览已沉积数据、管理出站治理，并在确认后修改 YAML 配置。控制台通过 `/console/api/v1/*` 访问后端，不暴露 `/v1/abilities` 协议。
 
-控制台不是 LEAF Ability：`crates/console` 与 `crates/console-api` 为接入层，在进程内调用 `HostResources::call` 上登记的 `ability.method` 字符串（与 `docs/specs/assembly.md` 方法表一致的部分子集），不直接依赖 Ability crate 实现细节。
+控制台不是 LEAF Ability：`crates/console` 与 `crates/console-api` 为接入层，在进程内经 `ConsoleGateway` 以 `instance` + `method` + `args` 调用已加载 Ability（与 `docs/specs/assembly.md` 一致的方法子集），不直接依赖 Ability 实现 crate。
 
 ## 访问方式
 

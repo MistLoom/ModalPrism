@@ -11,13 +11,14 @@ publish = false
 ability-core.workspace = true
 ability-support.workspace = true
 async-trait.workspace = true
+collector-assembly = { path = "../../crates/collector-assembly" }
+collector-runtime = { path = "../../crates/collector-runtime" }
+config = { path = "../../crates/config" }
 frame-core.workspace = true
 frame-port-mcp.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
-type_article = { path = "../../abilitys/project/type-article" }
-type_hotlist = { path = "../../abilitys/project/type-hotlist" }
 types = { path = "../../crates/types" }
+tokio.workspace = true
 
 [dev-dependencies]
 config = { path = "../../crates/config" }

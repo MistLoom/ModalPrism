@@ -5,7 +5,8 @@ protocols: [fun, http]
 depends:
   - config
   - planner
-  - strata_write
+  - id: strata_write
+    optional: true
 stateful: false
 factory: false
 description: 信源健康评估

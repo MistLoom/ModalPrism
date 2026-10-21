@@ -1,8 +1,11 @@
 use ability_support::{AbilityCtx, Error, MethodId, Result};
 use serde_json::{Value, json};
-use strata_model::{ApplyOpts, ChangeSet, Producer};
+use strata_model::{ChangeSet, Producer};
 
 pub async fn evaluate(ctx: &dyn AbilityCtx, _args: Value) -> Result<Value> {
+    if ctx.dep("strata_write").is_err() {
+        return Err(Error::unavailable("health.evaluate 需要写入路径"));
+    }
     let generation_payload = ctx
         .call("config", &MethodId::new("generation").unwrap(), json!({}))
         .await?;

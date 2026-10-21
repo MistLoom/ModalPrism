@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use egress::{
-    CrawlDelayMode, Exempt, Policy, PrivateNetworks, Resolver, RobotsMode, TcpDial, Transport,
+    CrawlDelayMode, Exempt, Policy, PrivateNetworks, Resolver, RobotsMode, Transport,
     Unreachable,
 };
 use paid::CallPolicy;

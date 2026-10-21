@@ -1,0 +1,44 @@
+[package]
+name = "collector-assembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "采集与只读进程共用的 Ability 装配与 Gateway 表面"
+publish = false
+
+[dependencies]
+ability-core.workspace = true
+ability-support.workspace = true
+async-trait.workspace = true
+collector-runtime = { path = "../collector-runtime" }
+config = { path = "../config" }
+frame-core.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+ability-committer = { path = "../../abilitys/storage/committer" }
+ability-control-state = { path = "../../abilitys/storage/control-state" }
+ability-config = { path = "../../abilitys/governance/config" }
+ability-config-inspect = { path = "../../abilitys/governance/config-inspect" }
+ability-egress = { path = "../../abilitys/network/egress" }
+ability-paid-gateway = { path = "../../abilitys/network/paid-gateway" }
+ability-collector-planner = { path = "../../abilitys/collector/planner" }
+ability-collector-runner = { path = "../../abilitys/collector/runner" }
+ability-strata-queue = { path = "../../abilitys/storage/strata-queue" }
+ability-strata-read = { path = "../../abilitys/storage/strata-read" }
+ability-strata-write = { path = "../../abilitys/storage/strata-write" }
+ability-health = { path = "../../apps/modalprism-collector/ability/health" }
+ability-push-ingress = { path = "../../apps/modalprism-collector/ability/push-ingress" }
+ability-accessor-http = { path = "../../apps/modalprism-collector/ability/accessor-http" }
+ability-accessor-rss = { path = "../../apps/modalprism-collector/ability/accessor-rss" }
+ability-accessor-api = { path = "../../apps/modalprism-collector/ability/accessor-api" }
+ability-accessor-paid-api = { path = "../../apps/modalprism-collector/ability/accessor-paid-api" }
+ability-accessor-search = { path = "../../apps/modalprism-collector/ability/accessor-search" }
+ability-accessor-push = { path = "../../apps/modalprism-collector/ability/accessor-push" }
+ability-accessor-file = { path = "../../apps/modalprism-collector/ability/accessor-file" }
+ability-accessor-browser = { path = "../../apps/modalprism-collector/ability/accessor-browser" }
+type_article = { path = "../../abilitys/project/type-article" }
+type_hotlist = { path = "../../abilitys/project/type-hotlist" }
+
+[lints]
+workspace = true

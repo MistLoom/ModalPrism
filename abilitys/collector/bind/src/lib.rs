@@ -1,3 +1,4 @@
+#![allow(dead_code, non_camel_case_types, unused_imports)]
 //! 采集进程 Ability 工厂共用绑定期配置。
 
 use std::path::PathBuf;
