@@ -21,6 +21,7 @@ impl AbilityAccess {
     pub fn build(
         ctx: Arc<dyn AbilityCtx>,
         egress_policy: Policy,
+        module_policy: Value,
         paid_policy: CallPolicy,
         staging_dir: PathBuf,
     ) -> AccessContext {
@@ -30,6 +31,7 @@ impl AbilityAccess {
             egress: Arc::new(CtxEgress {
                 ctx: egress_ctx,
                 policy: egress_policy,
+                module_policy,
             }),
             paid: Arc::new(CtxPaid {
                 ctx: paid_ctx,
@@ -45,6 +47,7 @@ impl AbilityAccess {
 struct CtxEgress {
     ctx: Arc<dyn AbilityCtx>,
     policy: Policy,
+    module_policy: Value,
 }
 
 #[async_trait]
@@ -61,6 +64,7 @@ impl EgressGateway for CtxEgress {
                     "url": request.url,
                     "headers": request.headers,
                     "body": request.body.to_vec(),
+                    "modulePolicy": self.module_policy,
                 }),
             )
             .await

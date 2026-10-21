@@ -20,6 +20,27 @@ use tokio::task::JoinHandle;
 
 mod console_static;
 
+#[derive(Clone, Copy, Debug)]
+pub struct BootOptions {
+    pub background_loops: bool,
+}
+
+impl Default for BootOptions {
+    fn default() -> Self {
+        Self {
+            background_loops: true,
+        }
+    }
+}
+
+impl BootOptions {
+    pub fn without_background_loops() -> Self {
+        Self {
+            background_loops: false,
+        }
+    }
+}
+
 pub struct Running {
     host: Arc<AbilityHost>,
     gateway: Arc<dyn Gateway>,
@@ -69,7 +90,12 @@ impl Running {
     }
 }
 
-pub async fn boot(data: &Path, config_dir: &Path, binds: Binds) -> Result<Running, Error> {
+pub async fn boot(
+    data: &Path,
+    config_dir: &Path,
+    binds: Binds,
+    options: BootOptions,
+) -> Result<Running, Error> {
     let load_options = LoadOptions::from_process();
     let snapshot = config::validate(config_dir, &load_options)?;
     refuse_remote(&snapshot, data)?;
@@ -115,12 +141,12 @@ pub async fn boot(data: &Path, config_dir: &Path, binds: Binds) -> Result<Runnin
     });
     wait_http(http).await?;
 
-    let tasks = vec![
-        http_task,
-        spawn_planner_loop(Arc::clone(&host), Arc::clone(&stop)),
-        spawn_flush_loop(Arc::clone(&host), Arc::clone(&stop)),
-        spawn_health_loop(Arc::clone(&host), Arc::clone(&stop)),
-    ];
+    let mut tasks = vec![http_task];
+    if options.background_loops {
+        tasks.push(spawn_planner_loop(Arc::clone(&host), Arc::clone(&stop)));
+        tasks.push(spawn_flush_loop(Arc::clone(&host), Arc::clone(&stop)));
+        tasks.push(spawn_health_loop(Arc::clone(&host), Arc::clone(&stop)));
+    }
 
     Ok(Running {
         host,
@@ -168,16 +194,24 @@ fn spawn_planner_loop(host: Arc<AbilityHost>, stop: Arc<AtomicBool>) -> JoinHand
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            let Ok(value) = invoke_host(&host, "planner", "tick", json!({})).await else {
+            let tick = invoke_host(&host, "planner", "tick", json!({})).await;
+            let Ok(value) = tick else {
+                eprintln!(
+                    "planner.tick 失败: {}",
+                    tick.err().map(|e| e.to_string()).unwrap_or_default()
+                );
                 continue;
             };
             let Some(tasks) = value.as_array() else {
                 continue;
             };
             for task in tasks {
-                let Ok(value) =
-                    invoke_host(&host, "runner", "run_task", json!({ "task": task })).await
-                else {
+                let run = invoke_host(&host, "runner", "run_task", json!({ "task": task })).await;
+                let Ok(value) = run else {
+                    eprintln!(
+                        "runner.run_task 失败: {}",
+                        run.err().map(|e| e.to_string()).unwrap_or_default()
+                    );
                     continue;
                 };
                 let Some(follows) = value.get("follows").and_then(Value::as_array) else {

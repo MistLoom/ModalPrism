@@ -26,6 +26,7 @@ tokio = { workspace = true, features = ["signal"] }
 types = { path = "../../crates/types" }
 
 [dev-dependencies]
+ability-core.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 strata-client = { path = "../../crates/strata-client" }
 strata-model = { path = "../../crates/strata-model" }

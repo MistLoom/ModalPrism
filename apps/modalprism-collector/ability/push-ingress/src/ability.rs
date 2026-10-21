@@ -55,6 +55,7 @@ impl PushCommit for CtxPush {
         AbilityAccess::build(
             Arc::clone(&self.ctx),
             policy,
+            config::overlay_system_policy(&self.bind.system, &Value::Null),
             paid,
             self.bind.data_dir.join("staging"),
         )

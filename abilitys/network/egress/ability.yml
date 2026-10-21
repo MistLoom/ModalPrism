@@ -38,3 +38,21 @@ methods:
         host: { type: string }
         confirm: { type: boolean }
       required: [host]
+  - id: http_request
+    description: 经出站网关执行 HTTP 请求（进程内访问器专用）
+    input:
+      type: object
+      properties:
+        method: { type: string }
+        url: { type: string }
+        headers:
+          type: array
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: string }
+        body: {}
+        modulePolicy:
+          type: object
+      required: [method, url, headers, body]

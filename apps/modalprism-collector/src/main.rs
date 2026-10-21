@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use collector_runtime::Binds;
-use modalprism_collector::boot;
+use modalprism_collector::{boot, BootOptions};
 
 #[tokio::main]
 async fn main() {
@@ -35,7 +35,17 @@ async fn run() -> Result<(), collector_runtime::Error> {
             _ => return Err(collector_runtime::Error::new(format!("未知参数: {flag}"))),
         }
     }
-    let running = boot(&data, &config, Binds { http, proxy, push }).await?;
+    let running = boot(
+        &data,
+        &config,
+        Binds {
+            http,
+            proxy,
+            push,
+        },
+        BootOptions::default(),
+    )
+    .await?;
     tokio::select! {
         result = tokio::signal::ctrl_c() => {
             result.map_err(|source| collector_runtime::Error::with_source("信号", source))?;

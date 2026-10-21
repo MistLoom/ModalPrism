@@ -81,6 +81,7 @@ pub async fn access(
     let access = ability_collector_runner::access::AbilityAccess::build(
         ctx.retain(),
         egress_policy,
+        policy_value,
         paid_policy,
         bind.data_dir.join("staging"),
     );

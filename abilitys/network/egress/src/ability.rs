@@ -128,7 +128,13 @@ impl Ability for EgressAbility {
                 crate::logic::governance::reset_circuit(&self.gateway, &host).await
             }
             "http_request" => {
-                crate::logic::http_request::run(&self.gateway, self.opening.clone(), &args).await
+                crate::logic::http_request::run(
+                    &self.gateway,
+                    &self.system,
+                    self.opening.clone(),
+                    &args,
+                )
+                .await
             }
             _ => Err(Error::unavailable("方法不存在")),
         }
