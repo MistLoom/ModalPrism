@@ -8,7 +8,7 @@ depends:
   - paid_gateway
   - strata_write
 stateful: true
-factory: false
+factory: true
 description: Push 入站 HTTP 监听
 config_schema:
   type: object
@@ -21,13 +21,5 @@ config_schema:
 methods:
   - id: status
     description: 监听状态
-    input:
-      type: object
-  - id: start_listener
-    description: 绑定 Push 监听（原 Lifecycle::Started）
-    input:
-      type: object
-  - id: stop_listener
-    description: 停止 Push 监听
     input:
       type: object

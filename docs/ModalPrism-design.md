@@ -1033,7 +1033,7 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 | ModalPrism 元素 | LEAF 表达 | 依据 |
 |---|---|---|
 | ModalPrism 的模块（Strata 读、Strata 写、任务队列、调度、任务执行、健康、配置、出站治理、付费调用治理、各访问器、各适配器、识别器、抽象类型） | 各自实现为 Ability，方法契约在 `ability.yml` 中以 JSON Schema 声明 | Ability 协议无关，由 App 装配 [C1] |
-| 持有连接、进程或缓存的模块（Strata、出站治理、浏览器访问器等） | `factory: true`、`stateful: true`，绑定期参数由 `config_schema` 约束，经 `AbilityExpose` 的 `abilities.<id>.config` 传入 | `common/ability/store` 采用相同组合 [C6] |
+| 持有连接、进程或缓存的模块（Strata、出站治理、浏览器访问器等） | `factory: true`、`stateful: true`，绑定期参数由 `config_schema` 约束，经 `LoadSpec.with_config` 在工厂中构造实例 | LEAF `store` 能力采用相同组合 [C6] |
 | 无状态的模块（多数适配器） | Handler 模式 | [C4] |
 | 同一角色的模块 | 使用相同的方法 id 与输入、输出 schema，例如所有访问器提供相同的访问方法 | 调用方按实例 id 选择实现，`ctx.call` 以实例 id 或 depends 键寻址 [C11] |
 | 配置中的实现标识 | 解析为 Ability 实例 id；动态选择的访问器与适配器经 `ctx.call` 或 Gateway 以实例 id 调用；固定依赖在 `depends` 中声明并使用 typed client | [C4][C11] |
@@ -1049,7 +1049,7 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 | 采集运行时 | Strata、调度、任务执行、健康、配置、出站治理、付费调用治理，以及内置访问器与适配器 | 环回 HTTP 运维入口。目录只含 `strata_read`、`planner`、`health` |
 | 只读查询表面 | Strata 只读能力、健康、配置溯源、抽象类型投影 | MCP stdio。工具名是 `instance.method`。没有 Skill 入口 |
 
-组合根经 `collector-assembly` 构造 `AbilityHost` 与 `ConsoleGateway` / `HttpOpsGateway` / `McpReadGateway`，对本仓库 Provider `install` 后再 `load`。不调用 `AppBuilder::bootstrap`。对外 HTTP 与 MCP 经 Expose 白名单、`unknown: deny` 与协议门控；控制台写路径只使用 `ConsoleGateway`。
+组合根经 `apps/modalprism-assembly` 构造 `AbilityHost` 与 `ConsoleGateway` / `HttpOpsGateway` / `McpReadGateway`，对本仓库 Provider `install` 后再 `load`（有状态能力带绑定期 `config`）。不调用 `AppBuilder::bootstrap`。对外 HTTP 与 MCP 经 Expose 白名单、`unknown: deny` 与协议门控；控制台写路径只使用 `ConsoleGateway`。
 
 ### 11.4 实现要求
 

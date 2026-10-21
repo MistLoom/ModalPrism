@@ -12,7 +12,7 @@
 | Ability crate（`abilitys/`、`apps/<app>/ability/`） | `ability-support` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
 | 组合根（`apps/modalprism-collector`、`apps/modalprism-agent`） | `frame-core`、`ability-core`、`frame-port-http`、`frame-port-mcp` | Ability 的实现逻辑 |
 
-`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-sdk` 在 LEAF workspace 的 exclude 列表中，Cargo 不能把它当作该仓库的 git 依赖。Ability crate 依赖同一提交的 `ability-support`。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。采集进程的运维 HTTP 端口依赖 `frame-port-http`。只读进程的工具面依赖 `frame-port-mcp`。该提交的 MCP Port 使用标准输入输出，把 Gateway 目录里的实例 id 当作工具名。只读进程交给该端口的目录把每个方法展开成实例 id 为 `instance.method` 的单独条目，因此列出的工具名是 `instance.method`。`AccessKind::Tools` 没有 Port。该提交没有 Skill Port。领域库与 Ability crate 不依赖 `frame-core` 与 `ability-core`。
+`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-sdk` 在 LEAF workspace 的 exclude 列表中，Cargo 不能把它当作该仓库的 git 依赖。Ability crate 依赖同一提交的 `ability-support`。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。LEAF 架构要求：领域库与 Ability 实现不得依赖 `frame-core`、port 或 `ability-core`（组合根除外）。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。采集进程的运维 HTTP 端口依赖 `frame-port-http`。只读进程的工具面依赖 `frame-port-mcp`。该提交的 MCP Port 使用标准输入输出，把 Gateway 目录里的实例 id 当作工具名。只读进程交给该端口的目录把每个方法展开成实例 id 为 `instance.method` 的单独条目，因此列出的工具名是 `instance.method`。`AccessKind::Tools` 没有 Port。该提交没有 Skill Port。领域库与 Ability crate 不依赖 `frame-core` 与 `ability-core`。
 
 Ability 实现 `Ability` / `AbilityProvider`，通过 `manifest`、`create`、`invoke`、`on_lifecycle` 接入。跨 Ability 调用只使用对方的 client 契约或 `AbilityCtx::call`。
 

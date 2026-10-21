@@ -4,7 +4,7 @@
 
 ## 组合根
 
-采集进程在 `AbilityHost` 上完成全部 Ability 的 `install` 与 `load`，装配逻辑集中在 `apps/modalprism-assembly`（由 `modalprism-collector` / `modalprism-agent` 的 `boot` 调用）。各 Ability 在 `load` 前通过 `install::prime` 注入绑定期状态；方法分发由 `ability.yml` codegen 生成。进程内持有三个 Gateway 表面：
+采集进程在 `AbilityHost` 上完成全部 Ability 的 `install` 与 `load`，装配逻辑集中在 `apps/modalprism-assembly`（由 `modalprism-collector` / `modalprism-agent` 的 `boot` 调用）。有状态 Ability 声明 `factory: true` 与 `config_schema`，由 `LoadSpec.with_config` 在工厂中构造实例并持有状态；无状态 Ability 由 `ability.yml` codegen 生成 handler 提供者。`committer` 工厂打开 Strata；其余能力经 `AbilityCtx::call` 访问存储与治理面，不在进程级注册表共享句柄。进程内持有三个 Gateway 表面：
 
 | 表面 | 用途 |
 |---|---|

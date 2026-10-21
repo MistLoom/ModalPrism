@@ -28,11 +28,11 @@
 
 ## 阶段 7　装配与一键启动
 
-`abilitys/` 与 `apps/modalprism-collector/ability/` 下的 Ability 与 `apps/modalprism-collector` 组成采集进程。命令是 `modalprism-collector`。空目录启动后得到 `control.db`、`lance/`、`staging/`。再次启动沿用已发布的快照。配置校验失败时不替换当前快照。进程退出时释放任务租约。每次访问按已生效快照组装出站策略和付费策略。运维 HTTP 去掉响应里的 `Access-Control-*` 头。组合根直接依赖 `frame-core` 与 `ability-core` 链接 Ability，并依赖 `frame-port-http` 提供运维 HTTP。端口上没有 TLS 和鉴权协议。监听地址以外的访问控制未规定。链接与循环见 `docs/specs/leaf-integration.md` 和 `docs/specs/assembly.md`。
+`abilitys/` 与 `apps/modalprism-collector/ability/` 下的 Ability，经 `apps/modalprism-assembly` 链接，与 `apps/modalprism-collector` 组成采集进程。命令是 `modalprism-collector`。空目录启动后得到 `control.db`、`lance/`、`staging/`。再次启动沿用已发布的快照。配置校验失败时不替换当前快照。进程退出时释放任务租约。每次访问按已生效快照组装出站策略和付费策略。运维 HTTP 去掉响应里的 `Access-Control-*` 头。组合根直接依赖 `frame-core` 与 `ability-core` 链接 Ability，并依赖 `frame-port-http` 提供运维 HTTP。端口上没有 TLS 和鉴权协议。监听地址以外的访问控制未规定。链接与循环见 `docs/specs/leaf-integration.md` 和 `docs/specs/assembly.md`。
 
 ## 阶段 8　抽象类型与只读表面
 
-`crates/types` 实现 `Article` 与 `HotList`。`project` 只读。超过内联上限的文章正文写入 `readable`。热榜按 `createdAt` 的时间点排序。`on_commit` 读取已生效配置快照，返回变更集或 JSON `null`，类型实现不调用 `apply`。采集进程在快照可见之后调用 `HotList::on_commit`，并把变更集交给 Strata。`abilitys/project/type-article` 与 `abilitys/project/type-hotlist` 把这两个类型挂到 Ability 上。`apps/modalprism-agent` 是只读进程，命令是 `modalprism-agent`。它与采集进程共用 Ability crate，经 `install_read_agent` 只暴露 `strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist`。打开 Strata 时采用配置里的 blob 阈值和暂存 ttl。工具面是 MCP 的标准输入输出，工具名是 `instance.method`，只读方法的 `readOnlyHint` 为 true。`AccessKind::Tools` 没有 Port。该 LEAF 提交没有 Skill Port，进程不放置 `info.yml`，不运行 codegen。规则见 `docs/specs/types.md`。
+`crates/types` 实现 `Article` 与 `HotList`。`project` 只读。超过内联上限的文章正文写入 `readable`。热榜按 `createdAt` 的时间点排序。`on_commit` 读取已生效配置快照，返回变更集或 JSON `null`，类型实现不调用 `apply`。采集进程在快照可见之后调用 `HotList::on_commit`，并把变更集交给 Strata。`abilitys/project/type-article` 与 `abilitys/project/type-hotlist` 把这两个类型挂到 Ability 上。`apps/modalprism-agent` 是只读进程，命令是 `modalprism-agent`。它与采集进程共用 Ability crate，经 `install_read_agent` 只暴露 `strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist`。打开 Strata 时采用配置里的 blob 阈值和暂存 ttl。工具面是 MCP 的标准输入输出，工具名是 `instance.method`，只读方法的 `readOnlyHint` 为 true。`AccessKind::Tools` 没有 Port。该 LEAF 提交没有 Skill Port，只读进程不放置 `info.yml`。Ability crate 在构建时运行 `ability-sdk-codegen`（`factory: true` 仅生成 manifest，工厂与 `invoke` 手写）。规则见 `docs/specs/types.md`。
 
 ## 未闭合
 
