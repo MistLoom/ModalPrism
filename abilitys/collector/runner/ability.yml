@@ -1,0 +1,17 @@
+framework_version: "1"
+id: runner
+open: false
+protocols: [fun]
+depends:
+  - planner
+stateful: false
+factory: false
+description: 执行已租约任务
+methods:
+  - id: run_task
+    description: 执行一个任务
+    input:
+      type: object
+      properties:
+        task: { type: object }
+      required: [task]

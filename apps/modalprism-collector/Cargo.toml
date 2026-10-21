@@ -29,14 +29,14 @@ tower-http = { version = "0.6", features = ["fs"] }
 ability-committer = { path = "../../abilitys/storage/committer" }
 ability-config = { path = "../../abilitys/governance/config" }
 ability-egress = { path = "../../abilitys/network/egress" }
-ability-planner = { path = "../../ability/planner" }
+ability-collector-planner = { path = "../../abilitys/collector/planner" }
+ability-collector-runner = { path = "../../abilitys/collector/runner" }
+ability-paid-gateway = { path = "../../abilitys/network/paid-gateway" }
 config = { path = "../../crates/config" }
 ability-config-inspect = { path = "../../abilitys/governance/config-inspect" }
 frame-core.workspace = true
 frame-port-http.workspace = true
 health = { path = "../../ability/health" }
-paid_gateway = { path = "../../ability/paid_gateway" }
-runner = { path = "../../ability/runner" }
 serde_json.workspace = true
 ability-strata-queue = { path = "../../abilitys/storage/strata-queue" }
 ability-strata-read = { path = "../../abilitys/storage/strata-read" }

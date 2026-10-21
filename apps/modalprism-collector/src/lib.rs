@@ -1,5 +1,6 @@
 //! 采集进程。组合根直接链接 Ability，并持有调度、发布和健康循环。
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -208,14 +209,6 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
             Some(strata_config.clone()),
         ),
         (
-            "planner",
-            ability_planner::provider(Arc::clone(&services)),
-            true,
-            None,
-        ),
-        ("runner", runner::provider(Arc::clone(&services)), false, None),
-        ("health", health::provider(Arc::clone(&services)), true, None),
-        (
             "config",
             ability_config::provider(),
             false,
@@ -235,10 +228,18 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
         ),
         (
             "paid_gateway",
-            paid_gateway::provider(Arc::clone(&services)),
+            ability_paid_gateway::provider(),
             false,
-            None,
+            Some(bind.clone()),
         ),
+        (
+            "planner",
+            ability_collector_planner::provider(),
+            true,
+            Some(bind.clone()),
+        ),
+        ("runner", ability_collector_runner::provider(), false, None),
+        ("health", health::provider(Arc::clone(&services)), true, None),
         (
             "accessor_http",
             accessor_http::provider(Arc::clone(&services)),
@@ -305,6 +306,32 @@ async fn link(services: Arc<HostResources>) -> Result<Arc<AbilityHost>, host::Er
         let spec = match bind_config {
             Some(config) => spec.with_config(config),
             None => spec,
+        };
+        let spec = match id {
+            "planner" => {
+                let mut bindings = BTreeMap::new();
+                for dep in ["config", "paid_gateway", "strata_queue"] {
+                    let key = dep.to_string();
+                    let instance =
+                        InstanceId::new(dep).map_err(|error| host::Error::new(error.to_string()))?;
+                    bindings.insert(key, instance);
+                }
+                LoadSpec {
+                    bindings: Some(bindings),
+                    ..spec
+                }
+            }
+            "runner" => {
+                let mut bindings = BTreeMap::new();
+                let instance = InstanceId::new("planner")
+                    .map_err(|error| host::Error::new(error.to_string()))?;
+                bindings.insert("planner".to_string(), instance);
+                LoadSpec {
+                    bindings: Some(bindings),
+                    ..spec
+                }
+            }
+            _ => spec,
         };
         host.load(spec)
             .await

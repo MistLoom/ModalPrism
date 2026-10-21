@@ -1,0 +1,32 @@
+[package]
+name = "ability-collector-planner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "采集调度"
+publish = false
+build = "build.rs"
+
+[dependencies]
+ability-support.workspace = true
+async-trait.workspace = true
+collector-bind = { path = "../../collector/bind" }
+collector-gateway = { path = "../../../crates/collector-gateway" }
+accessors = { path = "../../../crates/accessors" }
+collector-runtime = { path = "../../../crates/collector-runtime" }
+config = { path = "../../../crates/config" }
+egress = { path = "../../../crates/egress" }
+paid = { path = "../../../crates/paid" }
+planner = { path = "../../../crates/planner" }
+serde.workspace = true
+serde_json.workspace = true
+strata-client = { path = "../../../crates/strata-client" }
+strata-model = { path = "../../../crates/strata-model" }
+strata-shared = { path = "../../storage/strata-shared" }
+
+[build-dependencies]
+ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
+
+[lints]
+workspace = true

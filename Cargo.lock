@@ -3,6 +3,40 @@
 version = 4
 
 [[package]]
+name = "ability-collector-planner"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "accessors",
+ "async-trait",
+ "collector-bind",
+ "collector-gateway",
+ "collector-runtime",
+ "config",
+ "egress",
+ "paid",
+ "planner",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "strata-shared",
+]
+
+[[package]]
+name = "ability-collector-runner"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "strata-shared",
+]
+
+[[package]]
 name = "ability-committer"
 version = "0.1.0"
 dependencies = [
@@ -67,11 +101,27 @@ dependencies = [
  "ability-support",
  "async-trait",
  "collector-bind",
- "collector-runtime",
+ "collector-gateway",
  "egress",
  "serde_json",
  "strata-shared",
  "url",
+]
+
+[[package]]
+name = "ability-paid-gateway"
+version = "0.1.0"
+dependencies = [
+ "ability-sdk-codegen",
+ "ability-support",
+ "async-trait",
+ "collector-bind",
+ "collector-gateway",
+ "egress",
+ "paid",
+ "serde",
+ "serde_json",
+ "strata-shared",
 ]
 
 [[package]]
@@ -1542,6 +1592,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "collector-gateway"
+version = "0.1.0"
+dependencies = [
+ "accessors",
+ "async-trait",
+ "config",
+ "egress",
+ "paid",
+ "reqwest 0.12.28",
+ "serde_json",
+ "strata-model",
+ "strata-shared",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "collector-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1550,11 +1617,10 @@ dependencies = [
  "adapters",
  "async-trait",
  "bytes",
+ "collector-gateway",
  "config",
  "egress",
- "paid",
  "planner",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "strata-client",
@@ -3850,6 +3916,7 @@ dependencies = [
  "adapters",
  "async-trait",
  "bytes",
+ "collector-gateway",
  "collector-runtime",
  "config",
  "egress",
@@ -3860,6 +3927,7 @@ dependencies = [
  "serde_json",
  "strata-client",
  "strata-model",
+ "strata-shared",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -5760,12 +5828,14 @@ dependencies = [
 name = "modalprism-collector"
 version = "0.1.0"
 dependencies = [
+ "ability-collector-planner",
+ "ability-collector-runner",
  "ability-committer",
  "ability-config",
  "ability-config-inspect",
  "ability-core",
  "ability-egress",
- "ability-planner",
+ "ability-paid-gateway",
  "ability-strata-queue",
  "ability-strata-read",
  "ability-strata-write",
@@ -5787,8 +5857,6 @@ dependencies = [
  "health",
  "host",
  "mime_guess",
- "paid_gateway",
- "runner",
  "rust-embed",
  "serde_json",
  "strata-client",
@@ -8798,9 +8866,15 @@ name = "strata-shared"
 version = "0.1.0"
 dependencies = [
  "ability-support",
+ "accessors",
+ "async-trait",
+ "egress",
+ "paid",
+ "planner",
  "serde",
  "serde_json",
  "strata-client",
+ "strata-model",
 ]
 
 [[package]]

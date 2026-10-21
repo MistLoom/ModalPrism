@@ -1,0 +1,51 @@
+framework_version: "1"
+id: planner
+open: false
+protocols: [fun]
+depends:
+  - config
+  - paid_gateway
+  - strata_queue
+stateful: true
+factory: true
+description: 扫描到期信源并租约任务
+config_schema:
+  type: object
+  properties:
+    dataDir:
+      type: string
+    configDir:
+      type: string
+    system:
+      type: object
+    proxyUrl:
+      type: string
+    browserProgram:
+      type: string
+  required: [dataDir, configDir]
+methods:
+  - id: tick
+    description: 派出到期任务
+    input:
+      type: object
+  - id: trigger
+    description: 把信源标成到期并派出
+    input:
+      type: object
+      properties:
+        source: { type: string }
+      required: [source]
+  - id: next
+    description: 读取信源的下一次时间
+    input:
+      type: object
+      properties:
+        source: { type: string }
+      required: [source]
+  - id: run_task
+    description: 执行已租约任务
+    input:
+      type: object
+      properties:
+        task: { type: object }
+      required: [task]

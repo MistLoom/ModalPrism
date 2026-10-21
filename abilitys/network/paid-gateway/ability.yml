@@ -1,0 +1,35 @@
+framework_version: "1"
+id: paid_gateway
+open: false
+protocols: [fun]
+depends: []
+stateful: true
+factory: true
+description: 付费回执网关
+config_schema:
+  type: object
+  properties:
+    dataDir:
+      type: string
+    system:
+      type: object
+  required: [dataDir]
+methods:
+  - id: reserve
+    description: 占位方法，不扣费
+    input:
+      type: object
+  - id: complete
+    description: 确认回执
+    input:
+      type: object
+      properties:
+        receiptId: { type: string }
+      required: [receiptId]
+  - id: status
+    description: 读取回执状态
+    input:
+      type: object
+      properties:
+        receiptId: { type: string }
+      required: [receiptId]
