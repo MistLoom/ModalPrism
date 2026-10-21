@@ -18,5 +18,17 @@ strata-shared = { path = "../../storage/strata-shared" }
 [build-dependencies]
 ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }
 
+[dev-dependencies]
+ability-collector-planner = { path = "../planner" }
+ability-config = { path = "../../governance/config" }
+config = { path = "../../../crates/config" }
+ability-core.workspace = true
+ability-paid-gateway = { path = "../../network/paid-gateway" }
+ability-strata-queue = { path = "../../storage/strata-queue" }
+frame-core.workspace = true
+strata-model = { path = "../../../crates/strata-model" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
 [lints]
 workspace = true
