@@ -4,7 +4,7 @@ open: false
 protocols: [fun]
 depends: []
 stateful: true
-factory: true
+factory: false
 description: 提交变更集
 config_schema:
   type: object

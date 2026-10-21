@@ -4,7 +4,7 @@ open: true
 protocols: [fun, http]
 depends: []
 stateful: true
-factory: true
+factory: false
 description: 读取已发布的资源、facet 和变更
 config_schema:
   type: object

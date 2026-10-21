@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use collector_gateway::{EGRESS_POLICY, HttpTransport, SystemResolver};
-use egress::{Policy, TcpDial};
+use collector_gateway::EGRESS_POLICY;
+use egress::Policy;
 use serde_json::Value;
 use url::Url;
 
@@ -11,7 +11,7 @@ use paid::PaidTransport;
 
 use crate::hot::Hot;
 
-pub type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, TcpDial>;
+pub type EgressGw = ability_egress::runtime::EgressGw;
 pub type PaidGw = paid::Gateway<Hot, PaidBridge>;
 
 pub struct PaidBridge {

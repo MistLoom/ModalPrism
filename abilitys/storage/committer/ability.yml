@@ -5,7 +5,7 @@ protocols: [fun]
 depends:
   - config
 stateful: true
-factory: true
+factory: false
 description: 发布快照并恢复存储
 config_schema:
   type: object

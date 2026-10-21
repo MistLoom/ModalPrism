@@ -1,19 +1,32 @@
-use std::sync::Arc;
-
-use ability_support::Result;
-use collector_gateway::{EGRESS_POLICY, policy_from};
+use ability_support::{AbilityCtx, MethodId, Result};
+use bytes::Bytes;
+use collector_gateway::{EGRESS_POLICY, policy_from, policy_of};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use strata_shared::{failed, parse};
+use strata_shared::failed;
 
-use egress::Policy;
+use crate::runtime;
 
-use crate::ability::EgressGw;
+pub async fn http_request(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
+    let runtime = runtime::get()?;
+    let applied = ctx
+        .call(
+            "config",
+            &MethodId::new("applied").expect("method id"),
+            json!({}),
+        )
+        .await?;
+    let system = applied
+        .get("system")
+        .cloned()
+        .unwrap_or_else(|| runtime.system().clone());
+    run(&runtime.gateway(), &system, policy_of(&system), &args).await
+}
 
 pub async fn run(
-    gateway: &Arc<EgressGw>,
+    gateway: &crate::runtime::EgressGw,
     system: &Value,
-    default_policy: Policy,
+    default_policy: egress::Policy,
     args: &Value,
 ) -> Result<Value> {
     #[derive(Deserialize)]
@@ -26,7 +39,7 @@ pub async fn run(
         #[serde(default)]
         module_policy: Option<Value>,
     }
-    let args: Args = parse(args)?;
+    let args: Args = strata_shared::parse(args)?;
     let policy = args
         .module_policy
         .as_ref()

@@ -87,6 +87,7 @@ impl Running {
         for task in &self.tasks {
             task.abort();
         }
+        let _ = invoke_host(&self.host, "push_ingress", "stop_listener", json!({})).await;
         let _ = invoke_host(&self.host, "planner", "shutdown", json!({})).await;
         Ok(())
     }
@@ -127,6 +128,7 @@ pub async fn boot(
     });
 
     let host = install_collector(bind, strata_config).await?;
+    let _ = invoke_host(&host, "push_ingress", "start_listener", json!({})).await;
     let gateway = ConsoleGateway::new(Arc::clone(&host), console_expose());
     let stop = Arc::new(AtomicBool::new(false));
 

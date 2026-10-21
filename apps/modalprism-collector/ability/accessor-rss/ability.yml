@@ -7,7 +7,7 @@ depends:
   - paid_gateway
   - config
 stateful: true
-factory: true
+factory: false
 description: 内置访问器 rss
 config_schema:
   type: object

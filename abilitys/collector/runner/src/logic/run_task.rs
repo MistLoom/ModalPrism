@@ -22,11 +22,8 @@ use strata_shared::parse;
 use crate::access::AbilityAccess;
 use crate::env::RunnerEnv;
 
-pub async fn run_task(
-    ctx: &dyn AbilityCtx,
-    env: &Arc<crate::env::RunnerEnv>,
-    args: Value,
-) -> Result<Value> {
+pub async fn run_task(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
+    let env = crate::runtime::env()?;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {
@@ -64,7 +61,7 @@ pub async fn run_task(
     );
     let handler = TaskHandler {
         ctx: ctx.clone(),
-        env: Arc::clone(env),
+        env: Arc::clone(&env),
         snapshot,
         timeout: plan.timeout,
     };

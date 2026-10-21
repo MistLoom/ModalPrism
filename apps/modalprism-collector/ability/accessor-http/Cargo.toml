@@ -14,6 +14,7 @@ async-trait.workspace = true
 collector-accessor-shared = { path = "../../../../abilitys/collector/accessor-shared" }
 collector-bind = { path = "../../../../abilitys/collector/bind" }
 serde_json.workspace = true
+serde.workspace = true
 
 [build-dependencies]
 ability-sdk-codegen = { git = "https://github.com/MistLoom/LEAF", rev = "ffabb6128ae6e006c6c3cee3a706532501f26219" }

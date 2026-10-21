@@ -1,9 +1,10 @@
 framework_version: "1"
 id: type_article
 open: true
-protocols: [fun, mcp, tools]
+protocols: [fun]
 depends: []
 stateful: false
+factory: false
 description: 文章投影
 methods:
   - id: project

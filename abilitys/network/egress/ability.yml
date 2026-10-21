@@ -5,7 +5,7 @@ protocols: [fun]
 depends:
   - config
 stateful: true
-factory: true
+factory: false
 description: 出站策略与连通性检查
 config_schema:
   type: object

@@ -5,7 +5,7 @@ protocols: [fun]
 depends:
   - config
 stateful: true
-factory: true
+factory: false
 description: 热榜快照投影与变更集
 config_schema:
   type: object

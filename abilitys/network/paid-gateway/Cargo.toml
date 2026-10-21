@@ -10,6 +10,7 @@ build = "build.rs"
 
 [dependencies]
 accessors = { path = "../../../crates/accessors" }
+ability-egress = { path = "../egress" }
 ability-support.workspace = true
 bytes.workspace = true
 strata-model = { path = "../../../crates/strata-model" }

@@ -4,7 +4,7 @@ open: false
 protocols: [fun]
 depends: []
 stateful: true
-factory: true
+factory: false
 description: 控制库任务队列
 config_schema:
   type: object

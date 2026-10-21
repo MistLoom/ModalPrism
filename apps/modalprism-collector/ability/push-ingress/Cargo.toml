@@ -21,6 +21,7 @@ config = { path = "../../../../crates/config" }
 strata-model = { path = "../../../../crates/strata-model" }
 accessors = { path = "../../../../crates/accessors" }
 serde_json.workspace = true
+serde.workspace = true
 tokio.workspace = true
 
 [build-dependencies]

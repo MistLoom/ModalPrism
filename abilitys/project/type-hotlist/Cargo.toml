@@ -13,6 +13,7 @@ ability-support.workspace = true
 async-trait.workspace = true
 config = { path = "../../../crates/config" }
 serde_json.workspace = true
+serde.workspace = true
 strata-client = { path = "../../../crates/strata-client" }
 strata-model = { path = "../../../crates/strata-model" }
 strata-shared = { path = "../../storage/strata-shared" }

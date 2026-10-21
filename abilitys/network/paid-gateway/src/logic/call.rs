@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ability_support::Result;
+use ability_support::{AbilityCtx, MethodId, Result};
 use collector_gateway::{call_policy_from, EGRESS_POLICY};
 use paid::CallPolicy;
 use serde::Deserialize;
@@ -8,6 +8,22 @@ use serde_json::{Value, json};
 use strata_shared::{failed, parse};
 
 use crate::bridge::PaidGw;
+
+pub async fn call(ctx: &dyn AbilityCtx, args: Value) -> Result<Value> {
+    let runtime = crate::runtime::get()?;
+    let applied = ctx
+        .call(
+            "config",
+            &MethodId::new("applied").expect("method id"),
+            serde_json::json!({}),
+        )
+        .await?;
+    let system = applied
+        .get("system")
+        .cloned()
+        .unwrap_or_else(|| runtime.system().clone());
+    run(&runtime.gateway(), &system, &args).await
+}
 
 pub async fn run(
     gateway: &Arc<PaidGw>,

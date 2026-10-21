@@ -4,8 +4,9 @@ open: false
 protocols: [fun]
 depends:
   - config
+  - egress
 stateful: true
-factory: true
+factory: false
 description: 付费回执网关
 config_schema:
   type: object

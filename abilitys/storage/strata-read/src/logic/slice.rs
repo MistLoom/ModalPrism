@@ -29,3 +29,9 @@ pub async fn run(strata: &Arc<Strata>, args: &Value) -> Result<Value> {
     let text = String::from_utf8(bytes.to_vec()).map_err(|_| failed("gateway"))?;
     Ok(Value::String(text))
 }
+
+pub async fn slice(ctx: &dyn ability_support::AbilityCtx, args: serde_json::Value) -> ability_support::Result<serde_json::Value> {
+    let _ = ctx;
+    let args = strata_shared::normalize_args(args)?;
+    run(&crate::runtime::strata()?, &args).await
+}

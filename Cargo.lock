@@ -11,6 +11,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -23,6 +24,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -35,6 +37,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -47,6 +50,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -59,6 +63,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -71,6 +76,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -83,6 +89,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -95,6 +102,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -107,6 +115,7 @@ dependencies = [
  "async-trait",
  "collector-accessor-shared",
  "collector-bind",
+ "serde",
  "serde_json",
 ]
 
@@ -196,6 +205,7 @@ dependencies = [
  "async-trait",
  "collector-bind",
  "config",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -209,6 +219,7 @@ dependencies = [
  "async-trait",
  "collector-bind",
  "config",
+ "serde",
  "serde_json",
 ]
 
@@ -277,6 +288,7 @@ dependencies = [
 name = "ability-paid-gateway"
 version = "0.1.0"
 dependencies = [
+ "ability-egress",
  "ability-sdk-codegen",
  "ability-support",
  "accessors",
@@ -309,6 +321,7 @@ dependencies = [
  "collector-ports",
  "collector-runtime",
  "config",
+ "serde",
  "serde_json",
  "strata-model",
  "tokio",
@@ -9627,7 +9640,10 @@ dependencies = [
 name = "type_article"
 version = "0.1.0"
 dependencies = [
+ "ability-sdk-codegen",
  "ability-support",
+ "async-trait",
+ "serde",
  "serde_json",
  "strata-model",
  "types",
@@ -9641,6 +9657,7 @@ dependencies = [
  "ability-support",
  "async-trait",
  "config",
+ "serde",
  "serde_json",
  "strata-client",
  "strata-model",
