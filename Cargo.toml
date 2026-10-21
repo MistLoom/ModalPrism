@@ -11,6 +11,7 @@ members = [
     "crates/paid",
     "crates/planner",
     "crates/accessors-builtin",
+    "crates/collector-runtime",
     "crates/host",
     "crates/console",
     "crates/console-api",

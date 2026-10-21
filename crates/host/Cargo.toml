@@ -8,6 +8,7 @@ description = "组合根运行时资源（存储、配置、调度）"
 publish = false
 
 [dependencies]
+collector-runtime = { path = "../collector-runtime" }
 ability-support.workspace = true
 accessors = { path = "../accessors" }
 accessors-builtin = { path = "../accessors-builtin" }

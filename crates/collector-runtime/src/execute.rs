@@ -34,7 +34,7 @@ pub struct FetchState {
     pub timeout: std::time::Duration,
 }
 
-pub(crate) struct NoSession;
+pub struct NoSession;
 
 #[async_trait]
 impl SessionPool for NoSession {
@@ -43,13 +43,13 @@ impl SessionPool for NoSession {
     }
 }
 
-pub(crate) struct FollowWork {
+pub struct FollowWork {
     pub task: AccessTask,
     pub identity: String,
     pub needs: Vec<String>,
 }
 
-pub(crate) struct Fetched {
+pub struct Fetched {
     pub success: TaskSuccess,
     pub follows: Vec<FollowWork>,
     pub max_fetches: usize,
@@ -207,7 +207,7 @@ fn render_name(level: strata_model::RenderLevel) -> &'static str {
     }
 }
 
-pub(crate) fn open_accessor(
+pub fn open_accessor(
     implementation: &str,
     browser: &std::path::Path,
     proxy: &str,
@@ -226,7 +226,7 @@ pub(crate) fn open_accessor(
     by_id(name).ok_or_else(|| classified(ErrorClass::Config, "implementation"))
 }
 
-pub(crate) async fn inbound_ops(
+pub async fn inbound_ops(
     state: &FetchState,
     source_id: &str,
     module: &Value,

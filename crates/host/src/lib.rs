@@ -2,54 +2,32 @@
 
 pub mod api;
 
-mod error;
-mod execute;
-mod listen;
-mod plans;
-mod queue;
-mod stage;
-mod transport;
+pub use collector_runtime::{
+    self as engine, Binds, Error, invalid_input, refuse_remote, require_loopback, serve_proxy,
+    serve_push, strata_options, PushCommit,
+};
+pub use collector_runtime::plans::{capacities, flush_interval, snapshot_interval};
+pub use collector_runtime::transport::{EgressGw, PaidGw, policy_of};
 
-use std::net::SocketAddr;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use collector_runtime::execute::{self, FetchState, FollowWork};
+use collector_runtime::queue::{Hot, StrataQueue};
+use collector_runtime::stage::DiskStaging;
+use collector_runtime::transport::{HttpTransport, PaidBridge, SystemResolver};
+use collector_runtime::plans;
+use egress::Resolver;
 use config::{ConfigStore, LoadOptions, Snapshot};
-use egress::{Resolver, TcpDial};
+use egress::TcpDial;
 use planner::{Handler, Planner, Receipts};
 use serde_json::{Value, json};
-use strata_client::{Options, Strata};
+use strata_client::Strata;
 use strata_model::{
     ApplyOpts, ChangeSet, FacetKind, FacetRef, Locator, Producer, TaskReason, Timestamp, VersionSel,
 };
-
-pub use error::{Error, invalid_input};
-pub use listen::{serve_proxy, serve_push};
-pub use plans::{capacities, flush_interval, snapshot_interval};
-pub use transport::{EgressGw, policy_of};
-
-use execute::{FetchState, FollowWork, NoSession};
-use queue::{Hot, StrataQueue};
-use stage::DiskStaging;
-use transport::{HttpTransport, PaidBridge, PaidGw, SystemResolver};
-
-/// 三个环回监听地址。
-pub struct Binds {
-    pub http: SocketAddr,
-    pub proxy: SocketAddr,
-    pub push: SocketAddr,
-}
-
-/// 拒绝非环回地址。不创建数据目录。
-pub fn require_loopback(addr: SocketAddr) -> Result<(), Error> {
-    if addr.ip().is_loopback() {
-        Ok(())
-    } else {
-        Err(Error::new("监听地址不是环回地址"))
-    }
-}
 
 pub struct HostResources {
     data_dir: PathBuf,
@@ -93,11 +71,11 @@ impl HostResources {
                 egress: Arc::clone(&egress),
                 fallback: opening,
             },
-            transport::call_policy_from(&snapshot.system, &Value::Null),
+            collector_runtime::transport::call_policy_from(&snapshot.system, &Value::Null),
         ));
         let browser = std::env::var("MODALPRISM_MOLI").unwrap_or_else(|_| "moli".into());
         Ok(Arc::new(Self {
-            data_dir: normalize(data),
+            data_dir: collector_runtime::normalize(data),
             config_dir: config_dir.to_path_buf(),
             load_options,
             config,
@@ -156,11 +134,11 @@ impl HostResources {
         }
     }
 
-    pub(crate) fn access_context(&self) -> accessors::AccessContext {
+    pub fn access_context(&self) -> accessors::AccessContext {
         accessors::AccessContext {
             egress: self.egress.clone(),
             paid: self.paid.clone(),
-            sessions: Arc::new(NoSession),
+            sessions: Arc::new(execute::NoSession),
             staging: Arc::new(DiskStaging {
                 dir: self.data_dir.join("staging"),
             }),
@@ -172,7 +150,7 @@ impl HostResources {
         &self.push
     }
 
-    pub(crate) async fn commit_inbound(
+    pub async fn commit_inbound(
         &self,
         source_id: &str,
         envelopes: &[strata_model::RawEnvelope],
@@ -216,6 +194,29 @@ impl HostResources {
     /// 组合根与控制台接入层使用的统一方法名（`ability.method`）。Ability 实现应调用 `api::invoke`。
     pub async fn call(&self, method: &str, args: Value) -> Result<Value, Error> {
         dispatch_impl(self, method, args).await
+    }
+}
+
+#[async_trait]
+impl PushCommit for HostResources {
+    fn applied_snapshot(&self) -> Arc<Snapshot> {
+        self.config.applied()
+    }
+
+    fn access_context(&self) -> accessors::AccessContext {
+        HostResources::access_context(self)
+    }
+
+    fn push_accessor(&self) -> &accessors_builtin::PushAccessor {
+        self.push()
+    }
+
+    async fn commit_inbound(
+        &self,
+        source_id: &str,
+        envelopes: &[strata_model::RawEnvelope],
+    ) -> Result<(), Error> {
+        HostResources::commit_inbound(self, source_id, envelopes).await
     }
 }
 
@@ -699,7 +700,7 @@ async fn committer_recover(services: &HostResources) -> Result<Value, Error> {
 }
 
 async fn planner_tick(services: &HostResources) -> Result<Value, Error> {
-    let plans = plans::plans_of(&services.config.applied());
+    let plans = collector_runtime::plans::plans_of(&services.config.applied());
     let tasks = services
         .planner
         .tick(&plans, &capacities(), Timestamp::now())
@@ -737,7 +738,7 @@ async fn runner_run(services: &HostResources, args: &Value) -> Result<Value, Err
     }
     let args: Args = parse(args)?;
     let snapshot = services.config.applied();
-    let plans = plans::plans_of(&snapshot);
+    let plans = collector_runtime::plans::plans_of(&snapshot);
     let Some(mut plan) = plans
         .into_iter()
         .find(|plan| plan.source_id == args.task.source_id)
@@ -961,113 +962,4 @@ async fn accessor_access(
         .await
         .map_err(|error| Error::new(error.message))?;
     serde_json::to_value(envelopes).map_err(|source| Error::with_source("spec 无效", source))
-}
-
-fn strata_options(system: &Value) -> Options {
-    let mut options = Options::default();
-    if let Some(size) = system
-        .pointer("/strata/blob/inline_size_threshold")
-        .and_then(Value::as_str)
-        .and_then(parse_size)
-    {
-        options.blob_inline_threshold = size;
-    }
-    if let Some(size) = system
-        .pointer("/strata/blob/dedicated_size_threshold")
-        .and_then(Value::as_str)
-        .and_then(parse_size)
-    {
-        options.blob_dedicated_threshold = size;
-    }
-    if let Some(ttl) = system
-        .pointer("/strata/staging/ttl")
-        .and_then(Value::as_str)
-        .and_then(parse_duration)
-    {
-        options.staging_ttl = ttl;
-    }
-    options
-}
-
-fn parse_size(text: &str) -> Option<usize> {
-    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
-    let count: u64 = text[..split].parse().ok()?;
-    let scale = match &text[split..] {
-        "B" => 1,
-        "KiB" => 1024,
-        "MiB" => 1024 * 1024,
-        "GiB" => 1024 * 1024 * 1024,
-        _ => return None,
-    };
-    usize::try_from(count.saturating_mul(scale)).ok()
-}
-
-fn parse_duration(text: &str) -> Option<Duration> {
-    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
-    let count: u64 = text[..split].parse().ok()?;
-    let scale = match &text[split..] {
-        "ms" => 1,
-        "s" => 1_000,
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        _ => return None,
-    };
-    Some(Duration::from_millis(count.saturating_mul(scale)))
-}
-
-fn refuse_remote(snapshot: &Snapshot, data: &Path) -> Result<(), Error> {
-    let system = &snapshot.system;
-    if system
-        .pointer("/strata/lance/uri")
-        .and_then(Value::as_str)
-        .is_some_and(|uri| !uri.is_empty())
-    {
-        return Err(Error::new("存储位置未规定"));
-    }
-    if system
-        .pointer("/strata/control_store/backend")
-        .and_then(Value::as_str)
-        == Some("postgres")
-    {
-        return Err(Error::new("存储位置未规定"));
-    }
-    if let Some(path) = system
-        .pointer("/strata/control_store/path")
-        .and_then(Value::as_str)
-    {
-        if normalize(Path::new(path)) != normalize(&data.join("control.db")) {
-            return Err(Error::new("存储位置未规定"));
-        }
-    }
-    if let Some(path) = system
-        .pointer("/strata/staging/dir")
-        .and_then(Value::as_str)
-    {
-        if normalize(Path::new(path)) != normalize(&data.join("staging")) {
-            return Err(Error::new("存储位置未规定"));
-        }
-    }
-    Ok(())
-}
-
-fn normalize(path: &Path) -> PathBuf {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    };
-    let mut out = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }

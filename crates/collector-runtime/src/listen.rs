@@ -9,8 +9,27 @@ use strata_model::{ErrorClass, Locator, Timestamp};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::HostResources;
+use std::sync::Arc as StdArc;
+
+use accessors::AccessContext;
+use async_trait::async_trait;
+use config::Snapshot;
+
+use crate::error::Error;
 use crate::transport::EgressGw;
+
+/// Push 入站处理面。
+#[async_trait]
+pub trait PushCommit: Send + Sync {
+    fn applied_snapshot(&self) -> StdArc<Snapshot>;
+    fn access_context(&self) -> AccessContext;
+    fn push_accessor(&self) -> &accessors_builtin::PushAccessor;
+    async fn commit_inbound(
+        &self,
+        source_id: &str,
+        envelopes: &[strata_model::RawEnvelope],
+    ) -> Result<(), Error>;
+}
 
 const HEADER_CAP: usize = 16 * 1024;
 const BODY_CAP: usize = 8 * 1024 * 1024;
@@ -22,7 +41,7 @@ where
     egress::serve_each(gateway.as_ref(), listener, policy_of).await;
 }
 
-pub async fn serve_push(services: Arc<HostResources>, listener: TcpListener) {
+pub async fn serve_push(services: Arc<dyn PushCommit>, listener: TcpListener) {
     loop {
         let Ok((socket, _)) = listener.accept().await else {
             continue;
@@ -34,7 +53,7 @@ pub async fn serve_push(services: Arc<HostResources>, listener: TcpListener) {
     }
 }
 
-async fn handle_push(services: Arc<HostResources>, mut socket: TcpStream) -> std::io::Result<()> {
+async fn handle_push(services: Arc<dyn PushCommit>, mut socket: TcpStream) -> std::io::Result<()> {
     let (header, leftover) = match read_headers(&mut socket).await {
         Ok(parts) => parts,
         Err(status) => {
@@ -87,7 +106,7 @@ async fn handle_push(services: Arc<HostResources>, mut socket: TcpStream) -> std
         socket.read_exact(&mut rest).await?;
         body.extend_from_slice(&rest);
     }
-    let snapshot = services.config().applied();
+    let snapshot = services.applied_snapshot();
     let Some((source_id, spec, policy)) = push_source(&snapshot, &channel) else {
         write_response(&mut socket, 404, &json!({"message": "not-found"})).await?;
         return Ok(());
@@ -98,7 +117,7 @@ async fn handle_push(services: Arc<HostResources>, mut socket: TcpStream) -> std
         body: Bytes::from(body),
     };
     match services
-        .push()
+        .push_accessor()
         .ingest(
             &spec,
             &incoming,
