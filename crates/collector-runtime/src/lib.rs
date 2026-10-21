@@ -1,26 +1,20 @@
-//! 采集执行引擎。不含 LEAF Gateway 与 Ability 装配。
+//! 采集纯领域逻辑：计划解析、任务抓取编排、暂存与 push 解析。
 
 pub mod error;
 pub mod execute;
 pub mod listen;
 pub mod plans;
-pub mod queue;
 pub mod stage;
-pub mod transport;
 
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 
-use config::{LoadOptions, Snapshot};
+use config::Snapshot;
 use serde_json::Value;
-use strata_client::Options;
 
 pub use error::{Error, invalid_input};
-pub use listen::{PushCommit, serve_proxy, serve_push};
-pub use plans::{capacities, flush_interval, snapshot_interval};
-pub use transport::{EgressGw, PaidGw, policy_of};
+pub use listen::{PushCommit, serve_push};
 
-/// 三个环回监听地址。
 pub struct Binds {
     pub http: SocketAddr,
     pub proxy: SocketAddr,
@@ -86,56 +80,4 @@ pub fn normalize(path: &Path) -> PathBuf {
         }
     }
     out
-}
-
-pub fn strata_options(system: &Value) -> Options {
-    let mut options = Options::default();
-    if let Some(size) = system
-        .pointer("/strata/blob/inline_size_threshold")
-        .and_then(Value::as_str)
-        .and_then(parse_size)
-    {
-        options.blob_inline_threshold = size;
-    }
-    if let Some(size) = system
-        .pointer("/strata/blob/dedicated_size_threshold")
-        .and_then(Value::as_str)
-        .and_then(parse_size)
-    {
-        options.blob_dedicated_threshold = size;
-    }
-    if let Some(ttl) = system
-        .pointer("/strata/staging/ttl")
-        .and_then(Value::as_str)
-        .and_then(parse_duration)
-    {
-        options.staging_ttl = ttl;
-    }
-    options
-}
-
-fn parse_size(text: &str) -> Option<usize> {
-    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
-    let count: u64 = text[..split].parse().ok()?;
-    let scale = match &text[split..] {
-        "B" => 1,
-        "KiB" => 1024,
-        "MiB" => 1024 * 1024,
-        "GiB" => 1024 * 1024 * 1024,
-        _ => return None,
-    };
-    usize::try_from(count * scale).ok()
-}
-
-fn parse_duration(text: &str) -> Option<std::time::Duration> {
-    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
-    let count: u64 = text[..split].parse().ok()?;
-    let unit = &text[split..];
-    let secs = match unit {
-        "s" => count,
-        "m" => count * 60,
-        "h" => count * 3600,
-        _ => return None,
-    };
-    Some(std::time::Duration::from_secs(secs))
 }

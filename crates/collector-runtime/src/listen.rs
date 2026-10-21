@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use config::Snapshot;
 
 use crate::error::Error;
-use crate::transport::EgressGw;
 
 /// Push 入站处理面。
 #[async_trait]
@@ -33,13 +32,6 @@ pub trait PushCommit: Send + Sync {
 
 const HEADER_CAP: usize = 16 * 1024;
 const BODY_CAP: usize = 8 * 1024 * 1024;
-
-pub async fn serve_proxy<F>(gateway: Arc<EgressGw>, listener: TcpListener, policy_of: F)
-where
-    F: Fn() -> egress::Policy,
-{
-    egress::serve_each(gateway.as_ref(), listener, policy_of).await;
-}
 
 pub async fn serve_push(services: Arc<dyn PushCommit>, listener: TcpListener) {
     loop {

@@ -1,0 +1,24 @@
+[package]
+name = "collector-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "出站网关装配（供 network Ability 使用）"
+publish = false
+
+[dependencies]
+accessors = { path = "../accessors" }
+config = { path = "../config" }
+async-trait.workspace = true
+egress = { path = "../egress" }
+paid = { path = "../paid" }
+reqwest.workspace = true
+serde_json.workspace = true
+strata-shared = { path = "../../abilitys/storage/strata-shared" }
+strata-model = { path = "../strata-model" }
+tokio.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

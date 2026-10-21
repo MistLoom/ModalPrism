@@ -21,13 +21,14 @@ use strata_model::{
     Producer, QueueName, RawEnvelope, Rid, SourceId, Target, TaskId, TaskReason, Timestamp,
 };
 
-use crate::stage::{DiskStaging, read_part};
-use crate::transport::{EgressGw, PaidGw};
+use collector_gateway::{PaidGw, REQUEST_DEADLINE, EGRESS_POLICY, policy_from, call_policy_from};
+use egress::Policy;
 
-pub struct FetchState {
+use crate::stage::{DiskStaging, read_part};
+
+/// 任务抓取所需的非网关环境。
+pub struct FetchEnv {
     pub snapshot: Arc<Snapshot>,
-    pub egress: Arc<EgressGw>,
-    pub paid: Arc<PaidGw>,
     pub staging_dir: PathBuf,
     pub proxy: String,
     pub browser: PathBuf,
@@ -56,12 +57,16 @@ pub struct Fetched {
 }
 
 pub async fn fetch(
-    state: &FetchState,
+    env: &FetchEnv,
+    paid: &PaidGw,
+    accessor: Box<dyn Accessor>,
+    access: &AccessContext,
+    egress_policy: Policy,
     task: &strata_model::AccessTask,
     cursor: Option<Value>,
     resource: Option<Rid>,
 ) -> Result<Fetched, Classified> {
-    let module = state
+    let module = env
         .snapshot
         .modules
         .get(task.source_id.as_str())
@@ -75,28 +80,25 @@ pub async fn fetch(
             .and_then(Value::as_str)
             .unwrap_or(task.accessor.as_str())
     };
-    let implementation = state
+    let implementation = env
         .snapshot
         .modules
         .get(accessor_id)
         .and_then(|item| item.get("implementation"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    let accessor = open_accessor(implementation, &state.browser, &state.proxy)?;
     let source_policy = module
         .get("policy")
         .cloned()
         .unwrap_or_else(|| Value::Object(Map::new()));
-    let accessor_policy = state
+    let accessor_policy = env
         .snapshot
         .modules
         .get(accessor_id)
         .and_then(|item| item.get("policy"))
         .cloned()
         .unwrap_or_else(|| Value::Object(Map::new()));
-    let policy = config::overlay_system_policy(&state.snapshot.system, &source_policy);
-    let egress_policy = crate::transport::policy_from(&state.snapshot.system, &source_policy);
-    let paid_policy = crate::transport::call_policy_from(&state.snapshot.system, &accessor_policy);
+    let policy = config::overlay_system_policy(&env.snapshot.system, &source_policy);
     let spec = if task.spec.is_object() {
         task.spec.clone()
     } else {
@@ -111,29 +113,14 @@ pub async fn fetch(
         cursor,
         hints: AccessHints::default(),
         policy: Arc::new(policy),
-        deadline: Instant::now() + state.timeout,
-    };
-    let context = AccessContext {
-        egress: Arc::new(crate::transport::BoundEgress {
-            inner: Arc::clone(&state.egress),
-            policy: egress_policy.clone(),
-        }),
-        paid: Arc::new(crate::transport::BoundPaid {
-            inner: Arc::clone(&state.paid),
-            policy: paid_policy,
-        }),
-        sessions: Arc::new(NoSession),
-        staging: Arc::new(DiskStaging {
-            dir: state.staging_dir.clone(),
-        }),
-        cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        deadline: Instant::now() + env.timeout,
     };
     let deadline = request.deadline;
-    let envelopes = crate::transport::REQUEST_DEADLINE
+    let envelopes = REQUEST_DEADLINE
         .scope(
             deadline,
-            crate::transport::EGRESS_POLICY
-                .scope(egress_policy, accessor.access(request, &context)),
+            EGRESS_POLICY
+                .scope(egress_policy, accessor.access(request, access)),
         )
         .await
         .map_err(from_access)?;
@@ -146,7 +133,7 @@ pub async fn fetch(
             (raw_ops(&envelopes)?, Vec::new())
         } else {
             adapted_ops(
-                state,
+                env,
                 task,
                 &module,
                 &envelopes,
@@ -171,7 +158,7 @@ pub async fn fetch(
         ops,
         cursor: last.and_then(|item| item.cursor_candidate.clone()),
         receipt: match last {
-            Some(envelope) => receipt_of(&state.paid, envelope).await?,
+            Some(envelope) => receipt_of(paid, envelope).await?,
             None => None,
         },
         quality: Quality::Ok,
@@ -227,7 +214,7 @@ pub fn open_accessor(
 }
 
 pub async fn inbound_ops(
-    state: &FetchState,
+    env: &FetchEnv,
     source_id: &str,
     module: &Value,
     envelopes: &[RawEnvelope],
@@ -257,7 +244,7 @@ pub async fn inbound_ops(
         lease_until: Timestamp::now(),
         attempt: 1,
         batch_key: None,
-        generation: state.snapshot.generation,
+        generation: env.snapshot.generation,
     };
     let pipeline = module
         .get("pipeline")
@@ -266,7 +253,7 @@ pub async fn inbound_ops(
     if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
         raw_ops(envelopes)
     } else {
-        adapted_ops(state, &task, module, envelopes, &pipeline, false, None)
+        adapted_ops(env, &task, module, envelopes, &pipeline, false, None)
             .await
             .map(|(ops, _)| ops)
     }
@@ -319,7 +306,7 @@ fn raw_ops(envelopes: &[RawEnvelope]) -> Result<Vec<Op>, Classified> {
 }
 
 async fn adapted_ops(
-    state: &FetchState,
+    env: &FetchEnv,
     task: &strata_model::AccessTask,
     module: &Value,
     envelopes: &[RawEnvelope],
@@ -332,7 +319,7 @@ async fn adapted_ops(
     let mut parts = Vec::new();
     for envelope in envelopes {
         for part in &envelope.parts {
-            let bytes = read_part(&state.staging_dir, &part.bytes).map_err(from_access)?;
+            let bytes = read_part(&env.staging_dir, &part.bytes).map_err(from_access)?;
             parts.push(PartBytes {
                 part_id: part.part_id.clone(),
                 role: part.role.clone(),
@@ -344,7 +331,7 @@ async fn adapted_ops(
         }
     }
     let mut specs = Map::new();
-    for (id, item) in &state.snapshot.modules {
+    for (id, item) in &env.snapshot.modules {
         if item.get("kind").and_then(Value::as_str) == Some("adapter") {
             if let Some(spec) = item.get("spec").cloned() {
                 specs.insert(id.clone(), spec);

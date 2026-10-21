@@ -5,8 +5,8 @@ use ability_support::{
 };
 use async_trait::async_trait;
 use collector_bind::BindConfig;
-use collector_runtime::queue::Hot;
-use collector_runtime::transport::{EgressGw, HttpTransport, SystemResolver, policy_of};
+use collector_gateway::{EgressGw, HttpTransport, SystemResolver, policy_of};
+use strata_shared::persist::Hot;
 use egress::{Resolver, TcpDial};
 use serde_json::{Value, json};
 use strata_shared::open_strata;

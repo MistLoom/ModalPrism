@@ -18,7 +18,8 @@ use url::Url;
 
 use accessors::{AccessError, HttpRequest, HttpResponse, PaidCall, PaidResponse};
 
-use crate::queue::Hot;
+use strata_shared::persist::Hot;
+use tokio::net::TcpListener;
 
 pub struct HttpTransport;
 
@@ -304,4 +305,11 @@ impl accessors::PaidGateway for BoundPaid {
     async fn call(&self, request: PaidCall) -> Result<PaidResponse, AccessError> {
         self.inner.call_governed(&self.policy, request).await
     }
+}
+
+pub async fn serve_proxy<F>(gateway: Arc<EgressGw>, listener: TcpListener, policy_of: F)
+where
+    F: Fn() -> Policy,
+{
+    egress::serve_each(gateway.as_ref(), listener, policy_of).await;
 }

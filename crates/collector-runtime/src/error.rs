@@ -33,14 +33,14 @@ impl From<config::Error> for Error {
     }
 }
 
-impl From<strata_client::Error> for Error {
-    fn from(value: strata_client::Error) -> Self {
+impl From<planner::PlannerError> for Error {
+    fn from(value: planner::PlannerError) -> Self {
         Self::with_source(value.to_string(), value)
     }
 }
 
-impl From<planner::PlannerError> for Error {
-    fn from(value: planner::PlannerError) -> Self {
+impl From<strata_client::Error> for Error {
+    fn from(value: strata_client::Error) -> Self {
         Self::with_source(value.to_string(), value)
     }
 }

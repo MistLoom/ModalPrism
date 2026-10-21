@@ -9,15 +9,14 @@ publish = false
 
 [dependencies]
 accessors = { path = "../accessors" }
+egress = { path = "../egress" }
 accessors-builtin = { path = "../accessors-builtin" }
 adapters = { path = "../adapters" }
 async-trait.workspace = true
 bytes.workspace = true
 config = { path = "../config" }
-egress = { path = "../egress" }
-paid = { path = "../paid" }
+collector-gateway = { path = "../collector-gateway" }
 planner = { path = "../planner" }
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 strata-client = { path = "../strata-client" }

@@ -2,23 +2,24 @@
 
 pub mod api;
 
+pub use collector_gateway::{
+    self as gateway, BoundEgress, BoundPaid, EgressGw, HttpTransport, PaidBridge, PaidGw,
+    SystemResolver, call_policy_from, policy_from, policy_of, serve_proxy,
+};
 pub use collector_runtime::{
-    self as engine, Binds, Error, invalid_input, refuse_remote, require_loopback, serve_proxy,
-    serve_push, strata_options, PushCommit,
+    self as engine, Binds, Error, invalid_input, refuse_remote, require_loopback, serve_push,
+    PushCommit,
 };
 pub use collector_runtime::plans::{capacities, flush_interval, snapshot_interval};
-pub use collector_runtime::transport::{EgressGw, PaidGw, policy_of};
+pub use strata_shared::{persist, strata_options};
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use collector_runtime::execute::{self, FetchState, FollowWork};
-use collector_runtime::queue::{Hot, StrataQueue};
+use collector_runtime::execute::{self, FetchEnv, FollowWork};
 use collector_runtime::stage::DiskStaging;
-use collector_runtime::transport::{HttpTransport, PaidBridge, SystemResolver};
-use collector_runtime::plans;
 use egress::Resolver;
 use config::{ConfigStore, LoadOptions, Snapshot};
 use egress::TcpDial;
@@ -26,7 +27,8 @@ use planner::{Handler, Planner, Receipts};
 use serde_json::{Value, json};
 use strata_client::Strata;
 use strata_model::{
-    ApplyOpts, ChangeSet, FacetKind, FacetRef, Locator, Producer, TaskReason, Timestamp, VersionSel,
+    ApplyOpts, ChangeSet, ErrorClass, FacetKind, FacetRef, Locator, Producer, TaskReason, Timestamp,
+    VersionSel,
 };
 
 pub struct HostResources {
@@ -35,7 +37,7 @@ pub struct HostResources {
     load_options: LoadOptions,
     config: Arc<ConfigStore>,
     strata: Arc<Strata>,
-    planner: Planner<StrataQueue, Hot>,
+    planner: Planner<persist::StrataQueue, persist::Hot>,
     egress: Arc<EgressGw>,
     paid: Arc<PaidGw>,
     proxy: Mutex<String>,
@@ -55,23 +57,23 @@ impl HostResources {
         let opening = policy_of(&snapshot.system);
         let strata = Arc::new(Strata::open(data, strata_options(&snapshot.system)).await?);
         let planner = Planner::new(
-            StrataQueue(Arc::clone(&strata)),
-            Hot::new(Arc::clone(&strata), "planner"),
+            persist::StrataQueue(Arc::clone(&strata)),
+            persist::Hot::new(Arc::clone(&strata), "planner"),
         );
         let egress = Arc::new(egress::Gateway::new(
-            Hot::new(Arc::clone(&strata), "egress"),
+            persist::Hot::new(Arc::clone(&strata), "egress"),
             HttpTransport,
             SystemResolver,
             TcpDial,
             opening.clone(),
         ));
         let paid = Arc::new(paid::Gateway::new(
-            Hot::new(Arc::clone(&strata), "paid"),
+            persist::Hot::new(Arc::clone(&strata), "paid"),
             PaidBridge {
                 egress: Arc::clone(&egress),
                 fallback: opening,
             },
-            collector_runtime::transport::call_policy_from(&snapshot.system, &Value::Null),
+            call_policy_from(&snapshot.system, &Value::Null),
         ));
         let browser = std::env::var("MODALPRISM_MOLI").unwrap_or_else(|_| "moli".into());
         Ok(Arc::new(Self {
@@ -126,22 +128,26 @@ impl HostResources {
         Ok(())
     }
 
-    pub(crate) fn fetch_state(&self, timeout: Duration) -> FetchState {
-        FetchState {
+    pub(crate) fn fetch_env(&self, timeout: Duration) -> FetchEnv {
+        FetchEnv {
             snapshot: self.config.applied(),
-            egress: Arc::clone(&self.egress),
-            paid: Arc::clone(&self.paid),
             staging_dir: self.data_dir.join("staging"),
             proxy: self.proxy_url(),
-            browser: self.browser_program.lock().expect("浏览器").clone(),
+            browser: self.browser_program(),
             timeout,
         }
     }
 
-    pub fn access_context(&self) -> accessors::AccessContext {
+    pub fn access_context(&self, egress_policy: egress::Policy, paid_policy: paid::CallPolicy) -> accessors::AccessContext {
         accessors::AccessContext {
-            egress: self.egress.clone(),
-            paid: self.paid.clone(),
+            egress: Arc::new(BoundEgress {
+                inner: Arc::clone(&self.egress),
+                policy: egress_policy,
+            }),
+            paid: Arc::new(BoundPaid {
+                inner: Arc::clone(&self.paid),
+                policy: paid_policy,
+            }),
             sessions: Arc::new(execute::NoSession),
             staging: Arc::new(DiskStaging {
                 dir: self.data_dir.join("staging"),
@@ -165,8 +171,8 @@ impl HostResources {
             .get(source_id)
             .cloned()
             .ok_or_else(|| Error::new("config"))?;
-        let state = self.fetch_state(Duration::from_secs(30));
-        let ops = execute::inbound_ops(&state, source_id, &module, envelopes)
+        let env = self.fetch_env(Duration::from_secs(30));
+        let ops = execute::inbound_ops(&env, source_id, &module, envelopes)
             .await
             .map_err(|error| Error::new(error.message))?;
         if ops.is_empty() {
@@ -208,7 +214,10 @@ impl PushCommit for HostResources {
     }
 
     fn access_context(&self) -> accessors::AccessContext {
-        HostResources::access_context(self)
+        let snap = self.config.applied();
+        let policy = policy_of(&snap.system);
+        let paid_policy = call_policy_from(&snap.system, &Value::Null);
+        HostResources::access_context(self, policy, paid_policy)
     }
 
     fn push_accessor(&self) -> &accessors_builtin::PushAccessor {
@@ -229,8 +238,14 @@ pub(crate) async fn dispatch(host: &HostResources, method: &str, args: Value) ->
 }
 
 struct TaskHandler {
-    state: FetchState,
+    config: Arc<ConfigStore>,
+    data_dir: PathBuf,
+    proxy: String,
+    browser: PathBuf,
+    egress: Arc<EgressGw>,
+    paid: Arc<PaidGw>,
     strata: Arc<Strata>,
+    timeout: Duration,
 }
 
 #[async_trait]
@@ -253,10 +268,87 @@ impl Handler for TaskHandler {
         } else {
             None
         };
-        let fetched = execute::fetch(&self.state, task, cursor, resource).await?;
+        let env = FetchEnv {
+            snapshot: self.config.applied(),
+            staging_dir: self.data_dir.join("staging"),
+            proxy: self.proxy.clone(),
+            browser: self.browser.clone(),
+            timeout: self.timeout,
+        };
+        let module = env
+            .snapshot
+            .modules
+            .get(task.source_id.as_str())
+            .cloned()
+            .ok_or_else(|| planner_classified(ErrorClass::Config, "config"))?;
+        let accessor_id = if task.reason == TaskReason::Follow {
+            task.accessor.as_str()
+        } else {
+            module
+                .pointer("/access/accessor")
+                .and_then(Value::as_str)
+                .unwrap_or(task.accessor.as_str())
+        };
+        let implementation = env
+            .snapshot
+            .modules
+            .get(accessor_id)
+            .and_then(|item| item.get("implementation"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let accessor = execute::open_accessor(implementation, &env.browser, &env.proxy)
+            .map_err(|error| planner_classified(ErrorClass::Config, error.message))?;
+        let source_policy = module
+            .get("policy")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Default::default()));
+        let accessor_policy = env
+            .snapshot
+            .modules
+            .get(accessor_id)
+            .and_then(|item| item.get("policy"))
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Default::default()));
+        let egress_policy = policy_from(&env.snapshot.system, &source_policy);
+        let paid_policy = call_policy_from(&env.snapshot.system, &accessor_policy);
+        let access = accessors::AccessContext {
+            egress: Arc::new(BoundEgress {
+                inner: Arc::clone(&self.egress),
+                policy: egress_policy.clone(),
+            }),
+            paid: Arc::new(BoundPaid {
+                inner: Arc::clone(&self.paid),
+                policy: paid_policy,
+            }),
+            sessions: Arc::new(execute::NoSession),
+            staging: Arc::new(DiskStaging {
+                dir: self.data_dir.join("staging"),
+            }),
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let fetched = execute::fetch(
+            &env,
+            &self.paid,
+            accessor,
+            &access,
+            egress_policy,
+            task,
+            cursor,
+            resource,
+        )
+        .await?;
         let mut success = fetched.success;
         success.follows = open_follows(&self.strata, fetched.follows, fetched.max_fetches).await;
         Ok(success)
+    }
+}
+
+fn planner_classified(class: ErrorClass, message: impl Into<String>) -> planner::Classified {
+    planner::Classified {
+        class,
+        message: message.into(),
+        retry_after: None,
+        retry_at: None,
     }
 }
 
@@ -759,8 +851,14 @@ async fn runner_run(services: &HostResources, args: &Value) -> Result<Value, Err
         .checked_add(plan.timeout)
         .map_err(|source| Error::with_source("节奏", source))?;
     let handler = TaskHandler {
-        state: services.fetch_state(plan.timeout),
+        config: services.config(),
+        data_dir: services.data_dir().to_path_buf(),
+        proxy: services.proxy_url(),
+        browser: services.browser_program(),
+        egress: services.egress_gateway(),
+        paid: Arc::clone(&services.paid),
         strata: services.strata(),
+        timeout: plan.timeout,
     };
     let receipts = PaidReceipts {
         paid: Arc::clone(&services.paid),
@@ -947,6 +1045,10 @@ async fn accessor_access(
         policy: Option<Value>,
     }
     let args: Args = parse(args)?;
+    let policy_value = args
+        .policy
+        .clone()
+        .unwrap_or_else(|| Value::Object(Default::default()));
     let request = accessors::AccessRequest {
         task_id: strata_model::TaskId::new(args.task_id).map_err(|_| Error::new("spec 无效"))?,
         source_id: strata_model::SourceId::new(args.source_id)
@@ -955,15 +1057,19 @@ async fn accessor_access(
         spec: args.spec,
         cursor: args.cursor,
         hints: accessors::AccessHints::default(),
-        policy: Arc::new(
-            args.policy
-                .unwrap_or_else(|| Value::Object(Default::default())),
-        ),
+        policy: Arc::new(policy_value.clone()),
         deadline: std::time::Instant::now() + Duration::from_secs(30),
     };
+    let snap = services.config.applied();
+    let egress_policy = policy_of(&snap.system);
+    let paid_policy = call_policy_from(&snap.system, &policy_value);
     let envelopes = accessor
-        .access(request, &services.access_context())
+        .access(
+            request,
+            &services.access_context(egress_policy, paid_policy),
+        )
         .await
         .map_err(|error| Error::new(error.message))?;
     serde_json::to_value(envelopes).map_err(|source| Error::with_source("spec 无效", source))
 }
+

@@ -12,7 +12,7 @@ build = "build.rs"
 ability-support.workspace = true
 async-trait.workspace = true
 collector-bind = { path = "../../collector/bind" }
-collector-runtime = { path = "../../../crates/collector-runtime" }
+collector-gateway = { path = "../../../crates/collector-gateway" }
 egress = { path = "../../../crates/egress" }
 serde_json.workspace = true
 strata-shared = { path = "../../storage/strata-shared" }

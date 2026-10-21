@@ -8,7 +8,16 @@ use serde_json::Value;
 use strata_client::Strata;
 use strata_model::{AccessTask, ApplyOpts, ChangeSet, QueueName, TaskId, Timestamp};
 
-use crate::error::Error;
+#[derive(Debug)]
+struct PersistError(String);
+
+impl std::fmt::Display for PersistError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PersistError {}
 
 #[derive(Clone)]
 pub struct Hot {
@@ -22,17 +31,25 @@ impl Hot {
     }
 }
 
-async fn load_bytes(hot: &Hot) -> Result<Option<Vec<u8>>, Error> {
-    match hot.strata.hot_get(hot.kind, "state").await? {
+async fn load_bytes(hot: &Hot) -> Result<Option<Vec<u8>>, PersistError> {
+    match hot
+        .strata
+        .hot_get(hot.kind, "state")
+        .await
+        .map_err(|e| PersistError(e.to_string()))?
+    {
         Some(value) => Ok(Some(value.to_string().into_bytes())),
         None => Ok(None),
     }
 }
 
-async fn store_bytes(hot: &Hot, bytes: &[u8]) -> Result<(), Error> {
+async fn store_bytes(hot: &Hot, bytes: &[u8]) -> Result<(), PersistError> {
     let value: Value = serde_json::from_slice(bytes)
-        .map_err(|source| Error::with_source("控制热数据读写失败", source))?;
-    hot.strata.hot_put(hot.kind, "state", &value).await?;
+        .map_err(|source| PersistError(source.to_string()))?;
+    hot.strata
+        .hot_put(hot.kind, "state", &value)
+        .await
+        .map_err(|e| PersistError(e.to_string()))?;
     Ok(())
 }
 

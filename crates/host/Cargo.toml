@@ -8,7 +8,9 @@ description = "组合根运行时资源（存储、配置、调度）"
 publish = false
 
 [dependencies]
+collector-gateway = { path = "../collector-gateway" }
 collector-runtime = { path = "../collector-runtime" }
+strata-shared = { path = "../../abilitys/storage/strata-shared" }
 ability-support.workspace = true
 accessors = { path = "../accessors" }
 accessors-builtin = { path = "../accessors-builtin" }

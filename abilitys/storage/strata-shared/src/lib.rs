@@ -1,4 +1,6 @@
-//! Strata Ability 共用：从绑定期配置打开 `Strata` 与参数解析。
+//! Strata Ability 共用：从绑定期配置打开 `Strata`、热数据与队列适配。
+
+pub mod persist;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -57,7 +59,7 @@ pub fn normalize_args(args: Value) -> Result<Value> {
     }
 }
 
-fn strata_options(system: &Value) -> Options {
+pub fn strata_options(system: &Value) -> Options {
     let mut options = Options::default();
     if let Some(size) = system
         .pointer("/strata/blob/inline_size_threshold")
