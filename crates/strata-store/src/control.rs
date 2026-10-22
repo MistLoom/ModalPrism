@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};
 use strata_model::{
     AccessTask, ChangeSet, CommitId, CommitResult, QueueName, TaskId, TaskReason, Timestamp,
@@ -184,8 +185,12 @@ pub(crate) trait ControlStore {
 
 impl SqliteControl {
     pub(crate) async fn open(path: &Path) -> Result<Self, Error> {
-        let url = format!("sqlite://{}?mode=rwc", path.display());
-        let pool = SqlitePool::connect(&url)
+        // 不走连接 URL：Windows 盘符路径（C:/...）会被 URL 解析误认作 authority，
+        // 直接用结构化选项跨平台等价于 `sqlite://<path>?mode=rwc`。
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options)
             .await
             .map_err(|source| Error::Sql {
                 context: "打开控制库",

@@ -31,7 +31,24 @@ impl Staging {
             file.sync_all().await?;
         }
         tokio::fs::rename(&tmp, &path).await?;
-        tokio::fs::File::open(&self.dir).await?.sync_all().await?;
+        // 目录 fsync 需要按平台分别处理：Windows 用普通 open 打开目录会报
+        // PermissionDenied（需要 FILE_FLAG_BACKUP_SEMANTICS）。
+        #[cfg(unix)]
+        {
+            tokio::fs::File::open(&self.dir).await?.sync_all().await?;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            // FlushFileBuffers（sync_all）要求句柄具备写权限，否则报 PermissionDenied。
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&self.dir)?
+                .sync_all()?;
+        }
         PartRef::new(sha, bytes.len() as u64).map_err(Error::from)
     }
 

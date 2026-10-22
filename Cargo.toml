@@ -14,6 +14,7 @@ members = [
     "apps/ability-core",
     "crates/strata-model",
     "crates/strata-store",
+    "crates/strata-gateway",
     "crates/strata-client",
     "crates/config",
     "crates/accessors",

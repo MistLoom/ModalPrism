@@ -799,15 +799,22 @@ async fn browser_checks_robots_then_calls_the_proxy_engine() {
 async fn moli_command_passes_the_proxy_to_a_stand_in() {
     let dir = tempfile::tempdir().unwrap();
     let args_path = dir.path().join("args");
-    let program = dir.path().join("moli");
-    let mut script = String::from("#!/bin/sh\nprintf '%s\\n' \"$@\" > '");
+    let program = dir.path().join("moli.cmd");
+    // 批处理里 < > 是重定向符，JSON 中的 HTML 片段需要用 ^ 转义。
+    let mut script = String::from("@echo off\necho %* > \"");
     script.push_str(&args_path.display().to_string());
-    script.push_str("'\ncat <<'END'\n");
-    script.push_str(r#"{"final_url":"https://example.com/final","status":200,"headers":[["Content-Type","text/html"]],"html":"<p>x</p>","redirect_chain":[],"version":"fixture"}"#);
-    script.push_str("\nEND\n");
+    script.push_str("\"\necho ");
+    script.push_str(r#"{"final_url":"https://example.com/final","status":200,"headers":[["Content-Type","text/html"]],"html":"^<p^>x^</p^>","redirect_chain":[],"version":"fixture"}"#);
     std::fs::write(&program, script).unwrap();
     #[cfg(unix)]
     {
+        let program = dir.path().join("moli");
+        let mut script = String::from("#!/bin/sh\nprintf '%s\\n' \"$@\" > '");
+        script.push_str(&args_path.display().to_string());
+        script.push_str("'\ncat <<'END'\n");
+        script.push_str(r#"{"final_url":"https://example.com/final","status":200,"headers":[["Content-Type","text/html"]],"html":"<p>x</p>","redirect_chain":[],"version":"fixture"}"#);
+        script.push_str("\nEND\n");
+        std::fs::write(&program, script).unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut permissions = std::fs::metadata(&program).unwrap().permissions();
         permissions.set_mode(0o755);

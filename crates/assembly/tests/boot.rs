@@ -267,7 +267,20 @@ async fn standard_preset_redacts_headers_before_they_reach_staging() {
             "id: source/demo\nkind: source\nname: Demo\naccess:\n  accessor: accessor/browser\n  locator:\n    url: http://{addr}/page\npipeline: []\nschedule:\n  interval: 15m\nadmission: {{}}\n"
         ),
     );
+    // 批处理里 < > 是重定向符，JSON 中的 HTML 片段需要用 ^ 转义。
+    #[cfg(windows)]
+    let script = {
+        let script = data.path().join("moli.cmd");
+        std::fs::write(
+            &script,
+            "@echo off\necho {\"final_url\":\"http://127.0.0.1/page\",\"status\":200,\"headers\":[[\"Content-Type\",\"text/html\"],[\"Set-Cookie\",\"secret\"]],\"html\":\"^<p^>ok^</p^>\",\"version\":\"fixture\"}\n",
+        )
+        .unwrap();
+        script
+    };
+    #[cfg(unix)]
     let script = data.path().join("moli.sh");
+    #[cfg(unix)]
     std::fs::write(
         &script,
         "#!/bin/sh\ncat <<'EOF'\n{\"final_url\":\"http://127.0.0.1/page\",\"status\":200,\"headers\":[[\"Content-Type\",\"text/html\"],[\"Set-Cookie\",\"secret\"]],\"html\":\"<p>ok</p>\",\"version\":\"fixture\"}\nEOF\n",

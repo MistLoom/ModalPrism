@@ -1,0 +1,40 @@
+[package]
+name = "strata-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Strata 数据读写层：统一存储接口、Blob 层、声明式派生与类型化查询"
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+strata-model = { path = "../strata-model" }
+thiserror.workspace = true
+tokio.workspace = true
+ulid.workspace = true
+
+[dependencies.object_store]
+version = "0.14"
+optional = true
+default-features = false
+features = ["aws"]
+
+[features]
+default = []
+# PostgreSQL + pgvector 后端。未开启时只编译 SQLite 后端。
+postgres = ["sqlx/postgres"]
+# S3/MinIO Blob 后端。
+s3 = ["dep:object_store"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
