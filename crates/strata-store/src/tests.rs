@@ -278,12 +278,11 @@ async fn release_leases_rewrites_payload_and_can_be_leased_again() {
     let released = engine.release_leases().await.unwrap();
     assert_eq!(released[0].task_id, task.task_id);
     assert_eq!(released[0].lease_until, original);
-    let url = format!(
-        "sqlite://{}?mode=ro",
-        dir.path().join("control.db").display()
-    );
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(dir.path().join("control.db"))
+        .read_only(true);
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .connect(&url)
+        .connect_with(options)
         .await
         .unwrap();
     let row = sqlx::query("SELECT payload, lease_until, status FROM tasks WHERE task_id = ?")
