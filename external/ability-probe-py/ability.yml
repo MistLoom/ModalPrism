@@ -1,0 +1,17 @@
+framework_version: "python@1"
+id: probe
+open: false
+protocols: [fun]
+depends: []
+stateful: false
+methods:
+  - id: ping
+    description: external probe ping
+    input:
+      type: object
+events:
+  - name: pong
+    dir: emit
+    description: pong
+    payload_schema:
+      type: object

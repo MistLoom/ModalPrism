@@ -1,0 +1,12 @@
+[package]
+name = "ability-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "外部 Ability 示例：只依赖 ability-sdk"
+
+[dependencies]
+ability-sdk = { path = "../../SDK/ability-sdk" }
+async-trait = "0.1"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "io-std", "io-util"] }

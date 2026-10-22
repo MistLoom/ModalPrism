@@ -175,12 +175,23 @@ pub fn watch(store: Arc<ConfigStore>, debounce: Duration) -> Result<WatchHandle,
 }
 
 pub fn watch_hangup(store: Arc<ConfigStore>) -> std::io::Result<std::thread::JoinHandle<()>> {
-    let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGHUP])?;
-    Ok(std::thread::spawn(move || {
-        for _ in signals.forever() {
-            let _ = store.reload();
-        }
-    }))
+    #[cfg(unix)]
+    {
+        let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGHUP])?;
+        Ok(std::thread::spawn(move || {
+            for _ in signals.forever() {
+                let _ = store.reload();
+            }
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows 没有 SIGHUP；热加载由文件监听承担，这里保留句柄语义。
+        let _ = store;
+        std::thread::Builder::new()
+            .name("config-hangup".into())
+            .spawn(std::thread::park)
+    }
 }
 
 fn is_data_change(event: &Event) -> bool {

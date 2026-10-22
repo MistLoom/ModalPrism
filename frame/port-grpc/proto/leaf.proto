@@ -1,0 +1,31 @@
+syntax = "proto3";
+package leaf;
+
+service LeafGateway {
+  rpc Catalog(CatalogRequest) returns (CatalogResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+}
+
+message CatalogRequest {}
+
+message CatalogEntry {
+  string instance = 1;
+  string method = 2;
+  string description = 3;
+}
+
+message CatalogResponse {
+  repeated CatalogEntry entries = 1;
+}
+
+message InvokeRequest {
+  string instance = 1;
+  string method = 2;
+  string args_json = 3;
+}
+
+message InvokeResponse {
+  string data_json = 1;
+  bool ok = 2;
+  string error = 3;
+}

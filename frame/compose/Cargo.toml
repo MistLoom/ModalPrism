@@ -1,0 +1,39 @@
+[package]
+name = "frame-compose"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "组合根：Catalog、Bootstrap、Expose、Mgmt API"
+
+[lib]
+name = "frame_compose"
+path = "src/lib.rs"
+
+[features]
+default = []
+mgmt = ["dep:axum", "dep:async-stream", "dep:futures-core", "dep:tower-http"]
+port-fun = ["dep:frame-port-fun"]
+
+[dependencies]
+ability-core = { workspace = true }
+ability-support = { workspace = true }
+frame-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+frame-port-fun = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+async-stream = { version = "0.3", optional = true }
+futures-core = { version = "0.3", optional = true }
+tower-http = { workspace = true, optional = true }
+
+[build-dependencies]
+ability-support = { workspace = true }
+serde_yaml = { workspace = true }
+
+[dev-dependencies]
+ability-probe = { path = "../../external/ability-probe" }

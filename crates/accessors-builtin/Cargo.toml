@@ -23,6 +23,9 @@ tokio.workspace = true
 ulid.workspace = true
 url.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+same-file = "1"
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio.workspace = true

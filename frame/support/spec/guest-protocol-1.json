@@ -1,0 +1,264 @@
+{
+  "protocol_version": "1",
+  "transport": {
+    "encoding": "utf-8",
+    "framing": "newline_delimited_json",
+    "line_terminator": "\n"
+  },
+  "frame": {
+    "type": "object",
+    "required": ["id", "body"],
+    "properties": {
+      "id": { "type": "string" },
+      "reply_to": { "type": "string" },
+      "body": { "$ref": "#/body" }
+    }
+  },
+  "body": {
+    "description": "serde 外部标签 type + snake_case 字段名",
+    "oneOf": [
+      { "type": "object", "required": ["type"], "properties": { "type": { "const": "hello" } } },
+      {
+        "type": "object",
+        "required": ["type", "manifest"],
+        "properties": { "type": { "const": "manifest" }, "manifest": { "type": "object" } }
+      },
+      {
+        "type": "object",
+        "required": ["type", "config"],
+        "properties": { "type": { "const": "create" }, "config": {} }
+      },
+      {
+        "type": "object",
+        "required": ["type", "phase", "instance", "chain_id", "span"],
+        "properties": {
+          "type": { "const": "lifecycle" },
+          "phase": { "type": "string" },
+          "instance": { "type": "string" },
+          "chain_id": { "type": "string" },
+          "span": { "type": "integer" }
+        }
+      },
+      {
+        "type": "object",
+        "required": ["type", "method", "args", "instance", "chain_id", "span"],
+        "properties": {
+          "type": { "const": "invoke" },
+          "method": { "type": "string" },
+          "args": {},
+          "instance": { "type": "string" },
+          "chain_id": { "type": "string" },
+          "span": { "type": "integer" }
+        }
+      },
+      { "type": "object", "required": ["type"], "properties": { "type": { "const": "ok" }, "value": {} } },
+      {
+        "type": "object",
+        "required": ["type", "error"],
+        "properties": {
+          "type": { "const": "err" },
+          "error": { "$ref": "#/wire_error" }
+        }
+      },
+      {
+        "type": "object",
+        "required": ["type", "ctx_id", "op"],
+        "properties": { "type": { "const": "ctx" }, "ctx_id": { "type": "string" }, "op": { "$ref": "#/ctx_op" } }
+      },
+      {
+        "type": "object",
+        "required": ["type", "sub", "event"],
+        "properties": { "type": { "const": "event" }, "sub": { "type": "string" }, "event": { "type": "object" } }
+      },
+      {
+        "type": "object",
+        "required": ["type", "guest_id", "event"],
+        "properties": {
+          "type": { "const": "run_handle" },
+          "guest_id": { "type": "string" },
+          "event": { "type": "object" },
+          "next_token": { "type": "string" }
+        }
+      },
+      { "type": "object", "required": ["type"], "properties": { "type": { "const": "shutdown" } } }
+    ]
+  },
+  "ctx_op": {
+    "description": "serde 外部标签 op + snake_case",
+    "variants": [
+      "call",
+      "dep",
+      "catalog",
+      "local_get",
+      "local_set",
+      "emit",
+      "load",
+      "unload",
+      "subscribe",
+      "handle",
+      "unhandle",
+      "event_next",
+      "share",
+      "feedback",
+      "chain_status"
+    ]
+  },
+  "ctx_op_coverage": {
+    "call": ["wrap_alias_call_emit", "hub_surface"],
+    "dep": ["hub_surface"],
+    "catalog": ["hub_surface"],
+    "local_get": ["wrap_alias_call_emit", "push_effect_undo"],
+    "local_set": ["wrap_alias_call_emit", "push_effect_undo"],
+    "emit": ["probe_invoke_emit_unload", "wrap_alias_call_emit", "hub_surface"],
+    "load": ["hub_surface"],
+    "unload": ["hub_surface", "probe_invoke_emit_unload"],
+    "subscribe": ["subscribe_stream"],
+    "handle": ["hub_surface", "handle_middleware"],
+    "unhandle": ["handle_middleware"],
+    "event_next": ["handle_middleware"],
+    "share": ["share_chain_status"],
+    "feedback": ["feedback_submit"],
+    "chain_status": ["share_chain_status"]
+  },
+  "runtime_adapters": [
+    {
+      "id": "rust_duplex",
+      "description": "Rust ability-sdk，内存 duplex"
+    },
+    {
+      "id": "subprocess_node",
+      "description": "node src/serve.mjs"
+    },
+    {
+      "id": "subprocess_python",
+      "description": "python src/serve.py"
+    }
+  ],
+  "wire_error": {
+    "type": "object",
+    "required": ["kind", "message"],
+    "properties": { "kind": { "type": "string" }, "message": { "type": "string" } }
+  },
+  "handshake": [
+    "宿主发送 body.type=hello",
+    "客端回复 body.type=manifest",
+    "宿主发送 body.type=create",
+    "客端回复 body.type=ok"
+  ],
+  "guest_capability_matrix": {
+    "manifest_methods_lifecycle": true,
+    "ctx_call_dep_catalog": true,
+    "local_get_set": true,
+    "emit_subscribe_handle_event_next": true,
+    "load_unload": true,
+    "feedback": true,
+    "chain_status_share": true,
+    "push_effect_undo_on_invoke_boundary": true,
+    "register_aspect": false
+  },
+  "conformance_cases": [
+    {
+      "id": "probe_invoke_emit_unload",
+      "description": "ping、emit pong、unload 后 NotFound",
+      "ability_id": "probe",
+      "host_in_process": [],
+      "guest": {
+        "node": "external/ability-probe-ts",
+        "python": "external/ability-probe-py",
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "wrap_alias_call_emit",
+      "description": "别名 call、push_effect/local、emit done",
+      "ability_id": "probe.wrap",
+      "host_in_process": ["probe.echo"],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "stamp_reload_same_impl",
+      "description": "同包 unload 后重装仍可 invoke",
+      "ability_id": "stamp",
+      "host_in_process": [],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "stamp_reload_new_session",
+      "description": "config.stamp 在 reload 后变化 a→b",
+      "ability_id": "stamp",
+      "host_in_process": [],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "feedback_submit",
+      "description": "ctx.feedback 写入宿主反馈层",
+      "ability_id": "probe.feedback",
+      "host_in_process": [],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "hub_surface",
+      "description": "handle 事件链、load/unload note",
+      "ability_id": "probe.hub",
+      "host_in_process": ["probe.echo", "probe.wrap", "probe.note"],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "subscribe_stream",
+      "description": "subscribe + 宿主 event 帧",
+      "ability_id": "probe.sub",
+      "host_in_process": [],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "handle_middleware",
+      "description": "handle middleware + event_next",
+      "ability_id": "probe.chain",
+      "host_in_process": [],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "push_effect_undo",
+      "description": "invoke 失败触发 push_effect undo",
+      "ability_id": "probe.effect",
+      "host_in_process": [],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "share_chain_status",
+      "description": "share 与 chain_status",
+      "ability_id": "probe.ctx",
+      "host_in_process": [],
+      "guest": {
+        "rust_duplex": "external/ability-probe"
+      }
+    },
+    {
+      "id": "event_lanes_filter_aspect",
+      "description": "四种事件模式、with_protocol_filter 共享 locals、register_aspect 失败",
+      "ability_id": "probe.surface",
+      "host_in_process": [],
+      "guest": {
+        "node": "external/ability-probe-surface-ts",
+        "python": "external/ability-probe-surface-py",
+        "rust_duplex": "external/ability-probe"
+      }
+    }
+  ]
+}

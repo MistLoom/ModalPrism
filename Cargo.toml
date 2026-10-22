@@ -1,6 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
+    "frame/support/macros",
+    "frame/support",
+    "frame/protocol",
+    "frame/core",
+    "frame/compose",
+    "frame/port-cli",
+    "frame/port-http",
+    "frame/port-mcp",
+    "frame/port-fun",
+    "frame/port-grpc",
+    "apps/ability-core",
     "crates/strata-model",
     "crates/strata-store",
     "crates/strata-client",
@@ -13,30 +24,33 @@ members = [
     "crates/accessors-builtin",
     "crates/assembly",
     "crates/types",
-    "ability/strata_read",
-    "ability/strata_write",
-    "ability/strata_queue",
-    "ability/committer",
-    "ability/planner",
-    "ability/runner",
-    "ability/health",
-    "ability/config",
-    "ability/config_inspect",
-    "ability/egress",
-    "ability/paid_gateway",
-    "ability/accessor_http",
-    "ability/accessor_rss",
-    "ability/accessor_api",
-    "ability/accessor_paid_api",
-    "ability/accessor_search",
-    "ability/accessor_push",
-    "ability/accessor_file",
-    "ability/accessor_browser",
+    "abilitys/types/type_article",
+    "abilitys/types/type_hotlist",
+    "apps/modalprism-collector/ability/accessor_api",
+    "apps/modalprism-collector/ability/accessor_browser",
+    "apps/modalprism-collector/ability/accessor_file",
+    "apps/modalprism-collector/ability/accessor_http",
+    "apps/modalprism-collector/ability/accessor_paid_api",
+    "apps/modalprism-collector/ability/accessor_push",
+    "apps/modalprism-collector/ability/accessor_rss",
+    "apps/modalprism-collector/ability/accessor_search",
+    "apps/modalprism-collector/ability/committer",
+    "apps/modalprism-collector/ability/config",
+    "apps/modalprism-collector/ability/config_inspect",
+    "apps/modalprism-collector/ability/egress",
+    "apps/modalprism-collector/ability/health",
+    "apps/modalprism-collector/ability/paid_gateway",
+    "apps/modalprism-collector/ability/planner",
+    "apps/modalprism-collector/ability/runner",
+    "apps/modalprism-collector/ability/strata_queue",
+    "apps/modalprism-collector/ability/strata_read",
+    "apps/modalprism-collector/ability/strata_write",
     "apps/modalprism-collector",
-    "ability/type_article",
-    "ability/type_hotlist",
     "apps/modalprism-agent",
 ]
+default-members = ["apps/modalprism-collector", "apps/modalprism-agent"]
+
+exclude = ["external/ability-probe", "SDK/ability-sdk", "SDK/ability-sdk-codegen"]
 
 [workspace.package]
 version = "0.1.0"
@@ -45,9 +59,22 @@ license = "Apache-2.0"
 rust-version = "1.85"
 
 [workspace.dependencies]
+ability-support = { path = "frame/support" }
+ability-support-macros = { path = "frame/support/macros" }
+frame-core = { path = "frame/core" }
+frame-compose = { path = "frame/compose" }
+ability-core = { path = "apps/ability-core" }
+frame-port-cli = { path = "frame/port-cli" }
+frame-port-http = { path = "frame/port-http" }
+frame-port-mcp = { path = "frame/port-mcp" }
+frame-port-fun = { path = "frame/port-fun" }
+frame-port-grpc = { path = "frame/port-grpc" }
+ai-protocol = { path = "frame/protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 sha2 = "0.10"
+encoding_rs = "0.8"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 ulid = "1"
@@ -61,24 +88,32 @@ lance = "=13.0.0"
 lancedb = { version = "=0.40.0", features = ["remote"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 jsonschema = "0.59"
 notify = "8.2"
 saphyr = "0.2.2"
 signal-hook = { version = "0.3", features = ["iterator"] }
 async-trait = "0.1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
 quick-xml = "0.37"
+rmcp = { version = "3.1", default-features = false, features = ["server", "transport-io"] }
 scraper = "0.23"
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
 url = "2"
 psl = "2"
 flate2 = "1"
 base64 = "0.22"
-ability-support = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-frame-core = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-ability-core = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-frame-port-http = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-frame-port-mcp = { git = "https://github.com/MistLoom/LEAF", rev = "3dcd9c9d29a342ee9cb11411d96cbaf506269e46" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[profile.release]
+lto = true
+codegen-units = 1

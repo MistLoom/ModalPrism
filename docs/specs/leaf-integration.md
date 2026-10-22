@@ -1,6 +1,6 @@
 # LEAF 集成要求
 
-对照 LEAF 提交 `3dcd9c9d29a342ee9cb11411d96cbaf506269e46`。
+LEAF 固定在提交 `ffabb6128ae6e006c6c3cee3a706532501f26219`，`frame/`、`SDK/`、`manual/` 与 `apps/ability-core` 随仓库提供。
 
 本文只记录该提交中已经存在的行为，以及 ModalPrism 必须满足的要求。
 
@@ -9,10 +9,10 @@
 | 包 | 允许的依赖 | 禁止的依赖 |
 |---|---|---|
 | 领域库（`crates/`） | 本仓库 crate 与第三方库 | `ability-sdk`、`ability-support`、`frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
-| Ability crate（`ability/`） | `ability-support` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
+| Ability crate（`abilitys/<分类>/`、`apps/<app>/ability/`） | `ability-support` | `frame-core`、`frame-compose`、`ability-core`、任一 `frame-port-*` |
 | 组合根（`apps/modalprism-collector`、`apps/modalprism-agent`） | `frame-core`、`ability-core`、`frame-port-http`、`frame-port-mcp` | Ability 的实现逻辑 |
 
-`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-sdk` 在 LEAF workspace 的 exclude 列表中，Cargo 不能把它当作该仓库的 git 依赖。Ability crate 依赖同一提交的 `ability-support`。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。采集进程的运维 HTTP 端口依赖 `frame-port-http`。只读进程的工具面依赖 `frame-port-mcp`。该提交的 MCP Port 使用标准输入输出，把 Gateway 目录里的实例 id 当作工具名。只读进程交给该端口的目录把每个方法展开成实例 id 为 `instance.method` 的单独条目，因此列出的工具名是 `instance.method`。`AccessKind::Tools` 没有 Port。该提交没有 Skill Port。领域库与 Ability crate 不依赖 `frame-core` 与 `ability-core`。
+`ability-sdk` 再导出 `ability-support`，并声明自身不依赖 `frame-core` 与 port。`ability-sdk` 在本仓库工作区的 exclude 列表中。Ability crate 依赖随仓库提供的 `ability-support`。`ability-support` 的 crate 说明禁止依赖 `frame-core`、port 与 `ability-core`。架构约束第 7 条写的是：外部包不得依赖 `frame-core`、port 或 `ability-core`。组合根为链接本仓库 Ability，直接依赖 `frame-core` 与 `ability-core`。采集进程的运维 HTTP 端口依赖 `frame-port-http`。只读进程的工具面依赖 `frame-port-mcp`。该提交的 MCP Port 使用标准输入输出，把 Gateway 目录里的实例 id 当作工具名。只读进程交给该端口的目录把每个方法展开成实例 id 为 `instance.method` 的单独条目，因此列出的工具名是 `instance.method`。`AccessKind::Tools` 没有 Port。该提交没有 Skill Port。领域库与 Ability crate 不依赖 `frame-core` 与 `ability-core`。
 
 Ability 实现 `Ability` / `AbilityProvider`，通过 `manifest`、`create`、`invoke`、`on_lifecycle` 接入。跨 Ability 调用只使用对方的 client 契约或 `AbilityCtx::call`。
 
@@ -20,13 +20,13 @@ Ability 实现 `Ability` / `AbilityProvider`，通过 `manifest`、`create`、`i
 
 LEAF 的发现范围是固定的。
 
-- `discover_ability_roots` 只收集 `<workspace>/common/ability/<name>/ability.yml` 与 `<workspace>/apps/<app>/ability/<name>/ability.yml`。
-- `WorkspaceCatalog::discover` 与 `frame-compose` 的 `build.rs` 使用的 workspace 根，是 `frame-compose` 编译时 `CARGO_MANIFEST_DIR` 的上两级，即 LEAF 仓库根。
-- `linked` 表示该 id 出现在 `frame-compose` 按上述目录生成的 `linked_ids()` 中，并且对应 Cargo feature 已打开。
+- `discover_ability_roots` 只收集 `<workspace>/abilitys/<分类>/<name>/ability.yml` 与 `<workspace>/apps/<app>/ability/<name>/ability.yml`。
+- `WorkspaceCatalog::discover` 与 `frame-compose` 的 `build.rs` 使用的 workspace 根，是 `frame-compose` 编译时 `CARGO_MANIFEST_DIR` 的上两级，即本仓库根。
+- `linked` 表示该 id 出现在 `frame-compose` 按上述目录生成的 `linked_ids()` 中，并且对应 Cargo feature 已声明并打开。`frame/compose` 不声明本仓库能力的特性，因此这些目录不生成链接项。
 - `AppBuilder::bootstrap` 先 `install_all`（只安装上述已链接 Provider），再 `load_exposed`（只 load 清单中 `linked` 且 Expose 启用的 id）。
 - `WorkspaceCatalog` 没有追加外部根目录的接口。
 
-因此本仓库的 `ability.yml` 不会被发现，也不会被编译进 `frame-compose`。
+因此本仓库的 `ability.yml` 会进入目录清单，但不会被编译进 `frame-compose`。
 
 本仓库 Ability 的链接要求：
 

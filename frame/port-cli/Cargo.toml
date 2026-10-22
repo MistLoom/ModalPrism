@@ -1,0 +1,13 @@
+[package]
+name = "frame-port-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "框架 CLI 端口"
+
+[dependencies]
+async-trait = { workspace = true }
+clap = { workspace = true }
+frame-core = { workspace = true }
+serde_json = { workspace = true }

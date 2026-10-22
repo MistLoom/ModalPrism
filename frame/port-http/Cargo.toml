@@ -1,0 +1,17 @@
+[package]
+name = "frame-port-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "框架 HTTP(S) 端口"
+
+[dependencies]
+async-trait = { workspace = true }
+axum = { workspace = true }
+frame-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
