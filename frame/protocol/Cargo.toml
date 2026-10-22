@@ -1,0 +1,22 @@
+[package]
+name = "ai-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "AI 协议抽象：OpenAI 兼容消息/工具调用类型与客户端门面"
+
+[features]
+default = []
+# 可选：对接 OpenAI 兼容 HTTP 端点
+http = ["dep:reqwest"]
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

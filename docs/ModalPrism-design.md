@@ -1004,18 +1004,18 @@ pipeline:
 
 ### 11.1 LEAF 概览
 
-[LEAF](https://github.com/MistLoom/LEAF) 是以 Rust 构建的 AI 能力层运行时。ModalPrism 钉死提交 `3dcd9c9d29a342ee9cb11411d96cbaf506269e46`。使用的概念如下：
+[LEAF](https://github.com/MistLoom/LEAF) 是以 Rust 构建的 AI 能力层运行时。ModalPrism 钉死提交 `ffabb6128ae6e006c6c3cee3a706532501f26219`，`frame/`、`SDK/`、`manual/` 与 `apps/ability-core` 随仓库提供。使用的概念如下：
 
 | 概念 | 内容 | 来源 |
 |---|---|---|
 | Ability | 实现具体能力，协议无关。每个 Ability 包以 `ability.yml` 声明 `framework_version`、`id`、`open`、`depends`（可带 alias 与 optional）、`stateful`、`config_schema`、`methods`（每个方法的 `input`/`output` 为 `type: object` 的 JSON Schema）、`events`、`factory` 与 `protocols` | [C1][C4][C7] |
 | Handler 与 Factory | Handler 模式下每个方法对应 `src/logic/<method>.rs`；Factory 模式（`factory: true`）由绑定期配置构造自定义 `Ability` 实例 | [C4] |
 | App | 场景应用，位于 `apps/<app>`，拥有 `apps/<app>/ability/<name>` 下的 Ability；决定加载哪些 Ability、绑定什么配置、暴露哪些协议端口 | [C1][C2] |
-| `common` 能力 | `common/ability/*` 下的通用能力，对入口应用开放，可被调用、监听与拦截 | [C2][C3] |
+| 共享能力 | `abilitys/<分类>/*` 下的通用能力，对入口应用开放，可被调用、监听与拦截 | [C2][C3] |
 | 可见性 | `open` 默认为 false，仅属主应用可调用；其他应用只能调用 `open: true` 的 Ability | [C2][C4] |
 | Gateway | 统一调用管道，所有调用的形式为 `instance + method + args`，`args` 为 JSON 值；Port 只依赖 Gateway | [C1][C2][C5] |
 | Port | 协议端口：`frame/port-cli`、`port-http`、`port-mcp`、`port-fun`、`port-grpc`。可声明的协议为 `tools`、`mcp`、`cli`、`grpc`、`http`、`fun`。该提交没有 Skill Port。`tools` 没有独立 Port | [C3][C8] |
-| `WorkspaceCatalog` | 扫描 `common/ability/*/ability.yml` 与 `apps/<app>/ability/*/ability.yml`，得到每个源的 `id`、属主应用、`open`、路径和 `linked`（当前二进制是否链入 Provider） | [C3][C9] |
+| `WorkspaceCatalog` | 扫描 `abilitys/<分类>/*/ability.yml` 与 `apps/<app>/ability/*/ability.yml`，得到每个源的 `id`、属主应用、`open`、路径和 `linked`（当前二进制是否链入 Provider） | [C3][C9] |
 | `AbilityExpose` | 以实例为单位控制加载、禁用与绑定期 `config`（`unknown`、`defaults`、`abilities.<id>.enabled/config`）；只裁剪 Port → Gateway，不授予跨应用调用 | [C2][C3] |
 | `AppBuilder` / `AppHandle` | `AppBuilder::new().app("<入口应用>").catalog(..).expose(..).bootstrap().await` 得到 `AppHandle`，提供 `gateway`、`host`、`expose`、`catalog` 与 `control()`；`AppHandle` 还提供 `apply_expose_delta` 与 `reload_all` | [C5][C10] |
 | 能力上下文 | Ability 只通过 `AbilityCtx` 接触引擎：`call`（按 depends 键调用）、`emit`（仅限声明为 emit 的事件）、`subscribe` / `handle`（订阅或登记事件处理）、`load` / `unload`、`local_get` / `local_set`；跨能力调用可使用对方的 typed client（如 `ctx.echo().run(args)`） | [C4][C11] |
@@ -1026,14 +1026,14 @@ pipeline:
 
 LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability crate；Ability 不按调用来自 MCP、CLI 或 LLM tools 分支；Expose 只裁剪 Port → Gateway；跨应用调用要求目标 `open: true`；协议身份属于声明与 Port。
 
-依赖边界：领域库不依赖 `frame-core`、`ability-core`、`ability-support` 与任一 port。Ability crate 只依赖 `ability-support`。钉死的工作区排除 `ability-sdk`。组合根依赖 `frame-core` 与 `ability-core`。采集进程使用 `frame-port-http`。只读进程使用 `frame-port-mcp`，stdio 上的工具名是 `instance.method`。
+依赖边界：领域库不依赖 `frame-core`、`ability-core`、`ability-support` 与任一 port。Ability crate 只依赖 `ability-support`。本仓库工作区排除 `ability-sdk`。组合根依赖 `frame-core` 与 `ability-core`。采集进程使用 `frame-port-http`。只读进程使用 `frame-port-mcp`，stdio 上的工具名是 `instance.method`。
 
 ### 11.2 映射
 
 | ModalPrism 元素 | LEAF 表达 | 依据 |
 |---|---|---|
 | ModalPrism 的模块（Strata 读、Strata 写、任务队列、调度、任务执行、健康、配置、出站治理、付费调用治理、各访问器、各适配器、识别器、抽象类型） | 各自实现为 Ability，方法契约在 `ability.yml` 中以 JSON Schema 声明 | Ability 协议无关，由 App 装配 [C1] |
-| 持有连接、进程或缓存的模块（Strata、出站治理、浏览器访问器等） | `factory: true`、`stateful: true`，绑定期参数由 `config_schema` 约束，经 `AbilityExpose` 的 `abilities.<id>.config` 传入 | `common/ability/store` 采用相同组合 [C6] |
+| 持有连接、进程或缓存的模块（Strata、出站治理、浏览器访问器等） | `factory: true`、`stateful: true`，绑定期参数由 `config_schema` 约束，经 `AbilityExpose` 的 `abilities.<id>.config` 传入 | `abilitys/storage/store` 采用相同组合 [C6] |
 | 无状态的模块（多数适配器） | Handler 模式 | [C4] |
 | 同一角色的模块 | 使用相同的方法 id 与输入、输出 schema，例如所有访问器提供相同的访问方法 | 调用方按实例 id 选择实现，`ctx.call` 以实例 id 或 depends 键寻址 [C11] |
 | 配置中的实现标识 | 解析为 Ability 实例 id；动态选择的访问器与适配器经 `ctx.call` 或 Gateway 以实例 id 调用；固定依赖在 `depends` 中声明并使用 typed client | [C4][C11] |
@@ -1055,7 +1055,7 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 
 | 事项 | 要求 |
 |---|---|
-| 工程接入方式 | Ability 放在本仓库 `ability/`。组合根在进程内 `install` 再 `load`。`WorkspaceCatalog::discover` 只扫描 LEAF 工作区的 `common/ability` 与 `apps/*/ability`，不承载本仓库的 Ability。LEAF 提交固定为 `3dcd9c9d29a342ee9cb11411d96cbaf506269e46`。领域库不依赖 `frame-core`、`ability-core` 与 port。Ability crate 只依赖 `ability-support`。组合根依赖 `frame-core` 与 `ability-core`。 |
+| 工程接入方式 | Ability 放在本仓库 `abilitys/<分类>/`（共享）与 `apps/<app>/ability/`（应用自有）。组合根在进程内 `install` 再 `load`。`WorkspaceCatalog::discover` 扫描本仓库根 `abilitys/` 与 `apps/*/ability`；这些目录不在 `frame/compose` 中声明特性，因此不生成链接项。LEAF 固定在提交 `ffabb6128ae6e006c6c3cee3a706532501f26219`。领域库不依赖 `frame-core`、`ability-core` 与 port。Ability crate 只依赖 `ability-support`。组合根依赖 `frame-core` 与 `ability-core`。 |
 | 二进制与大数据传递 | Gateway 的 `args` 为 JSON 值。原始部件与大文本以暂存引用传递。引用它的变更集可见之后才删除暂存文件。 |
 | 流式结果 | 访问器在一次调用中返回 `Vec<RawEnvelope>`。同一进程内传递，不经 Gateway 分帧。 |
 | 后台循环 | 调度节拍、任务执行、刷写、健康评估和配置监听由组合根驱动。进程收到中断或 `SIGTERM` 时调用 `Planner::shutdown`，释放租约。 |
@@ -1120,7 +1120,7 @@ LEAF 的架构约束 [C2]：Port 只依赖 Gateway，不直接调用 Ability cra
 | C3 | 清单、协议声明与 Expose | [`manual/catalog-and-expose.zh-CN.md`](https://github.com/MistLoom/LEAF/blob/main/manual/catalog-and-expose.zh-CN.md) |
 | C4 | 编写 Ability：包布局、Handler 与 Factory、可见性、跨能力调用 | [`manual/writing-abilities.zh-CN.md`](https://github.com/MistLoom/LEAF/blob/main/manual/writing-abilities.zh-CN.md) |
 | C5 | 快速开始：创建应用、调用、订阅事件 | [`manual/getting-started.zh-CN.md`](https://github.com/MistLoom/LEAF/blob/main/manual/getting-started.zh-CN.md) |
-| C6 | 有状态 Factory 能力的声明示例 | [`common/ability/store/ability.yml`](https://github.com/MistLoom/LEAF/blob/main/common/ability/store/ability.yml) |
+| C6 | 有状态 Factory 能力的声明示例 | [`abilitys/storage/store/ability.yml`](https://github.com/MistLoom/LEAF/blob/main/abilitys/storage/store/ability.yml) |
 | C7 | `ability.yml` 的声明结构 | [`frame/support/src/decl/ability.rs`](https://github.com/MistLoom/LEAF/blob/main/frame/support/src/decl/ability.rs) |
 | C8 | 工作区成员与 Port crate | [`Cargo.toml`](https://github.com/MistLoom/LEAF/blob/main/Cargo.toml) |
 | C9 | `WorkspaceCatalog` 的发现规则 | [`frame/compose/src/catalog.rs`](https://github.com/MistLoom/LEAF/blob/main/frame/compose/src/catalog.rs) |

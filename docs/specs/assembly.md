@@ -78,7 +78,7 @@ LEAF 的 CLI Port 会解析自己的子命令。本进程的参数由上面的�
 
 ## Ability
 
-每个 Ability 一个 crate，声明在 `ability.yml`。Host 使用 Rust 里的 Manifest。不运行 LEAF codegen，不放置协议 `info.yml`。
+每个 Ability 一个 crate，声明在 `ability.yml`。Host 使用 Rust 里的 Manifest。不运行 LEAF codegen；`type_article`、`type_hotlist` 在能力包内放置 `mcp/`、`tools/` 投影声明。
 
 `stateful: true`：`strata_read`、`strata_write`、`strata_queue`、`committer`、`planner`、`runner`、`health`、`config`、`egress`、`paid_gateway`。
 

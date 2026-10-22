@@ -273,9 +273,13 @@ async fn standard_preset_redacts_headers_before_they_reach_staging() {
         "#!/bin/sh\ncat <<'EOF'\n{\"final_url\":\"http://127.0.0.1/page\",\"status\":200,\"headers\":[[\"Content-Type\",\"text/html\"],[\"Set-Cookie\",\"secret\"]],\"html\":\"<p>ok</p>\",\"version\":\"fixture\"}\nEOF\n",
     )
     .unwrap();
-    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(&script, permissions).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+    }
     let services = Services::open(data.path(), config.path(), binds())
         .await
         .unwrap();

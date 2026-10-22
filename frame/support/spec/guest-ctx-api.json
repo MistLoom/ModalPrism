@@ -1,0 +1,24 @@
+{
+  "description": "Guest SDK 须暴露的 ctx 方法与 CtxOp 映射（薄转发，无内核逻辑）",
+  "methods": [
+    { "method": "call", "op": "call" },
+    { "method": "dep", "op": "dep" },
+    { "method": "catalog", "op": "catalog" },
+    { "method": "localGet", "op": "local_get", "python": "local_get" },
+    { "method": "localSet", "op": "local_set", "python": "local_set" },
+    { "method": "emit", "op": "emit" },
+    { "method": "load", "op": "load" },
+    { "method": "unload", "op": "unload" },
+    { "method": "subscribe", "op": "subscribe" },
+    { "method": "handle", "op": "handle" },
+    { "method": "share", "op": "share" },
+    { "method": "retain" },
+    { "method": "withProtocolFilter", "python": "with_protocol_filter" },
+    { "method": "registerAspect", "python": "register_aspect" },
+    { "method": "chainStatus", "op": "chain_status", "python": "chain_status" },
+    { "method": "feedback", "op": "feedback" },
+    { "method": "pushEffect", "op": "push_effect", "python": "push_effect" },
+    { "method": "ctxOp", "op": "*", "python": "ctx_op", "internal": true }
+  ],
+  "forbidden_on_guest": ["registerAspect", "register_aspect"]
+}

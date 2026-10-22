@@ -1,0 +1,11 @@
+[package]
+name = "frame-port-fun"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "框架 Fun 端口：程序内公开函数调用门面"
+
+[dependencies]
+frame-core = { workspace = true }
+serde_json = { workspace = true }

@@ -6,6 +6,8 @@
 
 ```text
 cargo build --workspace
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core
+cargo clippy --workspace --all-targets --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core -- -D warnings
 ```
+
+`frame/`、`SDK/` 与 `apps/ability-core` 是随仓库提供的 LEAF 框架代码。测试与 clippy 门禁只覆盖本项目 crate，框架按上游状态构建。

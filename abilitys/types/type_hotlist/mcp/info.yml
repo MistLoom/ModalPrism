@@ -1,0 +1,8 @@
+framework_version: "1"
+tools:
+  - method: project
+    name: type_hotlist.project
+    description: 投影一期热榜
+  - method: on_commit
+    name: type_hotlist.on_commit
+    description: 返回名次差与保留份数的变更集

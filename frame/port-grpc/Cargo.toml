@@ -1,0 +1,22 @@
+[package]
+name = "frame-port-grpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "gRPC 端口：将 RPC 映射为统一调用信封"
+
+[dependencies]
+async-trait.workspace = true
+frame-core.workspace = true
+ability-support.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tonic = "0.12"
+prost = "0.13"
+tracing.workspace = true
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"

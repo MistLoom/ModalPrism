@@ -76,7 +76,7 @@ async fn read_opened(root: Option<&Path>, path: &Path) -> Result<Vec<u8>, Access
         .map_err(|_| permanent("not-found"))?;
     if let Some(root) = root {
         let root = std::fs::canonicalize(root).map_err(|_| permanent("not-found"))?;
-        let opened = fd_path(&file)?;
+        let opened = opened_path(&file, path).await?;
         if !opened.starts_with(&root) {
             return Err(permanent("not-found"));
         }
@@ -88,10 +88,29 @@ async fn read_opened(root: Option<&Path>, path: &Path) -> Result<Vec<u8>, Access
     Ok(bytes)
 }
 
-fn fd_path(file: &tokio::fs::File) -> Result<PathBuf, AccessError> {
+#[cfg(unix)]
+async fn opened_path(file: &tokio::fs::File, _path: &Path) -> Result<PathBuf, AccessError> {
     use std::os::unix::io::AsRawFd;
     let fd = file.as_raw_fd();
     std::fs::canonicalize(format!("/proc/self/fd/{fd}")).map_err(|_| permanent("not-found"))
+}
+
+#[cfg(windows)]
+async fn opened_path(file: &tokio::fs::File, path: &Path) -> Result<PathBuf, AccessError> {
+    // Windows 没有 /proc：以打开句柄的文件身份与规范化路径比对，拒绝 locate 之后被替换的链接。
+    let cloned = file
+        .try_clone()
+        .await
+        .map_err(|_| permanent("not-found"))?
+        .into_std()
+        .await;
+    let opened = same_file::Handle::from_file(cloned).map_err(|_| permanent("not-found"))?;
+    let canon = std::fs::canonicalize(path).map_err(|_| permanent("not-found"))?;
+    let expected = same_file::Handle::from_path(&canon).map_err(|_| permanent("not-found"))?;
+    if opened != expected {
+        return Err(permanent("not-found"));
+    }
+    Ok(canon)
 }
 
 #[async_trait]
@@ -164,7 +183,7 @@ fn caps() -> AccessorCapabilities {
 
 static CAPS: std::sync::LazyLock<AccessorCapabilities> = std::sync::LazyLock::new(caps);
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::{locate, read_opened};
 

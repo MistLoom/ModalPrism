@@ -1,0 +1,25 @@
+framework_version: "node@1"
+id: probe.surface
+open: false
+protocols: [fun]
+depends: []
+stateful: true
+methods:
+  - id: lanes
+    description: 四种事件模式
+    input:
+      type: object
+  - id: filter
+    description: with_protocol_filter 仍是同一 ctx
+    input:
+      type: object
+  - id: aspect
+    description: register_aspect 失败
+    input:
+      type: object
+events:
+  - name: lane
+    dir: emit
+    description: lane
+    payload_schema:
+      type: object

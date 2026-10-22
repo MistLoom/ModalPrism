@@ -1,0 +1,25 @@
+[package]
+name = "ability-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ability 运行引擎"
+
+[lib]
+name = "ability_core"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+ability-support = { workspace = true }
+frame-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+ability-probe = { path = "../../external/ability-probe" }
+ability-sdk = { path = "../../SDK/ability-sdk" }

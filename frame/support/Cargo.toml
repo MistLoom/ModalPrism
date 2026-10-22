@@ -1,0 +1,17 @@
+[package]
+name = "ability-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "能力契约：Manifest / Ctx / 生命周期 / 跨能力调用。不是业务 Ability"
+
+[dependencies]
+ability-support-macros.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+serde_yaml.workspace = true
+encoding_rs = { workspace = true }

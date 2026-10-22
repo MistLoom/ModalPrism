@@ -101,7 +101,7 @@ modalprism-agent [--data DIR] [--config DIR]
 
 `AccessKind::Tools` 在该 LEAF 提交里没有 Port，只作为运行时门控。上面五个实例登记 `fun`、`mcp`、`tools`。交给 MCP Port 的目录把每个方法展开成一个实例，实例 id 是 `instance.method`，工具名与之相同。只读方法的 `readOnlyHint` 为 true。`strata_read`、`health`、`config_inspect`、`type_article`、`type_hotlist` 的已登记方法都是只读，返回查询结果或变更集，不调用 `apply`。进程内调用仍使用原来的实例 id 和方法名。
 
-该提交没有 Skill Port。本进程不放置 `info.yml`，不运行 codegen，不另开 Skill 监听。
+该提交没有 Skill Port。本进程不运行 codegen，不另开 Skill 监听；`type_article`、`type_hotlist` 的 `mcp/`、`tools/` 投影声明放在能力包内。
 
 不打开 HTTP Port，也不打开 CLI Port。
 
