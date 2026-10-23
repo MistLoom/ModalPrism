@@ -9,10 +9,20 @@ use modalprism_collector::boot;
 
 #[tokio::main]
 async fn main() {
+    init_log();
     if let Err(error) = run().await {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+fn init_log() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 async fn run() -> Result<(), assembly::Error> {

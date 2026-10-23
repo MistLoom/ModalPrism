@@ -1,0 +1,12 @@
+framework_version: "1"
+id: health_check
+open: true
+protocols: [fun, http]
+depends: []
+stateful: true
+description: 记录信源健康
+methods:
+  - id: evaluate
+    description: 把健康写入存储
+    input:
+      type: object

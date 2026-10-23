@@ -1,0 +1,19 @@
+[package]
+name = "modalprism-console"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "采集系统的控制台。同源聚合采集进程的运维面，并托管前端。"
+
+[dependencies]
+axum.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+surface = { path = "../modalprism-domain/surface" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tower-http = { workspace = true, features = ["cors", "trace"] }

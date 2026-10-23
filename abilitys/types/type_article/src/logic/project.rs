@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use types::ReadRoot;
+use types::ReadCtx;
 
 pub async fn run(
-    root: Arc<ReadRoot>,
+    ctx: Arc<dyn ReadCtx>,
     args: serde_json::Value,
 ) -> ability_support::Result<serde_json::Value> {
-    crate::map(root.call("type_article.project", args).await)
+    crate::map(types::read::call(ctx.as_ref(), "type_article.project", args).await)
 }

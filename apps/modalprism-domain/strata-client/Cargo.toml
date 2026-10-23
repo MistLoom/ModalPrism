@@ -1,0 +1,36 @@
+[package]
+name = "strata-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Strata 的进程内入口"
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+serde_json.workspace = true
+strata-model = { path = "../strata-model" }
+strata-gateway = { path = "../strata-gateway" }
+thiserror.workspace = true
+tokio.workspace = true
+
+[features]
+# 本地一键启动默认走外部 RustFS 发行包：不用编译 rustfs，也不用外部服务。
+default = ["rustfs-bin"]
+# 透传数据层后端：PostgreSQL（pgvector 可选）、S3/RustFS Blob。
+postgres = ["strata-gateway/postgres"]
+s3 = ["strata-gateway/s3"]
+# 外部 RustFS 二进制。开启后未写 `blob_backend` 时默认落到它。
+rustfs-bin = ["strata-gateway/rustfs-bin"]
+# 进程内 RustFS。开启后未写 `blob_backend` 时默认落到嵌入式 S3。
+embedded-s3 = ["strata-gateway/embedded-s3"]
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 framework_version: "1"
 id: strata_write
-open: true
+open: false
 protocols: [fun]
 depends: []
 stateful: true

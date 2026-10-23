@@ -3,7 +3,7 @@
 mod common;
 
 use ability_core::AbilityHost;
-use common::fixture::{install_guest_subprocess};
+use common::fixture::install_guest_subprocess;
 use common::guest_conformance::{
     assert_event_lanes, assert_probe_invoke_emit_unload, assert_protocol_filter_retains,
     assert_register_aspect_fails,

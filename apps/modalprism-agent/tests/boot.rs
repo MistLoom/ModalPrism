@@ -22,7 +22,7 @@ fn config_dir(dir: &Path) {
     write(
         dir,
         "system.yaml",
-        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\n",
+        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  gateway:\n    blob_backend: dir\n",
     );
 }
 
@@ -47,8 +47,9 @@ async fn boot_exposes_only_the_read_surface() {
     let config = tempfile::tempdir().unwrap();
     config_dir(config.path());
     let running = boot(data.path(), config.path()).await.unwrap();
-    assert!(data.path().join("control.db").is_file());
-    assert!(data.path().join("lance").is_dir());
+    assert!(data.path().join("gateway.db").is_file());
+    // 测试固定用本地目录后端，不下载 RustFS 发行包。
+    assert!(data.path().join("blobs").is_dir());
     assert!(data.path().join("staging").is_dir());
 
     let mut ids: Vec<_> = running

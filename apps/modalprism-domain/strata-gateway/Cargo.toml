@@ -1,0 +1,67 @@
+[package]
+name = "strata-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Strata 数据读写层：统一存储接口、Blob 层、声明式派生与类型化查询"
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+hmac = { workspace = true, optional = true }
+humantime-serde.workspace = true
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+strata-model = { path = "../strata-model" }
+strata-sqlite-vec = { path = "../strata-sqlite-vec", optional = true }
+thiserror.workspace = true
+time = { workspace = true, optional = true }
+tokio.workspace = true
+ulid.workspace = true
+zip = { workspace = true, optional = true }
+
+[dependencies.object_store]
+version = "0.14"
+optional = true
+default-features = false
+features = ["aws"]
+
+# 进程内 RustFS。默认不编译：这一支带 136 个传递依赖，构建还需要 protoc。
+[dependencies.rustfs]
+version = "1.0.1"
+optional = true
+default-features = false
+
+# 启动后建桶。与 rustfs 共用同一份依赖，不额外编译；
+# HTTP 客户端显式声明，避免只靠 rustfs 传递开启。
+[dependencies.aws-sdk-s3]
+version = "1.151"
+optional = true
+default-features = false
+features = ["rt-tokio", "default-https-client"]
+
+[features]
+# 本地一键启动默认带 sqlite-vec：SQLite 打开连接前自动注册，向量检索走 C 实现。
+# rustfs-bin 是默认 Blob 后端：下载官方发行包并按子进程托管，免去编译 rustfs。
+default = ["sqlite-vec", "rustfs-bin"]
+sqlite-vec = ["dep:strata-sqlite-vec"]
+# PostgreSQL 后端（pgvector 可选）。未开启时只编译 SQLite 后端。
+postgres = ["sqlx/postgres"]
+# S3/RustFS Blob 后端。
+s3 = ["dep:object_store"]
+# 外部 RustFS 二进制：自动下载、SHA256 校验、子进程启停。默认开启。
+rustfs-bin = ["dep:object_store", "dep:reqwest", "dep:zip", "dep:hmac", "dep:time"]
+# 进程内 RustFS：`blob_backend: embedded` 时不需要外部进程，但要编译 rustfs。
+embedded-s3 = ["dep:object_store", "dep:rustfs", "dep:aws-sdk-s3"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

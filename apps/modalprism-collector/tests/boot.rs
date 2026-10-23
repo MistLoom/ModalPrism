@@ -31,7 +31,7 @@ fn config_dir(dir: &Path) {
     write(
         dir,
         "system.yaml",
-        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\n",
+        "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  gateway:\n    blob_backend: dir\n",
     );
 }
 
@@ -51,9 +51,15 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
     )
     .await
     .unwrap();
-    assert!(data.path().join("control.db").is_file());
-    assert!(data.path().join("lance").is_dir());
+    assert!(data.path().join("gateway.db").is_file());
     assert!(data.path().join("staging").is_dir());
+    // 测试固定用本地目录后端，不下载 RustFS 发行包。
+    assert!(data.path().join("blobs").is_dir());
+    // 本地一键启动默认带 sqlite-vec，向量检索不走全表扫描。
+    assert!(
+        running.services().strata().vector_accelerated(),
+        "sqlite-vec 没有注册"
+    );
 
     let response = running
         .host()

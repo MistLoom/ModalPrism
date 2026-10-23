@@ -1,0 +1,12 @@
+framework_version: "1"
+id: accessor_probe
+open: true
+protocols: [fun]
+depends: []
+stateful: false
+description: 按实现名校验 accessor 配置
+methods:
+  - id: validate
+    description: 用 implementation 与 spec 校验一份 accessor 配置
+    input:
+      type: object

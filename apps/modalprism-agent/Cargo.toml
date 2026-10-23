@@ -11,16 +11,22 @@ publish = false
 ability-core.workspace = true
 ability-support.workspace = true
 async-trait.workspace = true
+config_inspect = { path = "../../abilitys/data/config_inspect" }
 frame-core.workspace = true
 frame-port-mcp.workspace = true
+health = { path = "../../abilitys/ops/health" }
 serde_json.workspace = true
+strata_read = { path = "../../abilitys/data/strata_read" }
+surface = { path = "../modalprism-domain/surface" }
 tokio.workspace = true
 type_article = { path = "../../abilitys/types/type_article" }
 type_hotlist = { path = "../../abilitys/types/type_hotlist" }
-types = { path = "../../crates/types" }
+types = { path = "../modalprism-domain/types" }
 
 [dev-dependencies]
-config = { path = "../../crates/config" }
+config = { path = "../modalprism-domain/config" }
+serde.workspace = true
+serde_yaml.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 

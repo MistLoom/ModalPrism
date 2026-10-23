@@ -6,5 +6,6 @@ pub async fn run(
     services: Arc<assembly::Services>,
     args: serde_json::Value,
 ) -> ability_support::Result<serde_json::Value> {
-    crate::map(services.call("paid_gateway.complete", args).await)
+    let receipt = crate::text(&args, "receiptId")?;
+    crate::unit(services.paid_complete(&receipt).await)
 }

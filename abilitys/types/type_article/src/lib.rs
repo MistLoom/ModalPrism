@@ -1,23 +1,23 @@
-//! 文章投影的 Ability。调用落在 `types::ReadRoot` 上。
+//! 文章投影的 Ability。调用落在 `types::read` 上。
 
 mod logic;
 
 use std::sync::Arc;
 
 use ability_support::{AbilityProvider, AbilitySpec};
-use types::ReadRoot;
+use types::ReadCtx;
 
-pub fn provider(root: Arc<ReadRoot>) -> Arc<dyn AbilityProvider> {
+pub fn provider(ctx: Arc<dyn ReadCtx>) -> Arc<dyn AbilityProvider> {
     let mut spec = AbilitySpec::must("type_article");
     spec = spec.on(
         "project",
         "投影一篇文章",
         serde_json::json!({"type": "object"}),
         {
-            let root = Arc::clone(&root);
+            let ctx = Arc::clone(&ctx);
             move |_ctx, args| {
-                let root = Arc::clone(&root);
-                ability_support::box_fut(logic::project::run(root, args))
+                let ctx = Arc::clone(&ctx);
+                ability_support::box_fut(logic::project::run(ctx, args))
             }
         },
     );
@@ -26,10 +26,10 @@ pub fn provider(root: Arc<ReadRoot>) -> Arc<dyn AbilityProvider> {
         "文章不产出变更集",
         serde_json::json!({"type": "object"}),
         {
-            let root = Arc::clone(&root);
+            let ctx = Arc::clone(&ctx);
             move |_ctx, args| {
-                let root = Arc::clone(&root);
-                ability_support::box_fut(logic::on_commit::run(root, args))
+                let ctx = Arc::clone(&ctx);
+                ability_support::box_fut(logic::on_commit::run(ctx, args))
             }
         },
     );

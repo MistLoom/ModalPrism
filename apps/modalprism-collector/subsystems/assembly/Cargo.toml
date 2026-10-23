@@ -1,0 +1,45 @@
+[package]
+name = "assembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "采集进程的存储、配置、调度和监听装配"
+publish = false
+
+[dependencies]
+accessors = { path = "../accessors" }
+accessors-builtin = { path = "../accessors-builtin" }
+adapters = { path = "../adapters" }
+async-trait.workspace = true
+bytes.workspace = true
+config = { path = "../../../modalprism-domain/config" }
+egress = { path = "../egress" }
+paid = { path = "../paid" }
+planner = { path = "../planner" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-client = { path = "../../../modalprism-domain/strata-client" }
+strata-model = { path = "../../../modalprism-domain/strata-model" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+types = { path = "../../../modalprism-domain/types" }
+url.workspace = true
+
+[features]
+# 本地一键启动默认走外部 RustFS 发行包，不用编译 rustfs。
+default = ["rustfs-bin"]
+# 透传数据层后端，供组合根一键启动选择。
+postgres = ["strata-client/postgres"]
+s3 = ["strata-client/s3"]
+rustfs-bin = ["strata-client/rustfs-bin"]
+embedded-s3 = ["strata-client/embedded-s3"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
