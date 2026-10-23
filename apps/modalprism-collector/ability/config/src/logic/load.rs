@@ -4,7 +4,11 @@ use std::sync::Arc;
 
 pub async fn run(
     services: Arc<assembly::Services>,
-    args: serde_json::Value,
+    _args: serde_json::Value,
 ) -> ability_support::Result<serde_json::Value> {
-    crate::map(services.call("config.load", args).await)
+    crate::map(
+        services
+            .config_reload()
+            .map(|generation| serde_json::json!({ "generation": generation })),
+    )
 }

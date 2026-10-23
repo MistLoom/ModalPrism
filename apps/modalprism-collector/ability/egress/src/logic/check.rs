@@ -6,5 +6,6 @@ pub async fn run(
     services: Arc<assembly::Services>,
     args: serde_json::Value,
 ) -> ability_support::Result<serde_json::Value> {
-    crate::map(services.call("egress.check", args).await)
+    let url = crate::text(&args, "url")?;
+    crate::map(services.egress_check(&url).await)
 }

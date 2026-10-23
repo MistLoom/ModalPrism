@@ -1,6 +1,6 @@
 framework_version: "1"
 id: strata_queue
-open: true
+open: false
 protocols: [fun]
 depends: []
 stateful: true
@@ -20,5 +20,13 @@ methods:
       type: object
   - id: nack
     description: 退回任务
+    input:
+      type: object
+  - id: list
+    description: 按队列与状态列出任务
+    input:
+      type: object
+  - id: retry
+    description: 把失败的任务重新排入队列
     input:
       type: object

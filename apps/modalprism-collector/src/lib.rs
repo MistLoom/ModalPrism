@@ -1,5 +1,7 @@
 //! 采集进程。组合根直接链接 Ability，并持有调度、发布和健康循环。
 
+pub mod ops;
+
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -9,14 +11,10 @@ use std::time::Duration;
 use ability_core::AbilityHost;
 use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
 use assembly::{Binds, Services, policy_of};
-use async_trait::async_trait;
-use frame_core::{AccessKind, CatalogEntry, Gateway, InvokeRequest, InvokeResponse};
-use frame_port_http::HttpPort;
+use frame_core::{AccessKind, Gateway, InvokeRequest};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-
-const OPS: &[&str] = &["strata_read", "planner", "health"];
 
 pub struct Running {
     services: Arc<Services>,
@@ -88,9 +86,7 @@ pub async fn boot(
         .map_err(|source| assembly::Error::with_source("监听", source))?;
     let http = reserved_http(http_addr).await?;
     let host = link(Arc::clone(&services)).await?;
-    let gateway: Arc<dyn Gateway> = Arc::new(OpsGateway {
-        inner: Arc::clone(&host),
-    });
+    let gateway = ops::gateway(Arc::clone(&host));
     let stop = Arc::new(AtomicBool::new(false));
     let mut tasks = Vec::new();
     let proxy_gateway = services.egress_gateway();
@@ -105,11 +101,26 @@ pub async fn boot(
     tasks.push(tokio::spawn(async move {
         assembly::serve_push(push_services, push_listener).await;
     }));
-    let http_gateway = Arc::clone(&gateway);
+    let http_gateway = Arc::clone(&host);
     tasks.push(tokio::spawn(async move {
-        serve_ops(http, http_gateway).await;
+        ops::serve(http, http_gateway).await;
     }));
     wait_http(http).await?;
+    let (metadata, blobs) = services.strata().backend_names();
+    let upstream = services
+        .upstream_proxy()
+        .map(|route| route.display())
+        .unwrap_or_else(|| "direct".into());
+    println!(
+        "modalprism: data={} metadata={metadata} blobs={blobs} vectors={} http=http://{http} proxy=http://{proxy} push=http://{push} upstream={upstream} mode={}",
+        services.data_dir().display(),
+        if services.strata().vector_accelerated() {
+            "sqlite-vec"
+        } else {
+            "scan"
+        },
+        services.proxy_setting().label(),
+    );
     tasks.extend(spawn_loops(
         Arc::clone(&host),
         Arc::clone(&services),
@@ -159,6 +170,7 @@ async fn wait_http(addr: SocketAddr) -> Result<(), assembly::Error> {
 async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
+    let read: Arc<dyn types::ReadCtx> = Arc::clone(&services) as Arc<dyn types::ReadCtx>;
     let providers: Vec<(
         &str,
         std::sync::Arc<dyn ability_support::AbilityProvider>,
@@ -166,7 +178,7 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
     )> = vec![
         (
             "strata_read",
-            strata_read::provider(Arc::clone(&services)),
+            strata_read::provider(Arc::clone(&read)),
             true,
         ),
         (
@@ -190,7 +202,12 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
             true,
         ),
         ("runner", runner::provider(Arc::clone(&services)), false),
-        ("health", health::provider(Arc::clone(&services)), true),
+        ("health", health::provider(Arc::clone(&read)), true),
+        (
+            "health_check",
+            health_check::provider(Arc::clone(&services)),
+            false,
+        ),
         (
             "config",
             ability_config::provider(Arc::clone(&services)),
@@ -198,7 +215,7 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
         ),
         (
             "config_inspect",
-            config_inspect::provider(Arc::clone(&services)),
+            config_inspect::provider(Arc::clone(&read)),
             false,
         ),
         (
@@ -212,43 +229,8 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
             false,
         ),
         (
-            "accessor_http",
-            accessor_http::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "accessor_rss",
-            accessor_rss::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "accessor_api",
-            accessor_api::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "accessor_paid_api",
-            accessor_paid_api::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "accessor_search",
-            accessor_search::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "accessor_push",
-            accessor_push::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "accessor_file",
-            accessor_file::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "accessor_browser",
-            accessor_browser::provider(Arc::clone(&services)),
+            "accessor_probe",
+            accessor_probe::provider(Arc::clone(&services)),
             false,
         ),
     ];
@@ -286,17 +268,26 @@ fn spawn_loops(
             if stop_tick.load(Ordering::Relaxed) {
                 break;
             }
-            let Ok(value) = invoke(&host_tick, "planner", "tick", json!({})).await else {
-                continue;
+            let value = match invoke(&host_tick, "planner", "tick", json!({})).await {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(error = %error, "调度 tick 失败");
+                    continue;
+                }
             };
             let Some(tasks) = value.as_array() else {
                 continue;
             };
+            tracing::debug!(tasks = tasks.len(), "调度派发");
             for task in tasks {
-                let Ok(value) = invoke(&host_tick, "runner", "run_task", json!({ "task": task })).await
-                else {
-                    continue;
-                };
+                let value =
+                    match invoke(&host_tick, "runner", "run_task", json!({ "task": task })).await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "任务执行失败");
+                            continue;
+                        }
+                    };
                 let Some(follows) = value.get("follows").and_then(Value::as_array) else {
                     continue;
                 };
@@ -305,13 +296,8 @@ fn spawn_loops(
                 }
                 let _ = invoke(&host_tick, "committer", "flush", json!({})).await;
                 for follow in follows {
-                    let _ = invoke(
-                        &host_tick,
-                        "runner",
-                        "run_task",
-                        json!({ "task": follow }),
-                    )
-                    .await;
+                    let _ =
+                        invoke(&host_tick, "runner", "run_task", json!({ "task": follow })).await;
                 }
             }
         }
@@ -326,8 +312,12 @@ fn spawn_loops(
             if stop_flush.load(Ordering::Relaxed) {
                 break;
             }
-            let Ok(value) = invoke(&host_flush, "committer", "flush", json!({})).await else {
-                continue;
+            let value = match invoke(&host_flush, "committer", "flush", json!({})).await {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(error = %error, "提交失败");
+                    continue;
+                }
             };
             if value.get("snapshot").is_some_and(|item| !item.is_null()) {
                 let _ = apply_hotlist(&services_flush).await;
@@ -342,7 +332,9 @@ fn spawn_loops(
             if stop_health.load(Ordering::Relaxed) {
                 break;
             }
-            let _ = invoke(&host, "health", "evaluate", json!({})).await;
+            if let Err(error) = invoke(&host, "health_check", "evaluate", json!({})).await {
+                tracing::warn!(error = %error, "健康评估失败");
+            }
         }
     });
     vec![tick, flush, health]
@@ -369,50 +361,6 @@ pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {
     Ok(true)
 }
 
-async fn serve_ops(addr: SocketAddr, gateway: Arc<dyn Gateway>) {
-    let app = HttpPort::router(gateway).layer(axum::middleware::map_response(strip_cors));
-    let Ok(listener) = TcpListener::bind(addr).await else {
-        return;
-    };
-    let _ = axum::serve(listener, app).await;
-}
-
-async fn strip_cors(mut response: axum::response::Response) -> axum::response::Response {
-    let names: Vec<_> = response
-        .headers()
-        .keys()
-        .filter(|name| name.as_str().starts_with("access-control-"))
-        .cloned()
-        .collect();
-    for name in names {
-        response.headers_mut().remove(name);
-    }
-    let vary = response
-        .headers()
-        .get("vary")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    if let Some(vary) = vary {
-        let kept: Vec<_> = vary
-            .split(',')
-            .map(str::trim)
-            .filter(|token| !token.is_empty() && !cors_vary(token))
-            .collect();
-        if kept.is_empty() {
-            response.headers_mut().remove("vary");
-        } else if let Ok(value) = kept.join(", ").parse() {
-            response.headers_mut().insert("vary", value);
-        }
-    }
-    response
-}
-
-fn cors_vary(token: &str) -> bool {
-    token.eq_ignore_ascii_case("origin")
-        || token.eq_ignore_ascii_case("access-control-request-method")
-        || token.eq_ignore_ascii_case("access-control-request-headers")
-}
-
 async fn invoke(
     host: &AbilityHost,
     instance: &str,
@@ -427,33 +375,4 @@ async fn invoke(
         .invoke(InvokeRequest::new(instance, method, args))
         .await?;
     Ok(response.data)
-}
-
-struct OpsGateway {
-    inner: Arc<AbilityHost>,
-}
-
-#[async_trait]
-impl Gateway for OpsGateway {
-    async fn invoke(&self, request: InvokeRequest) -> ability_support::Result<InvokeResponse> {
-        if !OPS.contains(&request.instance.as_str()) {
-            return Err(ability_support::Error::unavailable("实例未开放"));
-        }
-        self.inner.invoke(request).await
-    }
-
-    fn catalog(&self) -> Vec<CatalogEntry> {
-        self.inner
-            .catalog()
-            .into_iter()
-            .filter(|entry| OPS.contains(&entry.instance.as_str()))
-            .collect()
-    }
-
-    fn get_entry(&self, instance: &InstanceId, method: &MethodId) -> Option<CatalogEntry> {
-        if !OPS.contains(&instance.as_str()) {
-            return None;
-        }
-        self.inner.get_entry(instance, method)
-    }
 }

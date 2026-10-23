@@ -18,3 +18,7 @@ methods:
     description: 读取信源的下一次时间
     input:
       type: object
+  - id: status
+    description: 列出所有信源的调度与健康状态
+    input:
+      type: object

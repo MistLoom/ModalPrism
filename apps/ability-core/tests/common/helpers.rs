@@ -11,11 +11,7 @@ pub fn manifest(id: &str, methods: &[&str]) -> AbilityManifest {
     manifest_with_events(id, methods, &[])
 }
 
-pub fn manifest_with_events(
-    id: &str,
-    methods: &[&str],
-    events: &[EventDecl],
-) -> AbilityManifest {
+pub fn manifest_with_events(id: &str, methods: &[&str], events: &[EventDecl]) -> AbilityManifest {
     AbilityManifest {
         id: ability_support::AbilityId::new(id).expect("ability id"),
         depends: vec![],
@@ -32,7 +28,8 @@ pub fn manifest_with_events(
 /// 回显 `run`：返回入参 JSON。
 pub fn echo_provider(id: &str) -> Arc<dyn AbilityProvider> {
     let m = manifest(id, &["run"]);
-    Arc::new(StaticProvider::new(Arc::new(FnAbility::new(m, |a| async move {
-        Ok(a)
-    }))))
+    Arc::new(StaticProvider::new(Arc::new(FnAbility::new(
+        m,
+        |a| async move { Ok(a) },
+    ))))
 }

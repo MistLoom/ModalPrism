@@ -4,7 +4,12 @@ use std::sync::Arc;
 
 pub async fn run(
     services: Arc<assembly::Services>,
-    args: serde_json::Value,
+    _args: serde_json::Value,
 ) -> ability_support::Result<serde_json::Value> {
-    crate::map(services.call("committer.flush", args).await)
+    crate::map(
+        services
+            .committer_flush()
+            .await
+            .map(|snapshot| serde_json::json!({ "snapshot": snapshot })),
+    )
 }

@@ -1,0 +1,13 @@
+[package]
+name = "surface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "各应用的治理清单：能力、方法与只读标记的唯一来源"
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

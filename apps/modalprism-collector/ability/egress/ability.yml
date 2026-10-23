@@ -14,3 +14,11 @@ methods:
     description: 返回正向代理地址
     input:
       type: object
+  - id: report
+    description: 导出出站拦截统计
+    input:
+      type: object
+  - id: reset
+    description: 清零指定主机的拦截计数
+    input:
+      type: object

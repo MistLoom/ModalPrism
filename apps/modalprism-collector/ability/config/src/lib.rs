@@ -35,14 +35,18 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
     spec.into_provider()
 }
 
-fn map(
-    result: Result<serde_json::Value, assembly::Error>,
+/// 装配错误到能力错误的唯一映射。
+fn failure(error: assembly::Error) -> ability_support::Error {
+    if assembly::invalid_input(&error.message) {
+        ability_support::Error::invalid_args(error.message)
+    } else {
+        ability_support::Error::failed(error.to_string())
+    }
+}
+
+fn map<T: serde::Serialize>(
+    result: Result<T, assembly::Error>,
 ) -> ability_support::Result<serde_json::Value> {
-    result.map_err(|error| {
-        if assembly::invalid_input(&error.message) {
-            ability_support::Error::invalid_args(error.message)
-        } else {
-            ability_support::Error::failed(error.to_string())
-        }
-    })
+    let value = result.map_err(failure)?;
+    serde_json::to_value(value).map_err(|error| ability_support::Error::failed(error.to_string()))
 }

@@ -10,15 +10,11 @@ methods:
     description: 发布已接受的变更
     input:
       type: object
-  - id: maintain
-    description: 恢复存储并返回目录
-    input:
-      type: object
   - id: recover
     description: 恢复存储
     input:
       type: object
   - id: status
-    description: 返回控制库、Lance 和暂存区路径
+    description: 返回控制库、Blob 和暂存区路径
     input:
       type: object

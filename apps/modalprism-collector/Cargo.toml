@@ -10,39 +10,48 @@ publish = false
 [dependencies]
 ability-core.workspace = true
 ability-support.workspace = true
-accessor_api = { path = "ability/accessor_api" }
-accessor_browser = { path = "ability/accessor_browser" }
-accessor_file = { path = "ability/accessor_file" }
-accessor_http = { path = "ability/accessor_http" }
-accessor_paid_api = { path = "ability/accessor_paid_api" }
-accessor_push = { path = "ability/accessor_push" }
-accessor_rss = { path = "ability/accessor_rss" }
-accessor_search = { path = "ability/accessor_search" }
-assembly = { path = "../../crates/assembly" }
+accessor_probe = { path = "ability/accessor_probe" }
+assembly = { path = "subsystems/assembly" }
 async-trait.workspace = true
 axum = "0.8"
 committer = { path = "ability/committer" }
 ability-config = { path = "ability/config" }
 ability-egress = { path = "ability/egress" }
 ability-planner = { path = "ability/planner" }
-config = { path = "../../crates/config" }
-config_inspect = { path = "ability/config_inspect" }
+config = { path = "../modalprism-domain/config" }
+config_inspect = { path = "../../abilitys/data/config_inspect" }
 frame-core.workspace = true
 frame-port-http.workspace = true
-health = { path = "ability/health" }
+health = { path = "../../abilitys/ops/health" }
+health_check = { path = "ability/health_check" }
 paid_gateway = { path = "ability/paid_gateway" }
 runner = { path = "ability/runner" }
 serde_json.workspace = true
 strata_queue = { path = "ability/strata_queue" }
-strata_read = { path = "ability/strata_read" }
+strata_read = { path = "../../abilitys/data/strata_read" }
 strata_write = { path = "ability/strata_write" }
-strata-model = { path = "../../crates/strata-model" }
+strata-model = { path = "../modalprism-domain/strata-model" }
+surface = { path = "../modalprism-domain/surface" }
 tokio = { workspace = true, features = ["signal"] }
-types = { path = "../../crates/types" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+types = { path = "../modalprism-domain/types" }
+
+[features]
+# 本地一键启动默认走外部 RustFS 发行包，不用编译 rustfs。
+default = ["rustfs-bin"]
+# 下游数据层后端，直接决定 `cargo run` 编译哪个 Blob 实现。
+postgres = ["assembly/postgres"]
+s3 = ["assembly/s3"]
+rustfs-bin = ["assembly/rustfs-bin"]
+embedded-s3 = ["assembly/embedded-s3"]
 
 [dev-dependencies]
-strata-client = { path = "../../crates/strata-client" }
-strata-model = { path = "../../crates/strata-model" }
+modalprism-agent = { path = "../modalprism-agent" }
+serde.workspace = true
+serde_yaml.workspace = true
+strata-client = { path = "../modalprism-domain/strata-client" }
+strata-model = { path = "../modalprism-domain/strata-model" }
 tempfile.workspace = true
 
 [lints]

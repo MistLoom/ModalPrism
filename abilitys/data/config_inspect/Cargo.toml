@@ -1,0 +1,16 @@
+[package]
+name = "config_inspect"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "检查配置而不替换快照"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+types = { path = "../../../apps/modalprism-domain/types" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

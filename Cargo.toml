@@ -12,42 +12,38 @@ members = [
     "frame/port-fun",
     "frame/port-grpc",
     "apps/ability-core",
-    "crates/strata-model",
-    "crates/strata-store",
-    "crates/strata-gateway",
-    "crates/strata-client",
-    "crates/config",
-    "crates/accessors",
-    "crates/adapters",
-    "crates/egress",
-    "crates/paid",
-    "crates/planner",
-    "crates/accessors-builtin",
-    "crates/assembly",
-    "crates/types",
+    "apps/modalprism-domain/strata-model",
+    "apps/modalprism-domain/strata-sqlite-vec",
+    "apps/modalprism-domain/strata-gateway",
+    "apps/modalprism-domain/strata-client",
+    "apps/modalprism-domain/config",
+    "apps/modalprism-domain/types",
+    "apps/modalprism-domain/surface",
+    "apps/modalprism-collector/subsystems/accessors",
+    "apps/modalprism-collector/subsystems/accessors-builtin",
+    "apps/modalprism-collector/subsystems/adapters",
+    "apps/modalprism-collector/subsystems/egress",
+    "apps/modalprism-collector/subsystems/paid",
+    "apps/modalprism-collector/subsystems/planner",
+    "apps/modalprism-collector/subsystems/assembly",
     "abilitys/types/type_article",
     "abilitys/types/type_hotlist",
-    "apps/modalprism-collector/ability/accessor_api",
-    "apps/modalprism-collector/ability/accessor_browser",
-    "apps/modalprism-collector/ability/accessor_file",
-    "apps/modalprism-collector/ability/accessor_http",
-    "apps/modalprism-collector/ability/accessor_paid_api",
-    "apps/modalprism-collector/ability/accessor_push",
-    "apps/modalprism-collector/ability/accessor_rss",
-    "apps/modalprism-collector/ability/accessor_search",
+    "abilitys/data/strata_read",
+    "abilitys/data/config_inspect",
+    "abilitys/ops/health",
+    "apps/modalprism-collector/ability/accessor_probe",
     "apps/modalprism-collector/ability/committer",
     "apps/modalprism-collector/ability/config",
-    "apps/modalprism-collector/ability/config_inspect",
     "apps/modalprism-collector/ability/egress",
-    "apps/modalprism-collector/ability/health",
+    "apps/modalprism-collector/ability/health_check",
     "apps/modalprism-collector/ability/paid_gateway",
     "apps/modalprism-collector/ability/planner",
     "apps/modalprism-collector/ability/runner",
     "apps/modalprism-collector/ability/strata_queue",
-    "apps/modalprism-collector/ability/strata_read",
     "apps/modalprism-collector/ability/strata_write",
     "apps/modalprism-collector",
     "apps/modalprism-agent",
+    "apps/modalprism-console",
 ]
 default-members = ["apps/modalprism-collector", "apps/modalprism-agent"]
 
@@ -75,18 +71,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
+hmac = "0.12"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 encoding_rs = "0.8"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 ulid = "1"
 humantime-serde = "1"
-arrow-array = "58"
-arrow-buffer = "58"
-arrow-schema = "58"
 bytes = "1"
-futures = "0.3"
-lance = "=13.0.0"
-lancedb = { version = "=0.40.0", features = ["remote"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
@@ -105,6 +97,7 @@ quote = "1"
 proc-macro2 = "1"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 psl = "2"
 flate2 = "1"

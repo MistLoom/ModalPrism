@@ -6,10 +6,6 @@ depends: []
 stateful: true
 description: 付费回执
 methods:
-  - id: reserve
-    description: 占位方法，不扣费
-    input:
-      type: object
   - id: complete
     description: 确认回执
     input:

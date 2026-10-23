@@ -1,4 +1,22 @@
+# Rust 构建产物
 /target
+.probe/
 
+# 前端依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 本地运行数据与日志
+/var
+*.log
+
+# 仅本地保留的文档、参考实现与笔记
+/docs
+/manual
 .reference/
-Agent.md
+/AGENT.md
