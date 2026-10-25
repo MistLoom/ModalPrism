@@ -54,6 +54,7 @@ fn one_plan(snapshot: &Snapshot, id: &str, module: &Value) -> Option<SourcePlan>
     let spec = access_spec(accessor_module, module);
     let bytes = serde_json::to_vec(module).ok()?;
     let budget = budget_of(module);
+    let daily_limit = cap_of(module, "daily");
     Some(SourcePlan {
         source_id,
         locator,
@@ -85,6 +86,7 @@ fn one_plan(snapshot: &Snapshot, id: &str, module: &Value) -> Option<SourcePlan>
         expected_period,
         yield_drop_ratio: YIELD_DROP_RATIO,
         failure_threshold: FAILURE_THRESHOLD,
+        daily_limit,
     })
 }
 
@@ -125,9 +127,15 @@ fn locator_of(value: &Value) -> Option<Locator> {
     None
 }
 
+fn cap_of(module: &Value, key: &str) -> Option<u64> {
+    module
+        .pointer(&format!("/admission/{key}/limit"))
+        .and_then(Value::as_u64)
+}
+
 fn budget_of(module: &Value) -> Option<(u64, Duration)> {
     let requests = module.pointer("/paid/budget/requests")?.as_u64()?;
-    let window = parse_duration(module.pointer("/paid/budget/window")?.as_str()?)?;
+    let window = config::duration(module.pointer("/paid/budget/window")?.as_str()?)?;
     if requests == 0 || window.is_zero() {
         return None;
     }
@@ -148,22 +156,7 @@ fn duration_at(value: Option<&Value>, default: Duration) -> Option<Duration> {
     let Some(value) = value else {
         return Some(default);
     };
-    parse_duration(value.as_str()?)
-}
-
-fn parse_duration(text: &str) -> Option<Duration> {
-    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
-    let count: u64 = text[..split].parse().ok()?;
-    let unit = &text[split..];
-    let scale = match unit {
-        "ms" => 1,
-        "s" => 1_000,
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        _ => return None,
-    };
-    Some(Duration::from_millis(count.saturating_mul(scale)))
+    config::duration(value.as_str()?)
 }
 
 pub fn capacities() -> planner::Capacities {

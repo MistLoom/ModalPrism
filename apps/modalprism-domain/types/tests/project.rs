@@ -396,7 +396,8 @@ async fn hotlist_delta_is_a_changeset_and_keep_snapshots_tombstones() {
             json!({
                 "query": {
                     "from": "resources",
-                    "hasFacets": [{ "kind": "struct", "variant": "hotlist.snapshot" }]
+                    "hasFacets": [{ "kind": "struct", "variant": "hotlist.snapshot" }],
+                    "includeTombstoned": true
                 }
             }),
         )

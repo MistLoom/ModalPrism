@@ -6,10 +6,11 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("accessor_probe");
+    let mut spec =
+        AbilitySpec::must("accessor_probe").protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
     spec = spec.on(
         "validate",
         "用 implementation 与 spec 校验一份 accessor 配置",

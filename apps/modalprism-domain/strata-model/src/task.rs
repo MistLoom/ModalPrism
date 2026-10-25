@@ -29,6 +29,18 @@ pub enum QueueName {
     Push,
 }
 
+impl QueueName {
+    /// 队列在存储与接口上的名字。
+    pub fn label(self) -> &'static str {
+        match self {
+            QueueName::Free => "free",
+            QueueName::Paid => "paid",
+            QueueName::Render => "render",
+            QueueName::Push => "push",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessTask {

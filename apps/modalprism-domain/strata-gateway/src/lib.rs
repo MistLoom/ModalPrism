@@ -14,6 +14,7 @@ pub mod embedded;
 pub mod error;
 pub mod gateway;
 pub mod index;
+pub mod maintenance;
 pub mod query;
 #[cfg(feature = "rustfs-bin")]
 pub mod rustfs_bin;

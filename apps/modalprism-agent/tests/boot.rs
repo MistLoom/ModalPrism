@@ -63,11 +63,13 @@ async fn boot_exposes_only_the_read_surface() {
     assert_eq!(
         ids,
         vec![
+            "catalog_admin",
             "config_inspect",
             "health",
             "strata_read",
             "type_article",
             "type_hotlist",
+            "workflow",
         ]
     );
     let catalog = running.gateway().catalog();
@@ -76,6 +78,12 @@ async fn boot_exposes_only_the_read_surface() {
             .iter()
             .all(|entry| ids.iter().any(|id| id == entry.instance.as_str()))
     );
+    // 安装了能力不等于整个能力都对外：写入方法不在 MCP 面上。
+    assert!(catalog.iter().all(|entry| surface::exposes(
+        surface::AGENT_MCP,
+        entry.instance.as_str(),
+        entry.method.as_str()
+    )));
     for blocked in [
         "strata_write",
         "strata_queue",
@@ -203,4 +211,65 @@ async fn mcp_catalog_names_are_instance_method() {
         .await
         .unwrap();
     assert!(kinds.data.as_array().is_some());
+}
+
+#[tokio::test]
+async fn mcp_face_opens_new_queries_and_refuses_writes() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let running = boot(data.path(), config.path()).await.unwrap();
+    let tools = mcp_gateway(running.gateway());
+
+    let names: Vec<String> = tools
+        .catalog()
+        .into_iter()
+        .map(|entry| entry.instance.as_str().to_string())
+        .collect();
+    for expected in [
+        "catalog_admin.list",
+        "catalog_admin.templates",
+        "workflow.catalog",
+        "workflow.runs",
+    ] {
+        assert!(
+            names.iter().any(|name| name == expected),
+            "MCP 面缺少 {expected}"
+        );
+    }
+    for closed in [
+        "workflow.save",
+        "workflow.run",
+        "workflow.tick",
+        "catalog_admin.create",
+        "catalog_admin.remove",
+        "catalog_admin.batch",
+    ] {
+        assert!(
+            names.iter().all(|name| name != closed),
+            "MCP 面不应开放 {closed}"
+        );
+    }
+
+    let listed = tools
+        .invoke(InvokeRequest::new(
+            InstanceId::new("catalog_admin.list").unwrap(),
+            MethodId::new("list").unwrap(),
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    assert!(listed.data["sources"].as_array().is_some());
+    assert!(listed.data["adapters"].as_array().is_some());
+
+    let Err(_) = tools
+        .invoke(InvokeRequest::new(
+            InstanceId::new("workflow.save").unwrap(),
+            MethodId::new("save").unwrap(),
+            json!({ "slug": "daily", "doc": {} }),
+        ))
+        .await
+    else {
+        panic!("workflow.save 不在 MCP 面");
+    };
 }

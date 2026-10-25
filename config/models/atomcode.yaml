@@ -1,0 +1,7 @@
+command:
+  - atomcode
+id: model/atomcode
+kind: model
+mode: cli
+name: "命令行模型"
+timeout: 180s

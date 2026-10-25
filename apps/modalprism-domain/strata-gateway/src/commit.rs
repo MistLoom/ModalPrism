@@ -341,6 +341,14 @@ async fn resolve(
                 push_mark(&mut batch, &rid, &head);
                 heads.marks.insert(rid, head);
             }
+            Op::Restore { target, reason } => {
+                let rid = resolve_target(target, &aliases, heads)?;
+                let mut head = heads.marks.remove(&rid).unwrap_or_default();
+                head.tombstone = false;
+                head.reason = Some(reason.clone());
+                push_mark(&mut batch, &rid, &head);
+                heads.marks.insert(rid, head);
+            }
         }
     }
 

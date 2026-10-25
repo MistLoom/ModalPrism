@@ -1,0 +1,28 @@
+[package]
+name = "workflow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "ModalPrism 内容加工：工作流声明、模型调用与通知"
+publish = false
+
+[dependencies]
+config = { path = "../config" }
+egress = { path = "../../modalprism-collector/subsystems/egress" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strata-client = { path = "../strata-client" }
+strata-model = { path = "../strata-model" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+types = { path = "../types" }
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

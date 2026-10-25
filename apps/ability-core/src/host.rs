@@ -246,6 +246,38 @@ impl HostInner {
         out
     }
 
+    /// 已装实例 manifest 里的协议声明（名称形式）；供治理契约测试核对 yml 一致性。
+    pub fn manifest_protocols(&self, instance: &str) -> Vec<String> {
+        let map = self.instances.read().expect("instances");
+        map.iter()
+            .find(|(id, _)| id.as_str() == instance)
+            .map(|(_, slot)| {
+                slot.ability
+                    .manifest()
+                    .protocols
+                    .iter()
+                    .map(|kind| kind.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 已装实例 manifest 里的依赖能力 id；供治理契约测试核对 yml 一致性。
+    pub fn manifest_depends(&self, instance: &str) -> Vec<String> {
+        let map = self.instances.read().expect("instances");
+        map.iter()
+            .find(|(id, _)| id.as_str() == instance)
+            .map(|(_, slot)| {
+                slot.ability
+                    .manifest()
+                    .depends
+                    .iter()
+                    .map(|dep| dep.id.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn catalog_snapshot(&self) -> Vec<CatalogEntry> {
         method_catalog(&self.instances_snapshot())
     }
@@ -819,6 +851,16 @@ impl AbilityHost {
     /// 已装实例摘要（含可注册事件声明）。
     pub fn instances_snapshot(&self) -> Vec<DiscoveryPayload> {
         self.inner.instances_snapshot()
+    }
+
+    /// 已装实例 manifest 的协议声明（名称形式）。
+    pub fn manifest_protocols(&self, instance: &str) -> Vec<String> {
+        self.inner.manifest_protocols(instance)
+    }
+
+    /// 已装实例 manifest 的依赖能力 id。
+    pub fn manifest_depends(&self, instance: &str) -> Vec<String> {
+        self.inner.manifest_depends(instance)
     }
 
     pub fn set_expose(&self, expose: AbilityExpose) {

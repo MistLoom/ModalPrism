@@ -1,12 +1,16 @@
 framework_version: "1"
 id: health
 open: true
-protocols: [fun, http]
+protocols: [fun, http, mcp, tools]
 depends: []
 stateful: true
 description: 记录信源健康
 methods:
   - id: status
     description: 读取信源健康
+    input:
+      type: object
+  - id: report
+    description: 读取信源、通道与解析器的运行态
     input:
       type: object

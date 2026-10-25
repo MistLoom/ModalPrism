@@ -6,6 +6,7 @@
 use std::env;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +77,19 @@ pub fn route(setting: &ProxySetting, target: &Url) -> Option<ProxyRoute> {
         }
         ProxySetting::System => system_route(target),
     }
+}
+
+/// 从配置读取代理设置。
+///
+/// 接受两种形状：带 `policy` 包裹的系统配置，以及已经叠加过的策略对象本身。
+/// 代理只有一个声明位置（`egress.proxy`），采集、加工与通知都从这里取值，
+/// 避免各自解析字符串而出现「界面改了、某条链路没生效」。
+pub fn setting_of(config: &Value) -> ProxySetting {
+    let raw = config
+        .pointer("/policy/egress/proxy")
+        .or_else(|| config.pointer("/egress/proxy"))
+        .and_then(Value::as_str);
+    ProxySetting::parse(raw)
 }
 
 /// 探测 https 目标的上游代理，供启动摘要与状态接口展示。
@@ -275,6 +289,23 @@ mod tests {
         assert_eq!(
             ProxySetting::parse(Some(" http://127.0.0.1:7890 ")),
             ProxySetting::Manual("http://127.0.0.1:7890".into())
+        );
+    }
+
+    #[test]
+    fn reads_setting_from_system_policy() {
+        let system = serde_json::json!({"policy": {"egress": {"proxy": "off"}}});
+        assert_eq!(setting_of(&system), ProxySetting::Off);
+        let system = serde_json::json!({"policy": {"egress": {"proxy": "127.0.0.1:7890"}}});
+        assert_eq!(
+            setting_of(&system),
+            ProxySetting::Manual("127.0.0.1:7890".into())
+        );
+        assert_eq!(setting_of(&serde_json::json!({})), ProxySetting::System);
+        let policy = serde_json::json!({"egress": {"proxy": "127.0.0.1:7891"}});
+        assert_eq!(
+            setting_of(&policy),
+            ProxySetting::Manual("127.0.0.1:7891".into())
         );
     }
 

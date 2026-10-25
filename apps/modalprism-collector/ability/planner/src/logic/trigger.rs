@@ -7,5 +7,5 @@ pub async fn run(
     args: serde_json::Value,
 ) -> ability_support::Result<serde_json::Value> {
     let source = crate::text(&args, "source")?;
-    crate::map(services.planner_trigger(&source).await)
+    crate::map(services.dispatch_round(Some(&source)).await)
 }

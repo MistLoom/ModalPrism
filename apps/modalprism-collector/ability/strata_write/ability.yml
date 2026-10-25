@@ -2,7 +2,7 @@ framework_version: "1"
 id: strata_write
 open: false
 protocols: [fun]
-depends: []
+depends: [strata_read]
 stateful: true
 description: 提交变更集
 methods:

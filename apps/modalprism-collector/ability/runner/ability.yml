@@ -1,12 +1,15 @@
 framework_version: "1"
 id: runner
 open: true
-protocols: [fun]
-depends: []
+protocols: [fun, http]
+depends: [strata_queue, strata_write, egress]
 stateful: true
 description: 执行已租约的任务
 methods:
-  - id: run_task
-    description: 执行一个任务
+  - id: run
+    description: 按任务号立即执行一个任务
     input:
       type: object
+      properties:
+        taskId: { type: string }
+      required: [taskId]

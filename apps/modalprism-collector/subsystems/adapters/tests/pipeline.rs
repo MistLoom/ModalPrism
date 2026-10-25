@@ -516,6 +516,8 @@ async fn feed_materialize_admission_and_tombstone() {
         published_after: None,
         backfill_limit: Some(1),
         backfill_max_age: Some(std::time::Duration::from_secs(86_400 * 365 * 10)),
+        per_run: None,
+        daily: None,
         noise: vec!["sponsor".into()],
     };
     req.identities = Arc::new(identities);

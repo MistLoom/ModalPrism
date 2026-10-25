@@ -1,6 +1,7 @@
 //! 采集进程的存储、配置、调度和监听装配。
 
 mod api;
+mod derive;
 mod error;
 mod execute;
 mod listen;
@@ -24,7 +25,10 @@ use strata_model::{
     ApplyOpts, ChangeSet, FacetKind, FacetRef, Locator, Producer, TaskReason, Timestamp, VersionSel,
 };
 
-pub use api::{EgressCheck, EgressStatus, RunOutcome, StoragePaths, Upstream};
+pub use api::{
+    CommitterStatus, ContentCounts, ContentFilter, ContentPurgeReport, EgressCheck, EgressStatus,
+    QueueState, RoundOutcome, RunOutcome, StoragePaths, SweepReport, Upstream,
+};
 pub use error::{Error, invalid_input};
 pub use listen::{serve_proxy, serve_push};
 pub use plans::{capacities, flush_interval, snapshot_interval};
@@ -38,7 +42,10 @@ use transport::{HttpTransport, PaidBridge, PaidGw, SystemResolver};
 /// 领域类型出口。能力层只依赖 `assembly`，不直接依赖数据层 crate。
 pub mod domain {
     pub use planner::SourceStatus;
-    pub use strata_model::{AccessTask, ChangeSet, CommitResult, QueueName, TaskId, Timestamp};
+    pub use strata_client::{TaskFilter, TaskPage, TaskRow, TaskStats, known_reason, known_status};
+    pub use strata_model::{
+        AccessTask, ChangeSet, CommitResult, QueueName, Rid, TaskId, Timestamp,
+    };
 }
 
 /// 三个环回监听地址。
@@ -65,8 +72,6 @@ pub struct Services {
     strata: Arc<Strata>,
     planner: Planner<StrataQueue, Hot>,
     egress: Arc<EgressGw>,
-    proxy_setting: egress::ProxySetting,
-    upstream: Option<egress::ProxyRoute>,
     paid: Arc<PaidGw>,
     proxy: Mutex<String>,
     push: accessors_builtin::PushAccessor,
@@ -90,7 +95,7 @@ impl Services {
         );
         let egress = Arc::new(egress::Gateway::new(
             Hot::new(Arc::clone(&strata), "egress"),
-            HttpTransport::new(transport::proxy_setting(&snapshot.system)),
+            HttpTransport::new(Arc::clone(&config)),
             SystemResolver,
             TcpDial,
             opening.clone(),
@@ -119,8 +124,6 @@ impl Services {
             strata,
             planner,
             egress,
-            proxy_setting,
-            upstream,
             paid,
             proxy: Mutex::new(format!("http://{}", binds.proxy)),
             push: accessors_builtin::PushAccessor::new(),
@@ -148,12 +151,14 @@ impl Services {
         self.proxy.lock().expect("代理").clone()
     }
 
-    pub fn proxy_setting(&self) -> &egress::ProxySetting {
-        &self.proxy_setting
+    /// 全局代理设置。每次读取当前配置代际，改配置即生效。
+    pub fn proxy_setting(&self) -> egress::ProxySetting {
+        transport::proxy_setting(&self.config.applied().system)
     }
 
-    pub fn upstream_proxy(&self) -> Option<&egress::ProxyRoute> {
-        self.upstream.as_ref()
+    /// 探测当前代际下的上游代理，供启动日志与状态接口展示。
+    pub fn upstream_proxy(&self) -> Option<egress::ProxyRoute> {
+        egress::probe(&self.proxy_setting())
     }
 
     pub fn set_browser_program(&self, program: impl Into<PathBuf>) {

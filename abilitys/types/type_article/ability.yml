@@ -1,7 +1,7 @@
 framework_version: "1"
 id: type_article
 open: true
-protocols: [fun, mcp, tools]
+protocols: [fun, http, mcp, tools]
 depends: []
 stateful: false
 description: 文章投影

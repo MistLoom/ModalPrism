@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use accessors::EgressGateway;
 use async_trait::async_trait;
+use config::ConfigStore;
 use egress::{
     CrawlDelayMode, Exempt, Policy, PrivateNetworks, ProxySetting, Resolver, RobotsMode, TcpDial,
     Transport, Unreachable,
@@ -21,21 +22,28 @@ use accessors::{AccessError, HttpRequest, HttpResponse, PaidCall, PaidResponse};
 use crate::queue::Hot;
 
 pub struct HttpTransport {
-    setting: ProxySetting,
+    config: Arc<ConfigStore>,
 }
 
 impl HttpTransport {
-    pub fn new(setting: ProxySetting) -> Self {
-        Self { setting }
+    pub fn new(config: Arc<ConfigStore>) -> Self {
+        Self { config }
+    }
+
+    /// 本次请求实际使用的代理：优先用任务作用域的覆盖值，否则看当前配置代际。
+    ///
+    /// 代理写在配置里，改配置即生效，不需要重启；信源自己的覆盖由调用方在
+    /// [`SOURCE_PROXY`] 里设置。
+    fn setting(&self) -> ProxySetting {
+        if let Ok(setting) = SOURCE_PROXY.try_with(Clone::clone) {
+            return setting;
+        }
+        proxy_setting(&self.config.applied().system)
     }
 }
 
 pub fn proxy_setting(system: &Value) -> ProxySetting {
-    ProxySetting::parse(
-        system
-            .pointer("/policy/egress/proxy")
-            .and_then(Value::as_str),
-    )
+    egress::setting_of(system)
 }
 
 pub struct SystemResolver;
@@ -48,6 +56,8 @@ pub struct PaidBridge {
 tokio::task_local! {
     pub static EGRESS_POLICY: Policy;
     pub static REQUEST_DEADLINE: Instant;
+    /// 单个信源对全局代理的覆盖。
+    pub static SOURCE_PROXY: ProxySetting;
 }
 
 pub type EgressGw = egress::Gateway<Hot, HttpTransport, SystemResolver, TcpDial>;
@@ -76,7 +86,7 @@ fn transient(message: &str, source: impl std::error::Error + Send + Sync + 'stat
 #[async_trait]
 impl Transport for HttpTransport {
     fn proxied(&self, url: &Url) -> bool {
-        egress::route(&self.setting, url).is_some()
+        egress::route(&self.setting(), url).is_some()
     }
 
     async fn send(
@@ -89,7 +99,7 @@ impl Transport for HttpTransport {
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| permanent("scheme"))?;
         let budget = request_budget()?;
-        let route = egress::route(&self.setting, &url);
+        let route = egress::route(&self.setting(), &url);
         let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(budget);
@@ -243,7 +253,7 @@ pub fn policy_from(system: &Value, module_policy: &Value) -> Policy {
     if let Some(ttl) = effective
         .pointer("/robots/cache_ttl")
         .and_then(Value::as_str)
-        .and_then(parse_duration)
+        .and_then(config::duration)
     {
         policy.robots_ttl = ttl;
     }
@@ -266,7 +276,7 @@ pub fn policy_from(system: &Value, module_policy: &Value) -> Policy {
         } else if mode == "ignore" {
             CrawlDelayMode::Ignore
         } else if let Some(rest) = mode.strip_prefix("cap:") {
-            parse_duration(rest)
+            config::duration(rest)
                 .map(CrawlDelayMode::Cap)
                 .unwrap_or(CrawlDelayMode::Ignore)
         } else {
@@ -300,20 +310,6 @@ pub fn call_policy_from(system: &Value, module_policy: &Value) -> CallPolicy {
         policy.unknown = UnknownMode::Manual;
     }
     policy
-}
-
-fn parse_duration(text: &str) -> Option<Duration> {
-    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
-    let count: u64 = text[..split].parse().ok()?;
-    let scale = match &text[split..] {
-        "ms" => 1,
-        "s" => 1_000,
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        _ => return None,
-    };
-    Some(Duration::from_millis(count.saturating_mul(scale)))
 }
 
 pub struct BoundEgress {

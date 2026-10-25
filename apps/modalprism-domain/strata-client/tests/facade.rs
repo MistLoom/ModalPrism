@@ -303,6 +303,7 @@ async fn storage_roundtrip_matches_phase_exit() {
             order_by: Vec::new(),
             limit: Some(1),
             cursor: None,
+            include_tombstoned: false,
         })
         .await
         .unwrap();
@@ -325,6 +326,7 @@ async fn storage_roundtrip_matches_phase_exit() {
             order_by: Vec::new(),
             limit: None,
             cursor: None,
+            include_tombstoned: false,
         })
         .await
         .unwrap();
@@ -332,10 +334,39 @@ async fn storage_roundtrip_matches_phase_exit() {
         search
             .rows
             .iter()
-            .any(|row| row["rid"].as_str() == Some(rid.as_str())),
-        "{search:?}"
+            .all(|row| row["rid"].as_str() != Some(rid.as_str())),
+        "默认检索不应返回已删除资源: {search:?}"
     );
     assert!(search.next_cursor.is_none());
+    // 显式包含墓碑时，检索同样能命中它。
+    let revived = again
+        .query(Query {
+            from: QueryFrom::Resources,
+            r#where: None,
+            has_facets: Vec::new(),
+            select: Vec::new(),
+            expand: Vec::new(),
+            search: Some(Search {
+                text: Some("two".into()),
+                vector: None,
+                variant: None,
+                k: 5,
+            }),
+            as_of: None,
+            order_by: Vec::new(),
+            limit: None,
+            cursor: None,
+            include_tombstoned: true,
+        })
+        .await
+        .unwrap();
+    assert!(
+        revived
+            .rows
+            .iter()
+            .any(|row| row["rid"].as_str() == Some(rid.as_str())),
+        "{revived:?}"
+    );
     let unknown = again
         .query(Query {
             from: QueryFrom::Resources,
@@ -348,6 +379,7 @@ async fn storage_roundtrip_matches_phase_exit() {
             order_by: Vec::new(),
             limit: None,
             cursor: None,
+            include_tombstoned: false,
         })
         .await;
     assert!(unknown.is_err());
@@ -366,6 +398,7 @@ async fn storage_roundtrip_matches_phase_exit() {
             }],
             limit: None,
             cursor: Some("1".into()),
+            include_tombstoned: false,
         })
         .await;
     assert!(ordered.is_err());
@@ -381,6 +414,7 @@ async fn storage_roundtrip_matches_phase_exit() {
             order_by: Vec::new(),
             limit: None,
             cursor: None,
+            include_tombstoned: false,
         })
         .await;
     assert!(tagged.is_err());
@@ -521,6 +555,7 @@ async fn storage_roundtrip_matches_phase_exit() {
             order_by: Vec::new(),
             limit: None,
             cursor: None,
+            include_tombstoned: false,
         })
         .await
         .unwrap();
@@ -558,6 +593,7 @@ fn search_query(
         order_by: Vec::new(),
         limit: None,
         cursor: None,
+        include_tombstoned: false,
     }
 }
 

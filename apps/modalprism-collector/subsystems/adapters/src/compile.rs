@@ -41,6 +41,10 @@ pub struct Admission {
     pub published_after: Option<Duration>,
     pub backfill_limit: Option<u64>,
     pub backfill_max_age: Option<Duration>,
+    /// 每轮上限：首轮之后每轮只能产出这么多条。
+    pub per_run: Option<u64>,
+    /// 每日上限：由调度器在派发前检查，这里只做解析。
+    pub daily: Option<u64>,
     pub noise: Vec<String>,
 }
 
@@ -70,9 +74,24 @@ impl Admission {
             published_after,
             backfill_limit,
             backfill_max_age,
+            per_run: cap(value.get("perRun"))?,
+            daily: cap(value.get("daily"))?,
             noise,
         })
     }
+}
+
+/// `{ limit: n }` 形态的上限。未配置时返回 `None`，也就是不限。
+fn cap(value: Option<&Value>) -> Result<Option<u64>, AdapterError> {
+    let Some(object) = value else {
+        return Ok(None);
+    };
+    let limit = object
+        .get("limit")
+        .ok_or_else(|| AdapterError::config("limit 必须是整数"))?
+        .as_u64()
+        .ok_or_else(|| AdapterError::config("limit 必须是整数"))?;
+    Ok(Some(limit))
 }
 
 #[derive(Clone, Debug)]
@@ -138,9 +157,9 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
     let mut kept = 0u64;
     let mut new_index = 0u64;
     let limit = if initial {
-        admission.backfill_limit
+        admission.backfill_limit.or(admission.per_run)
     } else {
-        None
+        admission.per_run
     };
     for emitted in admitted {
         if limit.is_some_and(|limit| kept >= limit) {

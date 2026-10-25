@@ -147,20 +147,33 @@ async fn link(root: Arc<ReadRoot>) -> Result<Arc<AbilityHost>, types::Error> {
     host.set_entry_app("modalprism");
     let ctx: Arc<dyn ReadCtx> = Arc::clone(&root) as Arc<dyn ReadCtx>;
     let providers: Vec<(&str, Arc<dyn ability_support::AbilityProvider>)> = vec![
+        ("catalog_admin", catalog_admin::provider(Arc::clone(&ctx))),
         ("strata_read", strata_read::provider(Arc::clone(&ctx))),
         ("health", health::provider(Arc::clone(&ctx))),
         ("config_inspect", config_inspect::provider(Arc::clone(&ctx))),
         ("type_article", type_article::provider(Arc::clone(&ctx))),
         ("type_hotlist", type_hotlist::provider(Arc::clone(&ctx))),
+        ("workflow", ability_workflow::provider(Arc::clone(&ctx))),
     ];
     for (id, provider) in providers {
+        // 协议投影的唯一来源是能力自己的 manifest（与 ability.yml 由契约测试对齐）。
+        let kinds: Vec<AccessKind> = provider
+            .manifest()
+            .protocols
+            .iter()
+            .filter_map(|kind| AccessKind::from_protocol(*kind))
+            .collect();
         host.install_str(id, provider)
             .await
             .map_err(|error| types::Error::new(error.to_string()))?;
-        host.set_protocol_support(
-            id,
-            vec![AccessKind::Fun, AccessKind::Mcp, AccessKind::Tools],
-        );
+        if kinds.is_empty() {
+            host.set_protocol_support(
+                id,
+                vec![AccessKind::Fun, AccessKind::Mcp, AccessKind::Tools],
+            );
+        } else {
+            host.set_protocol_support(id, kinds);
+        }
         let source = SourceId::new(id).map_err(|error| types::Error::new(error.to_string()))?;
         let instance = InstanceId::new(id).map_err(|error| types::Error::new(error.to_string()))?;
         host.load(LoadSpec::new(source, instance))
@@ -177,7 +190,7 @@ struct ReadGateway {
 #[async_trait]
 impl Gateway for ReadGateway {
     async fn invoke(&self, request: InvokeRequest) -> ability_support::Result<InvokeResponse> {
-        if !surface::installed(surface::AGENT, request.instance.as_str()) {
+        if !open(request.instance.as_str(), request.method.as_str()) {
             return Err(ability_support::Error::unavailable("实例未开放"));
         }
         self.inner.invoke(request).await
@@ -187,14 +200,20 @@ impl Gateway for ReadGateway {
         self.inner
             .catalog()
             .into_iter()
-            .filter(|entry| surface::installed(surface::AGENT, entry.instance.as_str()))
+            .filter(|entry| open(entry.instance.as_str(), entry.method.as_str()))
             .collect()
     }
 
     fn get_entry(&self, instance: &InstanceId, method: &MethodId) -> Option<CatalogEntry> {
-        if !surface::installed(surface::AGENT, instance.as_str()) {
+        if !open(instance.as_str(), method.as_str()) {
             return None;
         }
         self.inner.get_entry(instance, method)
     }
+}
+
+/// MCP 面按方法放行。装了能力不等于整个能力都对外：加工与目录管理在这里只开查询。
+fn open(instance: &str, method: &str) -> bool {
+    surface::installed(surface::AGENT, instance)
+        && surface::exposes(surface::AGENT_MCP, instance, method)
 }

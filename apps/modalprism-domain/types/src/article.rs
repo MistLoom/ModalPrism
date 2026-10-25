@@ -78,6 +78,7 @@ pub(crate) fn facet_query(variant: &str) -> Query {
         order_by: Vec::new(),
         limit: None,
         cursor: None,
+        include_tombstoned: false,
     }
 }
 

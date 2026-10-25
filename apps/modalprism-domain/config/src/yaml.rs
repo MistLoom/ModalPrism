@@ -12,6 +12,35 @@ pub fn parse(file: &str, text: &str) -> Result<Node, String> {
     convert(file, &docs[0])
 }
 
+/// 把 YAML 直接解析成 JSON 值，供不参与快照的声明（如内容加工）使用。
+pub fn parse_value(file: &str, text: &str) -> Result<serde_json::Value, String> {
+    parse(file, text).map(|node| data_value(node.data))
+}
+
+fn data_value(data: Data) -> serde_json::Value {
+    match data {
+        Data::Null => serde_json::Value::Null,
+        Data::Bool(value) => serde_json::Value::Bool(value),
+        Data::Int(value) => serde_json::Value::from(value),
+        Data::Float(value) => serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Data::String(value) => serde_json::Value::String(value),
+        Data::Array(items) => serde_json::Value::Array(
+            items
+                .into_iter()
+                .map(|item| data_value(item.data))
+                .collect(),
+        ),
+        Data::Map(entries) => serde_json::Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key, data_value(value.data)))
+                .collect(),
+        ),
+    }
+}
+
 fn convert(file: &str, node: &MarkedYamlOwned) -> Result<Node, String> {
     let line = line_number(node);
     let data = match &node.data {

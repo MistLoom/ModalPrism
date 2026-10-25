@@ -4,19 +4,25 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("runner").stateful();
+    let mut spec = AbilitySpec::must("runner")
+        .stateful()
+        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
     spec = spec.on(
-        "run_task",
-        "执行一个任务",
-        serde_json::json!({"type": "object"}),
+        "run",
+        "按任务号立即执行一个任务",
+        serde_json::json!({
+            "type": "object",
+            "properties": { "taskId": { "type": "string" } },
+            "required": ["taskId"]
+        }),
         {
             let services = Arc::clone(&services);
             move |_ctx, args| {
                 let services = Arc::clone(&services);
-                ability_support::box_fut(logic::run_task::run(services, args))
+                ability_support::box_fut(logic::run::run(services, args))
             }
         },
     );

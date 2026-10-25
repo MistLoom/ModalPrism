@@ -10,21 +10,29 @@ import type {
   ConfigFileMeta,
   Connection,
   ContentKind,
+  ContentSummary,
   EgressCheck,
   EgressReport,
   EgressStatus,
   FacetBody,
   FacetCell,
   FieldOrigin,
+  HealthReport,
   LibraryRow,
   Lineage,
   Module,
   PlannerNext,
+  QueueState,
   RelatedEdge,
+  RoundOutcome,
   Source,
   SourceHealth,
   StrataVersion,
+  SweepReport,
+  TaskPage,
+  TaskPurgeReport,
   TaskRow,
+  TaskStats,
   FacetSummary,
 } from "./types";
 
@@ -40,7 +48,8 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(instance: string, method: string, args: unknown = {}): Promise<T> {
+/** 向采集进程的一个运维实例调用方法。声明类与工作流模块在此之上建自己的薄封装。 */
+export async function call<T>(instance: string, method: string, args: unknown = {}): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api/ops/${instance}/${method}`, {
@@ -102,8 +111,17 @@ export async function configDiff(): Promise<ConfigChange[]> {
   return (await call<ConfigChange[] | null>("config_inspect", "diff")) ?? [];
 }
 
-export async function triggerSource(source: string): Promise<unknown[]> {
-  return (await call<unknown[] | null>("planner", "trigger", { source })) ?? [];
+export async function triggerSource(source: string): Promise<{ executed: number; leased: number; failed: number }> {
+  const round = await call<{ leased?: number; executed?: string[]; failed?: unknown[] }>(
+    "planner",
+    "trigger",
+    { source },
+  );
+  return {
+    leased: round?.leased ?? 0,
+    executed: round?.executed?.length ?? 0,
+    failed: round?.failed?.length ?? 0,
+  };
 }
 
 /** 查询单个信源的下一轮调度（不走 30 秒轮询，立即返回）。 */
@@ -111,24 +129,140 @@ export async function plannerNext(source: string): Promise<PlannerNext> {
   return call<PlannerNext>("planner", "next", { source });
 }
 
-/** 立即跑一轮调度：把到期信源的任务派出去。 */
-export async function plannerTick(): Promise<unknown[]> {
-  return (await call<unknown[] | null>("planner", "tick")) ?? [];
+/** 立即跑一轮调度：把到期信源的任务派出去并执行。 */
+export async function plannerRound(source?: string | null): Promise<RoundOutcome> {
+  const args: Record<string, unknown> = {};
+  if (source) {
+    args.source = source;
+  }
+  return call<RoundOutcome>("planner", "round", args);
 }
 
-/** 任务队列列表，按创建时间倒序。 */
-export async function taskList(options?: { status?: string; limit?: number }): Promise<TaskRow[]> {
-  const args: Record<string, unknown> = { limit: options?.limit ?? 60 };
-  if (options?.status) {
+/** 为信源新建一条人工任务；runNow 时立即执行，locator 指向具体地址时为点位采集。 */
+export async function plannerManual(options: {
+  source: string;
+  queue?: string;
+  runNow?: boolean;
+  locator?: string;
+}): Promise<TaskRow> {
+  const args: Record<string, unknown> = { source: options.source };
+  if (options.queue) {
+    args.queue = options.queue;
+  }
+  if (options.runNow) {
+    args.runNow = true;
+  }
+  if (options.locator?.trim()) {
+    args.locator = options.locator.trim();
+  }
+  return call<TaskRow>("planner", "manual", args);
+}
+
+/** 每队列的排队、租约与暂停状态。 */
+export async function queueStates(): Promise<QueueState[]> {
+  return (await call<QueueState[] | null>("planner", "queues")) ?? [];
+}
+
+/** 暂停或恢复一个队列，返回更新后的队列卡。 */
+export async function queuePause(queue: string, paused: boolean): Promise<QueueState[]> {
+  return (await call<QueueState[] | null>("planner", "pause", { queue, paused })) ?? [];
+}
+
+/** 任务列表：游标分页，筛选全在服务端。 */
+export interface TaskQuery {
+  status?: string;
+  sourceId?: string;
+  queue?: string;
+  reason?: string;
+  /** 关键字：任务号、信源或错误信息。 */
+  query?: string;
+  cursor?: string | null;
+  limit?: number;
+}
+
+export async function taskList(options: TaskQuery = {}): Promise<TaskPage> {
+  const args: Record<string, unknown> = { limit: options.limit ?? 50 };
+  if (options.status) {
     args.status = options.status;
   }
-  return (await call<TaskRow[] | null>("strata_queue", "list", args)) ?? [];
+  if (options.sourceId) {
+    args.source = options.sourceId;
+  }
+  if (options.queue) {
+    args.queue = options.queue;
+  }
+  if (options.reason) {
+    args.reason = options.reason;
+  }
+  if (options.query) {
+    args.query = options.query;
+  }
+  if (options.cursor) {
+    args.cursor = options.cursor;
+  }
+  const page = await call<TaskPage | null>("strata_queue", "list", args);
+  return { rows: page?.rows ?? [], nextCursor: page?.nextCursor ?? null, total: page?.total ?? 0 };
 }
 
-/** 重试一个排队中的任务，把它恢复为可立即租约的状态。 */
-export async function taskRetry(taskId: string): Promise<boolean> {
-  const result = await call<{ retried?: boolean }>("strata_queue", "retry", { taskId });
-  return Boolean(result?.retried);
+/** 队列全景统计。 */
+export async function taskStats(): Promise<TaskStats> {
+  return call<TaskStats>("strata_queue", "stats");
+}
+
+/** 对选中的任务执行同一生命周期动作（取消/重排/删除），单条与批量走同一状态机约束。 */
+export async function taskTransition(
+  taskIds: string[],
+  action: "cancel" | "requeue" | "remove",
+): Promise<{ done: number; skipped: number }> {
+  const result = await call<{ done?: number; skipped?: number }>("strata_queue", "transition", {
+    taskIds,
+    action,
+  });
+  return { done: result?.done ?? 0, skipped: result?.skipped ?? 0 };
+}
+
+/** 取消一条排队或租约中的任务。 */
+export async function taskCancel(taskId: string): Promise<boolean> {
+  return (await taskTransition([taskId], "cancel")).done > 0;
+}
+
+/** 重试或恢复任务：终态与排队中的任务都回到队列。 */
+export async function taskRequeue(taskId: string): Promise<boolean> {
+  return (await taskTransition([taskId], "requeue")).done > 0;
+}
+
+/** 删除一条终态任务。 */
+export async function taskRemove(taskId: string): Promise<boolean> {
+  return (await taskTransition([taskId], "remove")).done > 0;
+}
+
+/** 立即执行一条任务：排队中的先挂租约。 */
+export async function taskRun(taskId: string): Promise<{ taskId: string; ok?: boolean; nacked?: string }> {
+  return call("runner", "run", { taskId });
+}
+
+/** 按筛选清理终态任务（走 committer.sweep 的筛选入口）；默认只统计。 */
+export async function taskPurge(options: TaskQuery & { dryRun?: boolean } = {}): Promise<TaskPurgeReport> {
+  const args: Record<string, unknown> = { dryRun: options.dryRun ?? true };
+  if (options.status) {
+    args.status = options.status;
+  }
+  if (options.sourceId) {
+    args.source = options.sourceId;
+  }
+  if (options.queue) {
+    args.queue = options.queue;
+  }
+  if (options.reason) {
+    args.reason = options.reason;
+  }
+  if (options.query) {
+    args.query = options.query;
+  }
+  const report = await call<{ filtered?: number; dryRun?: boolean }>("committer", "sweep", args);
+  const matched = report?.filtered ?? 0;
+  const dryRun = report?.dryRun ?? Boolean(args.dryRun);
+  return { matched, removed: dryRun ? 0 : matched, dryRun };
 }
 
 export async function egressStatus(): Promise<EgressStatus> {
@@ -155,6 +289,89 @@ export async function egressReset(host: string): Promise<{ host: string; existed
   return call("egress", "reset", { host });
 }
 
+/** 内容统计：匹配条数与其中已删除的条数。 */
+export async function contentCount(options: {
+  sourceId?: string | null;
+  before?: string | null;
+  after?: string | null;
+  includeTombstoned?: boolean;
+} = {}): Promise<{ matched: number; tombstoned: number }> {
+  const args: Record<string, unknown> = { includeTombstoned: options.includeTombstoned ?? false };
+  if (options.sourceId) {
+    args.source = options.sourceId;
+  }
+  if (options.before) {
+    args.before = options.before;
+  }
+  if (options.after) {
+    args.after = options.after;
+  }
+  return call("content_admin", "count", args);
+}
+
+/** 写入墓碑；默认只统计。单次上限 2000 行，truncated 为真时继续调用即可。 */
+export async function contentPurge(options: {
+  sourceId?: string | null;
+  rids?: string[];
+  reason?: string;
+  dryRun?: boolean;
+} = {}): Promise<{ matched: number; tombstoned: number; truncated: boolean; dryRun: boolean }> {
+  const args: Record<string, unknown> = { dryRun: options.dryRun ?? true };
+  if (options.sourceId) {
+    args.source = options.sourceId;
+  }
+  if (options.rids && options.rids.length > 0) {
+    args.rids = options.rids;
+  }
+  if (options.reason) {
+    args.reason = options.reason;
+  }
+  return call("content_admin", "purge", args);
+}
+
+/** 撤销墓碑，返回恢复条数。 */
+export async function contentRestore(rids: string[], reason?: string): Promise<number> {
+  const result = await call<{ restored?: number }>("content_admin", "restore", {
+    rids,
+    ...(reason ? { reason } : {}),
+  });
+  return result?.restored ?? 0;
+}
+
+/** 为用户分类写入或撤销标签，返回打标条数。 */
+export async function contentTag(
+  rids: string[],
+  set: Record<string, string>,
+  unset: string[] = [],
+): Promise<number> {
+  const result = await call<{ labeled?: number }>("content_admin", "label", {
+    rids,
+    set,
+    unset,
+  });
+  return result?.labeled ?? 0;
+}
+
+/** 内容来源与类型分布：服务端聚合，默认排除已删除。 */
+export async function strataSummary(): Promise<ContentSummary> {
+  return call<ContentSummary>("strata_read", "summary");
+}
+
+/** 通道与解析器的运行态。 */
+export async function healthReport(): Promise<HealthReport> {
+  const report = await call<Partial<HealthReport>>("health", "report");
+  return {
+    sources: report.sources ?? [],
+    accessors: report.accessors ?? [],
+    adapters: report.adapters ?? [],
+  };
+}
+
+/** 按保留策略清理终态任务与过期存储行；默认只统计。 */
+export async function sweep(dryRun = true): Promise<SweepReport> {
+  return call<SweepReport>("committer", "sweep", { dryRun });
+}
+
 /** 存储状态：控制/正文/暂存三个目录。 */
 export async function committerStatus(): Promise<CommitterStatus> {
   return call<CommitterStatus>("committer", "status");
@@ -167,12 +384,12 @@ export async function committerFlush(): Promise<unknown> {
 
 /** 当前配置代际。 */
 export async function configGeneration(): Promise<number> {
-  return call<number>("config", "generation");
+  return call<number>("config_admin", "generation");
 }
 
 /** 让采集进程重新加载配置，返回新代际。 */
 export async function applyConfig(): Promise<number> {
-  const result = await call<{ generation: number }>("config", "load");
+  const result = await call<{ generation: number }>("config_admin", "load");
   return typeof result === "number" ? result : (result?.generation ?? 0);
 }
 
@@ -283,22 +500,12 @@ export function contentLabel(variant: string): string {
   return names[variant] ?? variant;
 }
 
-/** 内容库里真实存在的结构化类型；空库时返回空数组，界面据此只展示实际有的类型。 */
+/** 内容库里真实存在的结构化类型；数量由服务端聚合，不再采样。 */
 export async function contentKinds(): Promise<ContentKind[]> {
-  const page = await call<{ rows: { kind?: string; variant?: string | null }[] | null }>(
-    "strata_read",
-    "query",
-    { query: { from: "facets", select: ["kind", "variant"], limit: 400 } },
-  );
-  const counts = new Map<string, number>();
-  for (const row of page.rows ?? []) {
-    if (row.kind !== "struct" || typeof row.variant !== "string" || !row.variant) {
-      continue;
-    }
-    counts.set(row.variant, (counts.get(row.variant) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([variant, total]) => ({ variant, label: contentLabel(variant), total }))
+  const summary = await strataSummary();
+  return summary.variants
+    .filter((item) => item.variant)
+    .map((item) => ({ variant: item.variant, label: contentLabel(item.variant), total: item.total }))
     .sort((left, right) => right.total - left.total || left.variant.localeCompare(right.variant));
 }
 
@@ -324,6 +531,14 @@ export interface LibraryQuery {
   after?: number | null;
   /** 精确匹配某条资源：页面之间互链时用它定位单条内容。 */
   rid?: string | null;
+  /** 是否把已写入墓碑的内容也算进来。 */
+  includeTombstoned?: boolean;
+  /** 加工层级：按 facet 存在性下推（raw=原始层、md=可读层、struct=结构化）。 */
+  level?: string | null;
+  /** 用户分类筛选：只看带这个标签的内容。 */
+  label?: { key: string; value: string } | null;
+  /** 只看工作流产出：按 workflow 标签存在性在结果侧过滤。 */
+  processedOnly?: boolean;
 }
 
 export interface LibraryPage {
@@ -347,6 +562,10 @@ export async function library(options: LibraryQuery): Promise<LibraryPage> {
     before = null,
     after = null,
     rid = null,
+    includeTombstoned = false,
+    level = null,
+    label = null,
+    processedOnly = false,
   } = options;
   const wanted = variant ? [variant] : variants;
   const cells = wanted.map((name) => ({ kind: "struct", variant: name }));
@@ -374,10 +593,14 @@ export async function library(options: LibraryQuery): Promise<LibraryPage> {
   if (rid) {
     predicates.push({ eq: ["rid", rid] });
   }
+  // 用户分类：标签谓词两条引擎都支持（内存 eval / SQL EXISTS）。
+  if (label) {
+    predicates.push({ label: [label.key, label.value] });
+  }
 
   const query: Record<string, unknown> = {
     from: "resources",
-    select: ["rid", "seq", "tombstone", ...cells],
+    select: ["rid", "seq", "tombstone", "ns", "labels", ...cells],
     // 非搜索路径多取一行，用于判断是否还有下一页。
     limit: text ? limit : limit + 1,
   };
@@ -398,6 +621,10 @@ export async function library(options: LibraryQuery): Promise<LibraryPage> {
       // 不带 variant 表示任意变体。
       selectors.push({ kind: "html" });
     }
+    // 加工层级：原始层看 raw，可读层看 md，结构化层看 struct（与类型选择器 AND 叠加）。
+    if (level && level !== "processed") {
+      selectors.push({ kind: level });
+    }
     if (selectors.length > 0) {
       query.hasFacets = selectors;
     }
@@ -405,6 +632,9 @@ export async function library(options: LibraryQuery): Promise<LibraryPage> {
   }
   if (snapshot !== null) {
     query.asOf = { snapshot };
+  }
+  if (includeTombstoned) {
+    query.includeTombstoned = true;
   }
 
   const page = await call<{ rows: LibraryRow[] | null; nextCursor: string | null }>(
@@ -417,6 +647,10 @@ export async function library(options: LibraryQuery): Promise<LibraryPage> {
   rows = rows.slice(0, limit);
   if (newerFirst) {
     rows = rows.reverse();
+  }
+  // 只看加工产出：按 workflow 标签存在性过滤（标签由工作流引擎写入）。
+  if (processedOnly) {
+    rows = rows.filter((row) => row.labels?.workflow);
   }
   return {
     rows: rows.filter((row) => wanted.some((name) => row[`struct:${name}`] !== undefined)),
@@ -497,6 +731,8 @@ export function mergeSources(modules: Module[], statuses: SourceHealth[]): Sourc
         lastOkAt: status?.lastOkAt ?? null,
         lastYieldAt: status?.lastYieldAt ?? null,
         yields7d: status?.yields7d ?? 0,
+        todayYield: status?.todayYield ?? 0,
+        dailyLimit: number(module.config, ["admission", "daily", "limit"]),
         budgetUsed: status?.budgetUsed ?? 0,
         file: module.file,
         line: module.line,

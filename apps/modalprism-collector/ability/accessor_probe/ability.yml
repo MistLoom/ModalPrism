@@ -1,7 +1,7 @@
 framework_version: "1"
 id: accessor_probe
 open: true
-protocols: [fun]
+protocols: [fun, http]
 depends: []
 stateful: false
 description: 按实现名校验 accessor 配置

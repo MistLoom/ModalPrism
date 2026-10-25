@@ -10,12 +10,15 @@ publish = false
 [dependencies]
 ability-core.workspace = true
 ability-support.workspace = true
+ability-workflow = { path = "../../abilitys/ops/workflow" }
 accessor_probe = { path = "ability/accessor_probe" }
 assembly = { path = "subsystems/assembly" }
 async-trait.workspace = true
 axum = "0.8"
+catalog_admin = { path = "../../abilitys/data/catalog_admin" }
 committer = { path = "ability/committer" }
-ability-config = { path = "ability/config" }
+content_admin = { path = "ability/content_admin" }
+ability-config-admin = { path = "ability/config_admin" }
 ability-egress = { path = "ability/egress" }
 ability-planner = { path = "ability/planner" }
 config = { path = "../modalprism-domain/config" }
@@ -23,13 +26,15 @@ config_inspect = { path = "../../abilitys/data/config_inspect" }
 frame-core.workspace = true
 frame-port-http.workspace = true
 health = { path = "../../abilitys/ops/health" }
-health_check = { path = "ability/health_check" }
+health_record = { path = "ability/health_record" }
 paid_gateway = { path = "ability/paid_gateway" }
 runner = { path = "ability/runner" }
+serde.workspace = true
 serde_json.workspace = true
 strata_queue = { path = "ability/strata_queue" }
 strata_read = { path = "../../abilitys/data/strata_read" }
 strata_write = { path = "ability/strata_write" }
+type_article = { path = "../../abilitys/types/type_article" }
 strata-model = { path = "../modalprism-domain/strata-model" }
 surface = { path = "../modalprism-domain/surface" }
 tokio = { workspace = true, features = ["signal"] }
@@ -48,6 +53,7 @@ embedded-s3 = ["assembly/embedded-s3"]
 
 [dev-dependencies]
 modalprism-agent = { path = "../modalprism-agent" }
+reqwest.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 strata-client = { path = "../modalprism-domain/strata-client" }

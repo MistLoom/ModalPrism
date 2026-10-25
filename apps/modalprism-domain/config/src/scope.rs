@@ -51,7 +51,8 @@ const PATHS: &[(&str, Scope)] = &[
     ("capture.network", Scope::Source),
     ("capture.renditions", Scope::Source),
     ("egress.private_networks", Scope::System),
-    ("egress.proxy", Scope::System),
+    // 代理可按信源覆盖：未写时沿用系统值，写 `system` 显式回归全局，写 `off` 直连。
+    ("egress.proxy", Scope::Shared),
     ("egress.identity", Scope::System),
     ("paid.unknown_receipt", Scope::Accessor),
     ("reprocess.on_adapter_change", Scope::Shared),
@@ -61,6 +62,7 @@ const PATHS: &[(&str, Scope)] = &[
     ("dedupe.near_duplicate", Scope::Source),
     ("backfill.initial", Scope::Source),
     ("classify.detector", Scope::Shared),
+    ("retention.tasks", Scope::System),
     ("health.expected_period", Scope::Source),
     ("health.yield_drop_ratio", Scope::Source),
     ("health.failure_threshold", Scope::Source),

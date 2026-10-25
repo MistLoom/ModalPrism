@@ -1,0 +1,68 @@
+framework_version: "1"
+id: catalog_admin
+open: true
+protocols: [fun, http, mcp, tools]
+depends: [config_inspect]
+stateful: false
+description: 以声明文件增删改信源、访问器与适配器
+methods:
+  - id: batch
+    description: 批量启用、停用或删除同类声明
+    input:
+      type: object
+      properties:
+        kind: { type: string, enum: [source, accessor, adapter] }
+        action: { type: string, enum: [enable, disable, remove] }
+        slugs:
+          type: array
+          items: { type: string }
+      required: [kind, action, slugs]
+  - id: create
+    description: 新建一份声明并立即校验
+    input:
+      type: object
+      properties:
+        kind: { type: string, enum: [source, accessor, adapter] }
+        slug: { type: string }
+        doc: { type: object }
+      required: [kind, slug, doc]
+  - id: list
+    description: 列出三类声明与引用计数
+    input:
+      type: object
+  - id: proxy
+    description: 设置系统级出站代理
+    input:
+      type: object
+      properties:
+        value: { type: string }
+  - id: remove
+    description: 删除一份声明
+    input:
+      type: object
+      properties:
+        kind: { type: string, enum: [source, accessor, adapter] }
+        slug: { type: string }
+      required: [kind, slug]
+  - id: templates
+    description: 列出新建模板
+    input:
+      type: object
+  - id: toggle
+    description: 启用或停用一份声明
+    input:
+      type: object
+      properties:
+        kind: { type: string, enum: [source, accessor, adapter] }
+        slug: { type: string }
+        enabled: { type: boolean }
+      required: [kind, slug, enabled]
+  - id: update
+    description: 改写一份声明并立即校验
+    input:
+      type: object
+      properties:
+        kind: { type: string, enum: [source, accessor, adapter] }
+        slug: { type: string }
+        doc: { type: object }
+      required: [kind, slug, doc]

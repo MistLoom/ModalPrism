@@ -834,6 +834,13 @@ fn check_id(id: &str, kind: DocKind) -> Result<(), String> {
     Ok(())
 }
 
+/// 不在配置快照内的声明目录。
+///
+/// 这些目录由专门的领域模块读取，配置加载只负责跳过，避免把它们的形状写进快照 schema。
+pub(crate) fn is_subsystem_dir(logical: &str) -> bool {
+    logical.starts_with("workflows/") || logical.starts_with("models/")
+}
+
 fn kind_of(logical: &str) -> Result<DocKind, String> {
     if logical == "system.yaml" || logical == "system.yml" {
         Ok(DocKind::System)
@@ -1021,7 +1028,9 @@ fn walk(
             continue;
         }
         let rel = rel_path(root, &path);
-        if rel.starts_with("schemas/") {
+        // `schemas/` 由专门的读取器处理；子系统目录由各自的领域模块读取，
+        // 配置加载只负责跳过，避免把它们的形状写进快照 schema。
+        if rel.starts_with("schemas/") || is_subsystem_dir(&rel) {
             continue;
         }
         if let Some(rest) = rel.strip_prefix("overlays/") {

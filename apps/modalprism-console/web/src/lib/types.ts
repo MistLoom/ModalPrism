@@ -5,6 +5,8 @@ export type HealthState = "ok" | "warn" | "paused" | "misconfigured" | "error" |
 export interface Module {
   id: string;
   kind: string;
+  /** 功能域：collect/transport/parse/content/policy/other。 */
+  domain?: string;
   name: string | null;
   description: string | null;
   enabled: boolean;
@@ -33,25 +35,77 @@ export interface SourceHealth {
   lastOkAt: string | null;
   lastYieldAt: string | null;
   yields7d: number;
+  /** 今日已产出条数，对上每日上限。 */
+  todayYield: number;
 }
 
 /** planner.next 的返回：单个信源的最新调度状态（比 30 秒轮询更即时）。 */
 export type PlannerNext = Omit<SourceHealth, "source">;
 
 /** strata_queue.list 的返回行：任务队列中的一条任务。 */
+export type TaskStatus = "queued" | "leased" | "done" | "cancelled";
+
 export interface TaskRow {
   task_id: string;
   queue: string;
-  status: "queued" | "leased" | "done";
+  status: TaskStatus;
   source_id: string;
+  /** 使用的通道，取自任务体；永远不包含凭据。 */
+  accessor: string;
   reason: string;
   attempt: number;
   priority: number;
+  generation: number;
   created_at: string;
   retry_at: string | null;
   lease_until: string | null;
   last_error: string | null;
   locator: Record<string, unknown> | null;
+}
+
+/** 一页任务：游标指向本页最后一行，total 是同条件的总数。 */
+export interface TaskPage {
+  rows: TaskRow[];
+  nextCursor: string | null;
+  total: number;
+}
+
+/** 队列全景统计，页面直接展示而不拉全量。 */
+export interface TaskStats {
+  total: number;
+  byStatus: Record<string, number>;
+  byQueue: Record<string, number>;
+  byReason: Record<string, number>;
+  oldestQueuedAt: string | null;
+  nextRetryAt: string | null;
+  /** 租约已过期但尚未回收的任务数。 */
+  leasedOverdue: number;
+}
+
+/** 一个队列的排队、租约、上限与暂停状态。 */
+export interface QueueState {
+  queue: string;
+  queued: number;
+  leased: number;
+  done: number;
+  cancelled: number;
+  capacity: number;
+  paused: boolean;
+}
+
+/** 一轮派发的结果。 */
+export interface RoundOutcome {
+  leased: number;
+  executed: string[];
+  failed: [string, string][];
+  follows: number;
+}
+
+/** 清理终态任务的结果；dryRun 为真时只统计。 */
+export interface TaskPurgeReport {
+  matched: number;
+  removed: number;
+  dryRun: boolean;
 }
 
 /** 把「信源的说明」与「调度器的状态」合成一行给人看的东西。 */
@@ -73,6 +127,10 @@ export interface Source {
   lastOkAt: string | null;
   lastYieldAt: string | null;
   yields7d: number;
+  /** 今日已产出条数。 */
+  todayYield: number;
+  /** 每日上限；未配置时为 null。 */
+  dailyLimit: number | null;
   budgetUsed: number;
   file: string;
   line: number;
@@ -94,6 +152,8 @@ export interface Connection {
 
 export interface FieldOrigin {
   path: string;
+  /** 设置项的功能域：scheduling/limits/retention/egress/media/credentials/processing/general。 */
+  domain?: string;
   value: unknown;
   file: string;
   line: number;
@@ -113,6 +173,12 @@ export interface LibraryRow {
   rid: string;
   seq: number;
   tombstone?: boolean;
+  /** 产出这条内容的信源。 */
+  sourceId?: string;
+  /** 命名空间：系统采集默认 data，工作流产出用 struct。 */
+  ns?: string;
+  /** 用户分类标签；工作流产出行带 workflow=<slug>。 */
+  labels?: Record<string, string>;
   [cell: string]: unknown;
 }
 
@@ -190,6 +256,62 @@ export interface CommitterStatus {
   control: string;
   blobs: string;
   staging: string;
+  /** 各表当前行数。 */
+  counts: StoreCounts;
+}
+
+/** 各表行数，给「保留与清理」卡片用。 */
+export interface StoreCounts {
+  resources: number;
+  marks: number;
+  facets: number;
+  blobs: number;
+  relations: number;
+  state: number;
+  snapshots: number;
+  tasks: number;
+}
+
+/** 一次保留清理的结果：清掉的终态任务与逐表删除行数。 */
+export interface SweepReport {
+  dryRun: boolean;
+  tasks: number;
+  floor: Record<string, number>;
+  snapshots: number;
+  resources: number;
+  resourceMarks: number;
+  facets: number;
+  relations: number;
+  state: number;
+  blobs: number;
+  vectors: number;
+  text: number;
+}
+
+/** 内容来源、类型与标签分布，服务端聚合（默认排除已删除）。 */
+export interface ContentSummary {
+  total: number;
+  tombstoned: number;
+  variants: { variant: string; total: number }[];
+  sources: { sourceId: string; total: number }[];
+  labels: { key: string; value: string; total: number }[];
+}
+
+/** 通道与解析器的运行态，键去掉了 `source/`、`accessor/`、`adapter/` 前缀。 */
+export interface HealthItem {
+  id: string;
+  status: HealthState;
+  alert: boolean;
+  lastError: string | null;
+  lastOkAt: string | null;
+  blockedHits: number;
+  selectorMiss: number;
+}
+
+export interface HealthReport {
+  sources: HealthItem[];
+  accessors: HealthItem[];
+  adapters: HealthItem[];
 }
 
 /** 资源真实存在的 facet 种类摘要（来自 strata_read.kinds）。 */

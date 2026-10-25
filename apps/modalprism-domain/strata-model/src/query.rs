@@ -137,6 +137,9 @@ pub struct Query {
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+    /// 默认不返回已写入墓碑的资源；只有「包含已删除」时置位。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_tombstoned: bool,
 }
 
 impl Query {

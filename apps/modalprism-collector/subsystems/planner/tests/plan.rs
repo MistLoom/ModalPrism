@@ -40,6 +40,7 @@ fn plan() -> SourcePlan {
         expected_period: Some(Duration::from_secs(7 * 24 * 60 * 60)),
         yield_drop_ratio: 0.3,
         failure_threshold: 5,
+        daily_limit: None,
     }
 }
 

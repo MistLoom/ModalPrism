@@ -206,3 +206,28 @@ export const IconQueue = (props: Props) => (
     <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h6.5" />
   </Icon>
 );
+
+export const IconPlus = (props: Props) => (
+  <Icon {...props}>
+    <path d="M8 3v10M3 8h10" />
+  </Icon>
+);
+
+/** 采集计划：节律与上限的台历。 */
+export const IconPlan = (props: Props) => (
+  <Icon {...props}>
+    <rect x="2.4" y="3.4" width="11.2" height="10.2" rx="1" />
+    <path d="M2.4 6.6h11.2M5.6 2.4v2M10.4 2.4v2" />
+    <path d="M5.4 9.2h1.6M9 9.2h1.6M5.4 11.2h1.6" opacity=".6" />
+  </Icon>
+);
+
+/** 内容加工：三段流水线。 */
+export const IconFlow = (props: Props) => (
+  <Icon {...props}>
+    <rect x="2.2" y="2.6" width="4.4" height="3.6" rx="0.6" />
+    <rect x="9.4" y="2.6" width="4.4" height="3.6" rx="0.6" />
+    <rect x="5.8" y="9.8" width="4.4" height="3.6" rx="0.6" />
+    <path d="M4.4 6.2v1.6h7.2V6.2M8 7.8v2" opacity=".7" />
+  </Icon>
+);

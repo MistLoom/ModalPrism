@@ -50,6 +50,14 @@ fn size() -> Value {
     json!({"type": "string", "pattern": "^[1-9][0-9]*(B|KiB|MiB|GiB)$"})
 }
 
+fn retention() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"tasks": duration()}
+    })
+}
+
 fn policy_body() -> Value {
     json!({
         "type": "object",
@@ -206,6 +214,7 @@ fn policy_body() -> Value {
                     "detector": {"type": "string", "pattern": "^(basic|off|plugin:[A-Za-z0-9][A-Za-z0-9._:-]*)$"}
                 }
             },
+            "retention": retention(),
             "health": {
                 "type": "object",
                 "additionalProperties": false,
@@ -389,7 +398,19 @@ fn module_schema() -> Value {
                             "maxAge": duration()
                         }
                     },
-                    "noise": {"type": "array", "items": {"type": "string"}}
+                    "noise": {"type": "array", "items": {"type": "string"}},
+                    "perRun": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["limit"],
+                        "properties": {"limit": {"type": "integer", "minimum": 0}}
+                    },
+                    "daily": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["limit"],
+                        "properties": {"limit": {"type": "integer", "minimum": 0}}
+                    }
                 }
             },
             "schema": {"type": "string", "minLength": 1}

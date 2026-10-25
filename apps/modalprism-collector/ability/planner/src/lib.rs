@@ -4,10 +4,12 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("planner").stateful();
+    let mut spec = AbilitySpec::must("planner")
+        .stateful()
+        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
     spec = spec.on(
         "tick",
         "派出到期任务",
@@ -22,8 +24,12 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
     );
     spec = spec.on(
         "trigger",
-        "把信源标成到期并派出",
-        serde_json::json!({"type": "object"}),
+        "把信源标成到期并立即采集一轮",
+        serde_json::json!({
+            "type": "object",
+            "properties": { "source": { "type": "string" } },
+            "required": ["source"]
+        }),
         {
             let services = Arc::clone(&services);
             move |_ctx, args| {
@@ -33,9 +39,80 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
         },
     );
     spec = spec.on(
+        "round",
+        "执行一轮派发",
+        serde_json::json!({
+            "type": "object",
+            "properties": { "source": { "type": "string" } }
+        }),
+        {
+            let services = Arc::clone(&services);
+            move |_ctx, args| {
+                let services = Arc::clone(&services);
+                ability_support::box_fut(logic::round::run(services, args))
+            }
+        },
+    );
+    spec = spec.on(
+        "manual",
+        "为信源新建一条采集任务",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source": { "type": "string" },
+                "queue": { "type": "string" },
+                "runNow": { "type": "boolean" },
+                "locator": { "type": "string" }
+            },
+            "required": ["source"]
+        }),
+        {
+            let services = Arc::clone(&services);
+            move |_ctx, args| {
+                let services = Arc::clone(&services);
+                ability_support::box_fut(logic::manual::run(services, args))
+            }
+        },
+    );
+    spec = spec.on(
+        "queues",
+        "每队列的排队、租约与暂停状态",
+        serde_json::json!({"type": "object"}),
+        {
+            let services = Arc::clone(&services);
+            move |_ctx, args| {
+                let services = Arc::clone(&services);
+                ability_support::box_fut(logic::queues::run(services, args))
+            }
+        },
+    );
+    spec = spec.on(
+        "pause",
+        "暂停或恢复一个队列",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "queue": { "type": "string" },
+                "paused": { "type": "boolean" }
+            },
+            "required": ["queue", "paused"]
+        }),
+        {
+            let services = Arc::clone(&services);
+            move |_ctx, args| {
+                let services = Arc::clone(&services);
+                ability_support::box_fut(logic::pause::run(services, args))
+            }
+        },
+    );
+    spec = spec.on(
         "next",
         "读取信源的下一次时间",
-        serde_json::json!({"type": "object"}),
+        serde_json::json!({
+            "type": "object",
+            "properties": { "source": { "type": "string" } },
+            "required": ["source"]
+        }),
         {
             let services = Arc::clone(&services);
             move |_ctx, args| {
@@ -80,4 +157,9 @@ fn text(args: &serde_json::Value, key: &str) -> ability_support::Result<String> 
         .and_then(|value| value.as_str())
         .map(str::to_string)
         .ok_or_else(|| ability_support::Error::invalid_args(format!("缺少字符串参数 {key}")))
+}
+
+fn parse<T: serde::de::DeserializeOwned>(args: serde_json::Value) -> ability_support::Result<T> {
+    serde_json::from_value(args)
+        .map_err(|error| ability_support::Error::invalid_args(error.to_string()))
 }

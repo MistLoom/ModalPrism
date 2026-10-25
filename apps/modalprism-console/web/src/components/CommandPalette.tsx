@@ -7,6 +7,7 @@ import {
   IconChannel,
   IconCommand,
   IconConfig,
+  IconFlow,
   IconLibrary,
   IconOverview,
   IconPlay,
@@ -29,6 +30,7 @@ const ICONS: Record<string, React.ReactNode> = {
   overview: <IconOverview size={14} />,
   sources: <IconSource size={14} />,
   library: <IconLibrary size={14} />,
+  workflows: <IconFlow size={14} />,
   channels: <IconChannel size={14} />,
   config: <IconConfig size={14} />,
 };

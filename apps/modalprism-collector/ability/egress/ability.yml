@@ -1,8 +1,8 @@
 framework_version: "1"
 id: egress
 open: true
-protocols: [fun]
-depends: []
+protocols: [fun, http]
+depends: [strata_read, strata_write]
 stateful: true
 description: 出站检查与正向代理状态
 methods:

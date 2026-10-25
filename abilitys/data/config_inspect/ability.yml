@@ -1,7 +1,7 @@
 framework_version: "1"
 id: config_inspect
 open: true
-protocols: [fun]
+protocols: [fun, http, mcp, tools]
 depends: []
 stateful: false
 description: 检查配置而不替换快照
@@ -18,6 +18,9 @@ methods:
     description: 解释模块字段来源
     input:
       type: object
+      properties:
+        module: { type: string }
+      required: [module]
   - id: modules
     description: 列出有效模块配置
     input:

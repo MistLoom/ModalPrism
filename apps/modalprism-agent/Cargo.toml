@@ -10,7 +10,9 @@ publish = false
 [dependencies]
 ability-core.workspace = true
 ability-support.workspace = true
+ability-workflow = { path = "../../abilitys/ops/workflow" }
 async-trait.workspace = true
+catalog_admin = { path = "../../abilitys/data/catalog_admin" }
 config_inspect = { path = "../../abilitys/data/config_inspect" }
 frame-core.workspace = true
 frame-port-mcp.workspace = true

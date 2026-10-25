@@ -4,10 +4,12 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("paid_gateway").stateful();
+    let mut spec = AbilitySpec::must("paid_gateway")
+        .stateful()
+        .protocols(&[ProtocolKind::Fun]);
     spec = spec.on(
         "complete",
         "确认回执",

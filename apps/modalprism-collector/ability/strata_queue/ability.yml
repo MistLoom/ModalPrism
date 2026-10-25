@@ -1,8 +1,8 @@
 framework_version: "1"
 id: strata_queue
 open: false
-protocols: [fun]
-depends: []
+protocols: [fun, http]
+depends: [strata_write]
 stateful: true
 description: 控制库任务队列
 methods:
@@ -26,7 +26,26 @@ methods:
     description: 按队列与状态列出任务
     input:
       type: object
-  - id: retry
-    description: 把失败的任务重新排入队列
+      properties:
+        queue: { type: string }
+        status: { type: string, enum: [queued, leased, done, cancelled] }
+        source: { type: string }
+        reason: { type: string }
+        query: { type: string }
+        before: { type: string }
+        cursor: { type: string }
+        limit: { type: integer }
+  - id: transition
+    description: 对选中的任务执行取消、重排或删除，单条与批量走同一状态机约束
+    input:
+      type: object
+      properties:
+        taskIds:
+          type: array
+          items: { type: string }
+        action: { type: string, enum: [cancel, requeue, remove] }
+      required: [taskIds, action]
+  - id: stats
+    description: 任务队列统计
     input:
       type: object

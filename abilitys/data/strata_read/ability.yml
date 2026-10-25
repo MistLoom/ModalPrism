@@ -1,7 +1,7 @@
 framework_version: "1"
 id: strata_read
 open: true
-protocols: [fun, http]
+protocols: [fun, http, mcp, tools]
 depends: []
 stateful: true
 description: 读取已发布的资源、facet 和变更
@@ -10,39 +10,84 @@ methods:
     description: 列出资源上的 facet 种类
     input:
       type: object
+      properties:
+        rid: { type: string }
+        includeVariants: { type: boolean }
+      required: [rid]
   - id: has
     description: 判断资源是否有某种 facet
     input:
       type: object
+      properties:
+        rid: { type: string }
+        kind: { type: string, enum: [struct, text, blob] }
+        variant: { type: string }
+      required: [rid, kind]
   - id: get
     description: 读取 facet 的版本与元数据
     input:
       type: object
+      properties:
+        facet: { type: string }
+        lazy: { type: boolean }
+      required: [facet]
   - id: slice
     description: 读取文本区间
     input:
       type: object
+      properties:
+        span: { type: string }
+      required: [span]
   - id: resolve
     description: 按身份键解析资源
     input:
       type: object
+      properties:
+        identity: { type: string }
+      required: [identity]
   - id: history
     description: 列出 facet 版本
     input:
       type: object
+      properties:
+        facet: { type: string }
+      required: [facet]
   - id: lineage
     description: 读取 facet 血缘
     input:
       type: object
+      properties:
+        facet: { type: string }
+        direction: { type: string, enum: [up, down] }
+        depth: { type: integer }
+      required: [facet]
   - id: related
     description: 读取资源关系
     input:
       type: object
+      properties:
+        rid: { type: string }
+        rel: { type: string }
+        direction: { type: string, enum: [out, in] }
+      required: [rid]
   - id: query
     description: 按查询对象读取
     input:
       type: object
+      properties:
+        query:
+          type: object
+          description: strata_model::Query：from/select/where/search/limit
+      required: [query]
   - id: changes
     description: 读取已可见变更
+    input:
+      type: object
+      properties:
+        after: { type: integer }
+        limit: { type: integer }
+      required: [after]
+  - id: summary
+    description: 统计内容总数、墓碑数、类型与来源分布
     input:
       type: object

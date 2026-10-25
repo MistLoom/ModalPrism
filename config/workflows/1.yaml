@@ -1,0 +1,21 @@
+description: "测试"
+enabled: true
+id: workflow/1
+kind: workflow
+model: atomcode
+name: "新的工作流"
+notify: []
+outputs:
+  facet:
+    body: "{{steps.step1}}"
+    kind: md
+    variant: summary
+steps:
+  - id: step1
+    kind: llm
+    prompt: "改写为微信公众号文章，中文"
+trigger:
+  kinds:
+    - article
+  on: manual
+  sources: []

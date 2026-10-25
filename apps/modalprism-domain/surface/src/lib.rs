@@ -49,14 +49,33 @@ pub const COLLECTOR: &[Ability] = &[
         read_only: &["validate"],
     },
     Ability {
-        id: "committer",
-        methods: &["flush", "recover", "status"],
-        read_only: &["status"],
+        id: "catalog_admin",
+        methods: &[
+            "batch",
+            "create",
+            "list",
+            "proxy",
+            "remove",
+            "templates",
+            "toggle",
+            "update",
+        ],
+        read_only: &["list", "templates"],
     },
     Ability {
-        id: "config",
+        id: "committer",
+        methods: &["flush", "handle", "recover", "status", "sweep"],
+        read_only: &["handle", "status"],
+    },
+    Ability {
+        id: "config_admin",
         methods: &["generation", "load"],
         read_only: &["generation"],
+    },
+    Ability {
+        id: "content_admin",
+        methods: &["count", "label", "purge", "restore"],
+        read_only: &["count"],
     },
     Ability {
         id: "config_inspect",
@@ -70,11 +89,11 @@ pub const COLLECTOR: &[Ability] = &[
     },
     Ability {
         id: "health",
-        methods: &["status"],
-        read_only: &["status"],
+        methods: &["report", "status"],
+        read_only: &["report", "status"],
     },
     Ability {
-        id: "health_check",
+        id: "health_record",
         methods: &["evaluate"],
         read_only: &[],
     },
@@ -85,34 +104,66 @@ pub const COLLECTOR: &[Ability] = &[
     },
     Ability {
         id: "planner",
-        methods: &["next", "status", "tick", "trigger"],
-        read_only: &["next", "status"],
+        methods: &[
+            "manual", "next", "pause", "queues", "round", "status", "tick", "trigger",
+        ],
+        read_only: &["next", "queues", "status"],
     },
     Ability {
         id: "runner",
-        methods: &["run_task"],
+        methods: &["run"],
         read_only: &[],
     },
     Ability {
         id: "strata_queue",
-        methods: &["enqueue", "extend", "lease", "list", "nack", "retry"],
-        read_only: &["list"],
+        methods: &[
+            "enqueue",
+            "extend",
+            "lease",
+            "list",
+            "nack",
+            "stats",
+            "transition",
+        ],
+        read_only: &["list", "stats"],
     },
     Ability {
         id: "strata_read",
         methods: &[
             "changes", "get", "has", "history", "kinds", "lineage", "query", "related", "resolve",
-            "slice",
+            "slice", "summary",
         ],
         read_only: &[
             "changes", "get", "has", "history", "kinds", "lineage", "query", "related", "resolve",
-            "slice",
+            "slice", "summary",
         ],
     },
     Ability {
         id: "strata_write",
         methods: &["apply"],
         read_only: &[],
+    },
+    Ability {
+        id: "type_article",
+        methods: &["on_commit", "project"],
+        read_only: &["on_commit", "project"],
+    },
+    Ability {
+        id: "workflow",
+        methods: &[
+            "catalog",
+            "get",
+            "notify_test",
+            "remove",
+            "remove_model",
+            "run",
+            "runs",
+            "save",
+            "save_model",
+            "tick",
+            "toggle",
+        ],
+        read_only: &["catalog", "get", "runs"],
     },
 ];
 
@@ -123,11 +174,24 @@ pub const COLLECTOR_OPS: &[Exposure] = &[
         methods: &["validate"],
     },
     Exposure {
-        id: "committer",
-        methods: &["flush", "recover", "status"],
+        id: "catalog_admin",
+        methods: &[
+            "batch",
+            "create",
+            "list",
+            "proxy",
+            "remove",
+            "templates",
+            "toggle",
+            "update",
+        ],
     },
     Exposure {
-        id: "config",
+        id: "committer",
+        methods: &["flush", "handle", "recover", "status", "sweep"],
+    },
+    Exposure {
+        id: "config_admin",
         methods: &["generation", "load"],
     },
     Exposure {
@@ -135,30 +199,60 @@ pub const COLLECTOR_OPS: &[Exposure] = &[
         methods: &["diff", "explain", "modules", "validate"],
     },
     Exposure {
+        id: "content_admin",
+        methods: &["count", "label", "purge", "restore"],
+    },
+    Exposure {
         id: "egress",
         methods: &["check", "report", "reset", "status"],
     },
     Exposure {
         id: "health",
-        methods: &["status"],
+        methods: &["report", "status"],
     },
     Exposure {
-        id: "health_check",
+        id: "health_record",
         methods: &["evaluate"],
     },
     Exposure {
         id: "planner",
-        methods: &["next", "status", "tick", "trigger"],
+        methods: &[
+            "manual", "next", "pause", "queues", "round", "status", "tick", "trigger",
+        ],
     },
     Exposure {
         id: "strata_queue",
-        methods: &["list", "retry"],
+        methods: &["list", "stats", "transition"],
+    },
+    Exposure {
+        id: "runner",
+        methods: &["run"],
     },
     Exposure {
         id: "strata_read",
         methods: &[
             "changes", "get", "has", "history", "kinds", "lineage", "query", "related", "resolve",
-            "slice",
+            "slice", "summary",
+        ],
+    },
+    Exposure {
+        id: "type_article",
+        methods: &["project"],
+    },
+    Exposure {
+        id: "workflow",
+        methods: &[
+            "catalog",
+            "get",
+            "notify_test",
+            "remove",
+            "remove_model",
+            "run",
+            "runs",
+            "save",
+            "save_model",
+            "tick",
+            "toggle",
         ],
     },
 ];
@@ -166,24 +260,38 @@ pub const COLLECTOR_OPS: &[Exposure] = &[
 /// 只读进程安装的全部能力。
 pub const AGENT: &[Ability] = &[
     Ability {
+        id: "catalog_admin",
+        methods: &[
+            "batch",
+            "create",
+            "list",
+            "proxy",
+            "remove",
+            "templates",
+            "toggle",
+            "update",
+        ],
+        read_only: &["list", "templates"],
+    },
+    Ability {
         id: "config_inspect",
         methods: &["diff", "explain", "modules", "validate"],
         read_only: &["diff", "explain", "modules", "validate"],
     },
     Ability {
         id: "health",
-        methods: &["status"],
-        read_only: &["status"],
+        methods: &["report", "status"],
+        read_only: &["report", "status"],
     },
     Ability {
         id: "strata_read",
         methods: &[
             "changes", "get", "has", "history", "kinds", "lineage", "query", "related", "resolve",
-            "slice",
+            "slice", "summary",
         ],
         read_only: &[
             "changes", "get", "has", "history", "kinds", "lineage", "query", "related", "resolve",
-            "slice",
+            "slice", "summary",
         ],
     },
     Ability {
@@ -196,16 +304,46 @@ pub const AGENT: &[Ability] = &[
         methods: &["on_commit", "project"],
         read_only: &["on_commit", "project"],
     },
+    Ability {
+        id: "workflow",
+        methods: &[
+            "catalog",
+            "get",
+            "notify_test",
+            "remove",
+            "remove_model",
+            "run",
+            "runs",
+            "save",
+            "save_model",
+            "tick",
+            "toggle",
+        ],
+        read_only: &["catalog", "get", "runs"],
+    },
 ];
 
 /// 控制台的界面面。只保留可恢复、无副作用的写方法。
 pub const CONSOLE: &[Exposure] = &[
     Exposure {
-        id: "committer",
-        methods: &["flush", "status"],
+        id: "catalog_admin",
+        methods: &[
+            "batch",
+            "create",
+            "list",
+            "proxy",
+            "remove",
+            "templates",
+            "toggle",
+            "update",
+        ],
     },
     Exposure {
-        id: "config",
+        id: "committer",
+        methods: &["flush", "handle", "status", "sweep"],
+    },
+    Exposure {
+        id: "config_admin",
         methods: &["generation", "load"],
     },
     Exposure {
@@ -213,30 +351,99 @@ pub const CONSOLE: &[Exposure] = &[
         methods: &["diff", "explain", "modules", "validate"],
     },
     Exposure {
+        id: "content_admin",
+        methods: &["count", "label", "purge", "restore"],
+    },
+    Exposure {
         id: "egress",
         methods: &["check", "report", "reset", "status"],
     },
     Exposure {
         id: "health",
-        methods: &["status"],
+        methods: &["report", "status"],
     },
     Exposure {
-        id: "health_check",
+        id: "health_record",
         methods: &["evaluate"],
     },
     Exposure {
         id: "planner",
-        methods: &["next", "status", "tick", "trigger"],
+        methods: &[
+            "manual", "next", "pause", "queues", "round", "status", "tick", "trigger",
+        ],
     },
     Exposure {
         id: "strata_queue",
-        methods: &["list", "retry"],
+        methods: &["list", "stats", "transition"],
+    },
+    Exposure {
+        id: "runner",
+        methods: &["run"],
     },
     Exposure {
         id: "strata_read",
         methods: &[
-            "changes", "get", "history", "kinds", "lineage", "query", "related", "resolve", "slice",
+            "changes", "get", "history", "kinds", "lineage", "query", "related", "resolve",
+            "slice", "summary",
         ],
+    },
+    Exposure {
+        id: "type_article",
+        methods: &["project"],
+    },
+    Exposure {
+        id: "workflow",
+        methods: &[
+            "catalog",
+            "get",
+            "notify_test",
+            "remove",
+            "remove_model",
+            "run",
+            "runs",
+            "save",
+            "save_model",
+            "tick",
+            "toggle",
+        ],
+    },
+];
+
+/// 只读进程的 MCP 面。
+///
+/// 只读进程装了完整能力（好让 manifest 与其它应用一致），但对外只开查询：
+/// 信源清单与模板、工作流与运行记录都在这里，写侧一律不出去。
+pub const AGENT_MCP: &[Exposure] = &[
+    Exposure {
+        id: "catalog_admin",
+        methods: &["list", "templates"],
+    },
+    Exposure {
+        id: "config_inspect",
+        methods: &["diff", "explain", "modules", "validate"],
+    },
+    Exposure {
+        id: "health",
+        methods: &["report", "status"],
+    },
+    Exposure {
+        id: "strata_read",
+        methods: &[
+            "changes", "get", "has", "history", "kinds", "lineage", "query", "related", "resolve",
+            "slice", "summary",
+        ],
+    },
+    Exposure {
+        id: "type_article",
+        methods: &["project"],
+    },
+    Exposure {
+        id: "type_hotlist",
+        methods: &["project"],
+    },
+    Exposure {
+        id: "workflow",
+        methods: &["catalog", "get", "runs"],
     },
 ];
 
@@ -271,6 +478,17 @@ mod tests {
             let ability = ability(COLLECTOR, item.id).expect("运维面只能引用已安装能力");
             for method in item.methods {
                 assert!(ability.has(method), "{} 未声明 {method}", item.id);
+            }
+        }
+        for item in AGENT_MCP {
+            let ability = ability(AGENT, item.id).expect("MCP 面只能引用只读进程已装能力");
+            for method in item.methods {
+                assert!(ability.has(method), "{} 未声明 {method}", item.id);
+                assert!(
+                    ability.is_read_only(method),
+                    "MCP 面 {} {method} 不是只读方法",
+                    item.id
+                );
             }
         }
         for item in CONSOLE {

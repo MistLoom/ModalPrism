@@ -2,7 +2,7 @@
 //!
 //! 业务只提交 `Request`，方言差异留在各后端实现内部。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 use strata_model::{Expr, FacetSelector, OrderBy, QueryFrom, Search};
@@ -26,6 +26,8 @@ pub struct Request {
     pub limit: Option<u32>,
     /// 上一页最后一个 `seq`。
     pub cursor: Option<u64>,
+    /// 是否返回已写入墓碑的资源；缺省不返回。
+    pub include_tombstoned: bool,
 }
 
 impl Request {
@@ -39,6 +41,7 @@ impl Request {
             order_by: Vec::new(),
             limit: None,
             cursor: None,
+            include_tombstoned: false,
         }
     }
 
@@ -241,6 +244,12 @@ pub async fn execute(
             .total_cmp(&left.1)
             .then_with(|| left.0.cmp(&right.0))
     });
+    // 检索直连索引，墓碑过滤要在这里补一次，才能与基础行路径一致。
+    if request.from == QueryFrom::Resources && !request.include_tombstoned {
+        let rids: Vec<String> = ranked.iter().map(|(rid, _, _)| rid.clone()).collect();
+        let hidden = tombstoned_rids(db, versions, &rids).await?;
+        ranked.retain(|(rid, _, _)| !hidden.contains(rid));
+    }
     ranked.truncate(limit);
 
     let mut payloads: BTreeMap<String, Value> =
@@ -513,6 +522,17 @@ async fn base_rows(
         sql.push(" AND ");
         compile(&mut sql, request.from, versions, expr)?;
     }
+    if request.from == QueryFrom::Resources && !request.include_tombstoned {
+        sql.push(
+            " AND NOT EXISTS (SELECT 1 FROM g_resource_marks m WHERE m.rid = g_resources.rid AND m.v <= ",
+        );
+        sql.u64(versions.get("resource_marks").copied().unwrap_or(0));
+        sql.push(
+            " AND m.tombstone = 1 AND m.seq = (SELECT MAX(m2.seq) FROM g_resource_marks m2 WHERE m2.rid = m.rid AND m2.v <= ",
+        );
+        sql.u64(versions.get("resource_marks").copied().unwrap_or(0));
+        sql.push("))");
+    }
     if !request.has_facets.is_empty() {
         for selector in &request.has_facets {
             sql.push(
@@ -683,6 +703,36 @@ fn relation_payload(row: &crate::db::Row) -> Result<Value> {
     payload.insert("dstRid".into(), Value::String(row.text("dst_rid")?));
     payload.insert("seq".into(), Value::from(row.u64("seq")?));
     Ok(Value::Object(payload))
+}
+
+/// 已由最新一条标记写进墓碑的资源号。
+async fn tombstoned_rids(
+    db: &Db,
+    versions: &BTreeMap<String, u64>,
+    rids: &[String],
+) -> Result<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    if rids.is_empty() {
+        return Ok(out);
+    }
+    let marks = versions.get("resource_marks").copied().unwrap_or(0);
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT DISTINCT m.rid AS rid FROM g_resource_marks m WHERE m.v <= ");
+    sql.u64(marks);
+    sql.push(" AND m.tombstone = 1 AND m.seq = (SELECT MAX(m2.seq) FROM g_resource_marks m2 WHERE m2.rid = m.rid AND m2.v <= ");
+    sql.u64(marks);
+    sql.push(") AND m.rid IN (");
+    for (index, rid) in rids.iter().enumerate() {
+        if index > 0 {
+            sql.push(", ");
+        }
+        sql.text(rid.clone());
+    }
+    sql.push(")");
+    for row in db.fetch(&sql).await? {
+        out.insert(row.text("rid")?);
+    }
+    Ok(out)
 }
 
 /// 按 rid 批量取资源行：检索命中的资源可能不在过滤结果里。

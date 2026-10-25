@@ -4,13 +4,13 @@ mod derive;
 mod options;
 mod query;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use bytes::Bytes;
 use serde_json::Value;
 use strata_gateway::{
-    Dataset as View, FacetRow as FacetRecord, Gateway, Request as GatewayRequest,
+    Dataset as View, FacetRow as FacetRecord, Gateway, Request as GatewayRequest, StateRow,
 };
 use strata_model::{
     AccessTask, ApplyOpts, AsOf, ChangeSet, CommitId, CommitResult, EdgeDir, FacetKind, FacetRef,
@@ -23,7 +23,11 @@ pub use options::{
     BLOB_DEDICATED_THRESHOLD, BLOB_INLINE_THRESHOLD, INLINE_TEXT_MAX, Options, STAGING_TTL,
     check_storage,
 };
-pub use strata_gateway::task::TaskRow;
+pub use strata_gateway::maintenance::{PrunePlan, PruneReport, StoreCounts};
+pub use strata_gateway::task::{
+    STATUS_CANCELLED, STATUS_DONE, STATUS_LEASED, STATUS_QUEUED, TaskFilter, TaskPage, TaskRow,
+    TaskStats, known_reason, known_status,
+};
 pub use strata_gateway::{Backend, BlobBackend, DerivationSpec, DerivationTask, Tokenizer};
 
 pub struct Strata {
@@ -96,6 +100,40 @@ pub struct StateValue {
 pub struct QueryPage {
     pub rows: Vec<Value>,
     pub next_cursor: Option<String>,
+}
+
+/// 内容库总览。`variants` 与 `sources` 已按条数降序。
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Summary {
+    pub total: u64,
+    pub tombstoned: u64,
+    pub variants: Vec<VariantTotal>,
+    pub sources: Vec<SourceTotal>,
+    /// 用户分类标签分布：按最新一条标记统计，墓碑不计入。
+    pub labels: Vec<LabelTotal>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelTotal {
+    pub key: String,
+    pub value: String,
+    pub total: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantTotal {
+    pub variant: String,
+    pub total: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceTotal {
+    pub source_id: String,
+    pub total: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -373,6 +411,7 @@ impl Strata {
             order_by: query.order_by.clone(),
             limit: query.limit,
             cursor: None,
+            include_tombstoned: query.include_tombstoned,
         };
         let response = self.gateway.query(request).await?;
         let mut rows = Vec::with_capacity(response.rows.len());
@@ -428,6 +467,142 @@ impl Strata {
         }))
     }
 
+    /// 某作用域下的全部最新状态，按 key 升序。
+    ///
+    /// 运行态一次取全量，调用方不必逐键问一次。
+    pub async fn states(&self, scope: &str) -> Result<Vec<(String, StateValue)>, Error> {
+        let view = self.gateway.view_latest().await?;
+        let mut latest: BTreeMap<&str, &StateRow> = BTreeMap::new();
+        for row in view.states.iter().filter(|row| row.scope == scope) {
+            let entry = latest.entry(row.key.as_str()).or_insert(row);
+            if row.seq > entry.seq {
+                *entry = row;
+            }
+        }
+        Ok(latest
+            .into_iter()
+            .map(|(key, row)| {
+                (
+                    key.to_string(),
+                    StateValue {
+                        value: row.value.clone(),
+                        version: 1,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    /// 内容库总览：一次遍历得出总数、墓碑数、类型与来源分布。
+    ///
+    /// 口径与查询一致：墓碑既不计入总数，也不计入类型与来源分布。
+    pub async fn summary(&self) -> Result<Summary, Error> {
+        let view = self.gateway.view_latest().await?;
+        // 同一 rid 取 seq 最新的一条标记：墓碑与标签都以头部标记为准。
+        let mut marks: HashMap<&str, &strata_gateway::MarkRow> = HashMap::new();
+        for mark in &view.marks {
+            marks
+                .entry(mark.rid.as_str())
+                .and_modify(|current| {
+                    if mark.seq >= current.seq {
+                        *current = mark;
+                    }
+                })
+                .or_insert(mark);
+        }
+        let mut total = 0u64;
+        let mut tombstoned = 0u64;
+        let mut live: HashSet<&str> = HashSet::new();
+        let mut sources: BTreeMap<&str, u64> = BTreeMap::new();
+        let mut labels: BTreeMap<(&str, &str), u64> = BTreeMap::new();
+        for resource in &view.resources {
+            if marks
+                .get(resource.rid.as_str())
+                .is_some_and(|mark| mark.tombstone)
+            {
+                tombstoned += 1;
+                continue;
+            }
+            total += 1;
+            live.insert(resource.rid.as_str());
+            if let Some(source_id) = resource.source_id.as_deref() {
+                *sources.entry(source_id).or_default() += 1;
+            }
+            for item in marks
+                .get(resource.rid.as_str())
+                .map(|mark| mark.labels.as_slice())
+                .unwrap_or_default()
+            {
+                if let Some((key, value)) = item.split_once('=') {
+                    *labels.entry((key, value)).or_default() += 1;
+                }
+            }
+        }
+        // 同一资源的同一变体只算一次：视图里保留着全部历史版本。
+        let mut seen: HashSet<(&str, &str)> = HashSet::new();
+        let mut counts: BTreeMap<&str, u64> = BTreeMap::new();
+        for facet in &view.facets {
+            if facet.kind != "struct" || !live.contains(facet.rid.as_str()) {
+                continue;
+            }
+            let Some(variant) = facet.variant.as_deref().filter(|name| !name.is_empty()) else {
+                continue;
+            };
+            if !seen.insert((facet.rid.as_str(), variant)) {
+                continue;
+            }
+            *counts.entry(variant).or_default() += 1;
+        }
+        let mut variants: Vec<VariantTotal> = counts
+            .into_iter()
+            .map(|(variant, total)| VariantTotal {
+                variant: variant.to_string(),
+                total,
+            })
+            .collect();
+        variants.sort_by(|left, right| {
+            right
+                .total
+                .cmp(&left.total)
+                .then_with(|| left.variant.cmp(&right.variant))
+        });
+        let mut sources: Vec<SourceTotal> = sources
+            .into_iter()
+            .map(|(source_id, total)| SourceTotal {
+                source_id: source_id.to_string(),
+                total,
+            })
+            .collect();
+        sources.sort_by(|left, right| {
+            right
+                .total
+                .cmp(&left.total)
+                .then_with(|| left.source_id.cmp(&right.source_id))
+        });
+        let mut labels: Vec<LabelTotal> = labels
+            .into_iter()
+            .map(|((key, value), total)| LabelTotal {
+                key: key.to_string(),
+                value: value.to_string(),
+                total,
+            })
+            .collect();
+        labels.sort_by(|left, right| {
+            right
+                .total
+                .cmp(&left.total)
+                .then_with(|| left.key.cmp(&right.key))
+                .then_with(|| left.value.cmp(&right.value))
+        });
+        Ok(Summary {
+            total,
+            tombstoned,
+            variants,
+            sources,
+            labels,
+        })
+    }
+
     pub async fn enqueue(&self, tasks: &[AccessTask]) -> Result<(), Error> {
         self.gateway.enqueue(tasks).await?;
         Ok(())
@@ -461,19 +636,71 @@ impl Strata {
         Ok(self.gateway.nack(task_id, retry_at, error).await?)
     }
 
-    /// 任务列表，供控制台查看队列状态。
+    /// 任务一页，供控制台查看队列状态。
     pub async fn list_tasks(
         &self,
-        queue: Option<QueueName>,
-        status: Option<&str>,
+        filter: &strata_gateway::task::TaskFilter,
+        cursor: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<strata_gateway::task::TaskRow>, Error> {
-        Ok(self.gateway.list_tasks(queue, status, limit).await?)
+    ) -> Result<strata_gateway::task::TaskPage, Error> {
+        Ok(self.gateway.list_tasks(filter, cursor, limit).await?)
     }
 
-    /// 手动重试一个排队中的任务。
-    pub async fn retry_task(&self, task_id: &TaskId) -> Result<bool, Error> {
-        Ok(self.gateway.retry_task(task_id).await?)
+    /// 队列全景统计。
+    pub async fn task_stats(&self) -> Result<strata_gateway::task::TaskStats, Error> {
+        Ok(self.gateway.task_stats().await?)
+    }
+
+    /// 取消一个尚未终态的任务。
+    pub async fn cancel_task(&self, task_id: &TaskId) -> Result<bool, Error> {
+        Ok(self.gateway.cancel_task(task_id).await?)
+    }
+
+    /// 重试或恢复一个任务。
+    pub async fn requeue_task(&self, task_id: &TaskId) -> Result<bool, Error> {
+        Ok(self.gateway.requeue_task(task_id).await?)
+    }
+
+    /// 删除一个终态任务。
+    pub async fn remove_task(&self, task_id: &TaskId) -> Result<bool, Error> {
+        Ok(self.gateway.remove_task(task_id).await?)
+    }
+
+    /// 按条件清理终态任务。
+    pub async fn purge_tasks(
+        &self,
+        filter: &strata_gateway::task::TaskFilter,
+    ) -> Result<u64, Error> {
+        Ok(self.gateway.purge_tasks(filter).await?)
+    }
+
+    /// 按条件计数，供分页页脚与清理确认。
+    pub async fn count_tasks(
+        &self,
+        filter: &strata_gateway::task::TaskFilter,
+    ) -> Result<u64, Error> {
+        Ok(self.gateway.count_tasks(filter).await?)
+    }
+
+    /// 每队列 × 状态计数。
+    pub async fn queue_counts(&self) -> Result<Vec<strata_gateway::task::QueueCounts>, Error> {
+        Ok(self.gateway.queue_counts().await?)
+    }
+
+    /// 读取一条任务的完整内容，供装配层执行。
+    pub async fn read_task(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<Option<strata_gateway::task::StoredTask>, Error> {
+        Ok(self.gateway.read_task(task_id).await?)
+    }
+
+    /// 单条任务行，供新建后回显。
+    pub async fn task_row(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<Option<strata_gateway::task::TaskRow>, Error> {
+        Ok(self.gateway.task_row(task_id).await?)
     }
 
     pub async fn lease_id(
@@ -535,6 +762,20 @@ impl Strata {
             value: serde_json::from_str(&value).map_err(strata_gateway::Error::from)?,
             version,
         }))
+    }
+
+    /// 按计划裁掉过期行。
+    pub async fn prune(
+        &self,
+        plan: &strata_gateway::maintenance::PrunePlan,
+        dry_run: bool,
+    ) -> Result<strata_gateway::maintenance::PruneReport, Error> {
+        Ok(self.gateway.prune(plan, dry_run).await?)
+    }
+
+    /// 各表行数。
+    pub async fn store_counts(&self) -> Result<strata_gateway::maintenance::StoreCounts, Error> {
+        Ok(self.gateway.store_counts().await?)
     }
 
     pub async fn hot_get(&self, kind: &str, key: &str) -> Result<Option<Value>, Error> {

@@ -97,6 +97,11 @@ pub enum Op {
         target: Target,
         reason: String,
     },
+    /// 撤销墓碑：把资源从「已删除」回到可见。
+    Restore {
+        target: Target,
+        reason: String,
+    },
 }
 
 /// 一次声明式写入。
@@ -188,6 +193,12 @@ fn validate_op(op: &Op) -> Result<(), ModelError> {
             }
         }
         Op::Tombstone { target, reason } => {
+            check_target(target)?;
+            if reason.is_empty() {
+                return Err(ModelError::EmptyId);
+            }
+        }
+        Op::Restore { target, reason } => {
             check_target(target)?;
             if reason.is_empty() {
                 return Err(ModelError::EmptyId);

@@ -344,19 +344,59 @@ impl Gateway {
         task::active(&self.db, source, key).await
     }
 
-    /// 任务列表，供控制台查看队列状态。
+    /// 任务一页，供控制台查看队列状态。
     pub async fn list_tasks(
         &self,
-        queue: Option<QueueName>,
-        status: Option<&str>,
+        filter: &task::TaskFilter,
+        cursor: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<task::TaskRow>> {
-        task::list_tasks(&self.db, queue, status, limit).await
+    ) -> Result<task::TaskPage> {
+        task::list_tasks(&self.db, filter, cursor, limit).await
     }
 
-    /// 手动重试一个排队中的任务。
-    pub async fn retry_task(&self, task_id: &TaskId) -> Result<bool> {
-        task::retry_task(&self.db, task_id).await
+    /// 队列全景统计。
+    pub async fn task_stats(&self) -> Result<task::TaskStats> {
+        task::stats(&self.db).await
+    }
+
+    /// 取消一个尚未终态的任务。
+    pub async fn cancel_task(&self, task_id: &TaskId) -> Result<bool> {
+        task::cancel(&self.db, task_id).await
+    }
+
+    /// 重试或恢复一个任务，让它立即参与下一轮租约。
+    pub async fn requeue_task(&self, task_id: &TaskId) -> Result<bool> {
+        task::requeue(&self.db, task_id).await
+    }
+
+    /// 删除一个终态任务。
+    pub async fn remove_task(&self, task_id: &TaskId) -> Result<bool> {
+        task::remove(&self.db, task_id).await
+    }
+
+    /// 按条件清理终态任务。
+    pub async fn purge_tasks(&self, filter: &task::TaskFilter) -> Result<u64> {
+        task::purge(&self.db, filter).await
+    }
+
+    /// 按条件计数，供分页页脚与清理确认。
+    pub async fn count_tasks(&self, filter: &task::TaskFilter) -> Result<u64> {
+        task::count_tasks(&self.db, filter).await
+    }
+
+    /// 每队列 × 状态计数。
+    pub async fn queue_counts(&self) -> Result<Vec<task::QueueCounts>> {
+        task::queue_counts(&self.db).await
+    }
+
+    /// 读取一条任务的完整内容，供装配层执行。
+    pub async fn read_task(&self, task_id: &TaskId) -> Result<Option<task::StoredTask>> {
+        task::read(&self.db, task_id).await
+    }
+
+    /// 单条任务行，供新建后回显。
+    pub async fn task_row(&self, task_id: &TaskId) -> Result<Option<task::TaskRow>> {
+        task::row(&self.db, task_id).await
     }
 
     /// 已接收状态的最新值与版本；不要求已发布。
@@ -370,6 +410,20 @@ impl Gateway {
 
     pub async fn hot_put(&self, kind: &str, key: &str, value: &str) -> Result<()> {
         task::hot_put(&self.db, kind, key, value).await
+    }
+
+    /// 按保留计划裁剪过期行。
+    pub async fn prune(
+        &self,
+        plan: &crate::maintenance::PrunePlan,
+        dry_run: bool,
+    ) -> Result<crate::maintenance::PruneReport> {
+        crate::maintenance::prune(&self.db, plan, dry_run).await
+    }
+
+    /// 各表行数。
+    pub async fn store_counts(&self) -> Result<crate::maintenance::StoreCounts> {
+        crate::maintenance::counts(&self.db).await
     }
 
     /// 测试/运维入口。

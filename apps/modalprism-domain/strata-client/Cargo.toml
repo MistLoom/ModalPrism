@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 strata-model = { path = "../strata-model" }
 strata-gateway = { path = "../strata-gateway" }

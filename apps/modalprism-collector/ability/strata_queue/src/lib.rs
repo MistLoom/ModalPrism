@@ -4,10 +4,31 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("strata_queue").stateful();
+    let mut spec = AbilitySpec::must("strata_queue")
+        .stateful()
+        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
+    spec = spec.on(
+        "transition",
+        "对选中的任务执行取消、重排或删除，单条与批量走同一状态机约束",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "taskIds": { "type": "array", "items": { "type": "string" } },
+                "action": { "type": "string", "enum": ["cancel", "requeue", "remove"] }
+            },
+            "required": ["taskIds", "action"]
+        }),
+        {
+            let services = Arc::clone(&services);
+            move |_ctx, args| {
+                let services = Arc::clone(&services);
+                ability_support::box_fut(logic::transition::run(services, args))
+            }
+        },
+    );
     spec = spec.on(
         "enqueue",
         "写入任务",
@@ -69,14 +90,14 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
         },
     );
     spec = spec.on(
-        "retry",
-        "重试一个排队中的任务",
+        "stats",
+        "任务队列统计",
         serde_json::json!({"type": "object"}),
         {
             let services = Arc::clone(&services);
             move |_ctx, args| {
                 let services = Arc::clone(&services);
-                ability_support::box_fut(logic::retry::run(services, args))
+                ability_support::box_fut(logic::stats::run(services, args))
             }
         },
     );

@@ -10,3 +10,4 @@ pub mod query;
 pub mod related;
 pub mod resolve;
 pub mod slice;
+pub mod summary;

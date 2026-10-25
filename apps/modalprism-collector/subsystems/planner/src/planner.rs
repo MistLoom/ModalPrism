@@ -36,6 +36,8 @@ pub struct SourcePlan {
     pub expected_period: Option<Duration>,
     pub yield_drop_ratio: f64,
     pub failure_threshold: u32,
+    /// 每日产出上限；未配置时不限制。
+    pub daily_limit: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +52,8 @@ pub struct SourceStatus {
     pub last_ok_at: Option<String>,
     pub last_yield_at: Option<String>,
     pub yields_7d: u64,
+    /// 今日已产出条数，对上每日上限。
+    pub today_yield: u64,
 }
 
 pub struct Capacities {
@@ -68,6 +72,11 @@ impl Capacities {
             QueueName::Push => self.push,
         }
     }
+
+    /// 队列的并发上限，供控制台展示。
+    pub fn capacity(&self, queue: QueueName) -> usize {
+        self.room(queue)
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -76,6 +85,9 @@ pub(crate) struct Db {
     pub health: BTreeMap<String, Health>,
     pub yields: BTreeMap<String, BTreeMap<String, u64>>,
     pub last_snapshot: Option<String>,
+    /// 被暂停的队列：暂停后定时扫描不再往该队列派发。
+    #[serde(default)]
+    pub paused: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -160,7 +172,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
                 };
                 task
             } else if charge_budget(&mut db, plan, now)? {
-                let task = make_task(plan, now)?;
+                let task = make_task(plan, TaskReason::Schedule, now)?;
                 self.queue.enqueue(std::slice::from_ref(&task)).await?;
                 self.queue.lease_id(&task.task_id, lease_for, now).await?
             } else {
@@ -226,6 +238,29 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             .or_insert_with(|| new_row(0, 0));
         row.next_at = Some(stamp(now)?);
         save_db(&self.persist, &db).await
+    }
+
+    /// 读取被暂停的队列。
+    pub async fn paused(&self) -> Result<BTreeSet<String>, PlannerError> {
+        let _guard = self.lock.lock().await;
+        Ok(load_db(&self.persist).await?.paused)
+    }
+
+    /// 暂停或恢复一个队列，返回修改后的暂停集合。
+    pub async fn set_paused(
+        &self,
+        queue: QueueName,
+        paused: bool,
+    ) -> Result<BTreeSet<String>, PlannerError> {
+        let _guard = self.lock.lock().await;
+        let mut db = load_db(&self.persist).await?;
+        if paused {
+            db.paused.insert(queue.label().to_string());
+        } else {
+            db.paused.remove(queue.label());
+        }
+        save_db(&self.persist, &db).await?;
+        Ok(db.paused)
     }
 
     pub async fn shutdown(&self, now: Timestamp) -> Result<Vec<AccessTask>, PlannerError> {
@@ -394,7 +429,12 @@ pub fn priority(reason: TaskReason) -> i32 {
     }
 }
 
-fn make_task(plan: &SourcePlan, now: Timestamp) -> Result<AccessTask, PlannerError> {
+/// 按计划构造一条任务。定时扫描与人工新建共用这一个构造，避免两套字段。
+pub fn make_task(
+    plan: &SourcePlan,
+    reason: TaskReason,
+    now: Timestamp,
+) -> Result<AccessTask, PlannerError> {
     Ok(AccessTask {
         task_id: TaskId::new(format!("t_{}", ulid::Ulid::new()))
             .map_err(|source| PlannerError::with_source("任务 ID", source))?,
@@ -402,8 +442,8 @@ fn make_task(plan: &SourcePlan, now: Timestamp) -> Result<AccessTask, PlannerErr
         accessor: plan.accessor.clone(),
         locator: plan.locator.clone(),
         spec: plan.spec.clone(),
-        reason: TaskReason::Schedule,
-        priority: priority(TaskReason::Schedule),
+        reason,
+        priority: priority(reason),
         queue: plan.queue,
         lease_until: now,
         attempt: 0,
@@ -415,6 +455,9 @@ fn make_task(plan: &SourcePlan, now: Timestamp) -> Result<AccessTask, PlannerErr
 fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
     let id = plan.source_id.as_str().to_string();
     let yield_7d = yield_sum(&db.yields, &id, today, 0, 7);
+    let today_yield = yield_sum(&db.yields, &id, today, 0, 1);
+    let paused = db.paused.contains(plan.queue.label());
+    let capped = plan.daily_limit.is_some_and(|limit| today_yield >= limit);
     let row = db
         .sources
         .entry(id)
@@ -429,6 +472,16 @@ fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
         }
     }
     row.generation = plan.generation;
+    if paused {
+        row.skip_reason = Some("queue-paused".into());
+    } else if capped {
+        row.skip_reason = Some("daily-cap".into());
+    } else if matches!(
+        row.skip_reason.as_deref(),
+        Some("queue-paused" | "daily-cap")
+    ) {
+        row.skip_reason = None;
+    }
     if row.last_recompute.as_deref() != Some(today) {
         row.interval_ms = millis(next_interval(&CadenceInput {
             yield_7d,
@@ -444,9 +497,10 @@ fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
 }
 
 fn due_ids(db: &Db, plans: &[SourcePlan], now: Timestamp) -> BTreeSet<String> {
+    let today = day_of(now);
     let mut due = BTreeSet::new();
     for plan in plans {
-        if !dispatchable(db, plan) {
+        if !dispatchable(db, plan, &today) {
             continue;
         }
         let due_now = db
@@ -473,7 +527,7 @@ fn due_ids(db: &Db, plans: &[SourcePlan], now: Timestamp) -> BTreeSet<String> {
             .batch_key
             .as_ref()
             .is_some_and(|key| keys.iter().any(|item| item == key))
-            && dispatchable(db, plan)
+            && dispatchable(db, plan, &today)
         {
             due.insert(plan.source_id.as_str().to_string());
         }
@@ -481,8 +535,12 @@ fn due_ids(db: &Db, plans: &[SourcePlan], now: Timestamp) -> BTreeSet<String> {
     due
 }
 
-fn dispatchable(db: &Db, plan: &SourcePlan) -> bool {
+fn dispatchable(db: &Db, plan: &SourcePlan, today: &str) -> bool {
     plan.enabled
+        && !db.paused.contains(plan.queue.label())
+        && plan
+            .daily_limit
+            .is_none_or(|limit| yield_sum(&db.yields, plan.source_id.as_str(), today, 0, 1) < limit)
         && !matches!(
             db.health
                 .get(&format!("source/{}", plan.source_id))
@@ -508,6 +566,7 @@ fn status_of(db: &Db, source: &str, now: Timestamp) -> SourceStatus {
         last_ok_at: health.and_then(|item| item.last_ok_at.clone()),
         last_yield_at: row.and_then(|row| row.last_yield_at.clone()),
         yields_7d: yield_sum(&db.yields, source, &today, 0, 7),
+        today_yield: yield_sum(&db.yields, source, &today, 0, 1),
     }
 }
 

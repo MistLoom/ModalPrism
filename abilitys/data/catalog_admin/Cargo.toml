@@ -1,0 +1,17 @@
+[package]
+name = "catalog_admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "以声明文件增删改信源、访问器与适配器，无需重新编译"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+config = { path = "../../../apps/modalprism-domain/config" }
+types = { path = "../../../apps/modalprism-domain/types" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

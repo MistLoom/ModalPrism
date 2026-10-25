@@ -1,19 +1,58 @@
 //! 任务队列。入队按 `source_id + locator_key` 去重，租约带过期时间。
 //!
-//! 状态只有三种：`queued`、`leased`、`done`。租约本身不增加尝试次数，
-//! `nack` 才记账；过期租约可以被重新领取。
+//! 状态有四种：`queued`、`leased`、`done`、`cancelled`。租约本身不增加尝试次数，
+//! `nack` 才记账；过期租约可以被重新领取。`done` 与 `cancelled` 是终态，
+//! 既不参与租约，也不再占住去重位。
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use strata_model::{AccessTask, Locator, QueueName, TaskId, TaskReason, Timestamp};
 
-use crate::db::{Db, Tx};
+use crate::db::{Db, Row, Tx};
 use crate::error::{Error, Result};
 use crate::sql::Sql;
 
 pub const STATUS_QUEUED: &str = "queued";
 pub const STATUS_LEASED: &str = "leased";
 pub const STATUS_DONE: &str = "done";
+pub const STATUS_CANCELLED: &str = "cancelled";
+
+/// 终态：不再参与租约，也不再占住同一目标的去重位。
+fn terminal(status: &str) -> bool {
+    status == STATUS_DONE || status == STATUS_CANCELLED
+}
+
+/// SQL 里排除终态的唯一写法，避免状态字面量散落各处。
+fn push_active(sql: &mut Sql) {
+    sql.push(" AND status NOT IN (");
+    sql.text(STATUS_DONE.to_string());
+    sql.push(", ");
+    sql.text(STATUS_CANCELLED.to_string());
+    sql.push(")");
+}
+
+/// 列表与清理条件里的状态是否已知。
+pub fn known_status(status: &str) -> bool {
+    status == STATUS_QUEUED
+        || status == STATUS_LEASED
+        || status == STATUS_DONE
+        || status == STATUS_CANCELLED
+}
+
+/// 列表条件里的原因是否已知。
+pub fn known_reason(reason: &str) -> bool {
+    [
+        TaskReason::Schedule,
+        TaskReason::Follow,
+        TaskReason::RenderUpgrade,
+        TaskReason::Detail,
+        TaskReason::Manual,
+        TaskReason::Replay,
+    ]
+    .iter()
+    .any(|item| reason_text(*item) == reason)
+}
 
 /// 定位键。与 planner 端口一致，用定位符的 JSON 文本：
 /// 同一 source 下同一目标只允许一个活跃任务。
@@ -22,12 +61,7 @@ pub fn locator_key(locator: &Locator) -> Result<String> {
 }
 
 pub fn queue_text(queue: QueueName) -> &'static str {
-    match queue {
-        QueueName::Free => "free",
-        QueueName::Paid => "paid",
-        QueueName::Render => "render",
-        QueueName::Push => "push",
-    }
+    queue.label()
 }
 
 pub fn reason_text(reason: TaskReason) -> &'static str {
@@ -65,7 +99,7 @@ fn returning_columns() -> &'static str {
 
 /// 租约是否到期：完成的任务不再参与，未到期的租约跳过。
 fn lease_due(status: &str, lease_until: Option<&str>, now: Timestamp) -> Result<bool> {
-    if status == STATUS_DONE {
+    if terminal(status) {
         return Ok(false);
     }
     match lease_until {
@@ -136,8 +170,13 @@ pub async fn ack_in(tx: &mut Tx<'_>, task_id: &TaskId) -> Result<()> {
         .fetch_one(&select)
         .await?
         .ok_or_else(|| Error::UnknownTask(task_id.to_string()))?;
-    if row.text("status")? == STATUS_DONE {
+    let status = row.text("status")?;
+    if status == STATUS_DONE {
         return Err(Error::TaskState(task_id.to_string()));
+    }
+    // 已取消的任务仍然提交数据，但不把状态改回完成。
+    if status == STATUS_CANCELLED {
+        return Ok(());
     }
     let mut sql = Sql::new(tx.dialect());
     sql.push("UPDATE g_tasks SET status = ");
@@ -154,7 +193,7 @@ async fn active_in(tx: &mut Tx<'_>, source: &str, key: &str) -> Result<bool> {
     sql.text(source.to_string());
     sql.push(" AND locator_key = ");
     sql.text(key.to_string());
-    sql.push(" AND status != 'done'");
+    push_active(&mut sql);
     Ok(tx.fetch_int(&sql).await?.unwrap_or(0) > 0)
 }
 
@@ -164,7 +203,7 @@ pub async fn active(db: &Db, source: &str, key: &str) -> Result<bool> {
     sql.text(source.to_string());
     sql.push(" AND locator_key = ");
     sql.text(key.to_string());
-    sql.push(" AND status != 'done'");
+    push_active(&mut sql);
     Ok(db.fetch_int(&sql).await?.unwrap_or(0) > 0)
 }
 
@@ -250,7 +289,8 @@ pub async fn lease_ready(
     sql.text(source.to_string());
     sql.push(" AND locator_key = ");
     sql.text(key.to_string());
-    sql.push(" AND status != 'done' ORDER BY priority DESC, created_at ASC LIMIT 1");
+    push_active(&mut sql);
+    sql.push(" ORDER BY priority DESC, created_at ASC LIMIT 1");
     let Some(row) = db.fetch_one(&sql).await? else {
         return Ok(None);
     };
@@ -331,7 +371,7 @@ pub async fn nack(db: &Db, task_id: &TaskId, retry_at: Timestamp, error: &str) -
     let Some(row) = db.fetch_one(&select).await? else {
         return Err(Error::UnknownTask(task_id.to_string()));
     };
-    if row.text("status")? == STATUS_DONE {
+    if terminal(&row.text("status")?) {
         return Err(Error::TaskState(task_id.to_string()));
     }
     let dialect = db.dialect();
@@ -415,15 +455,19 @@ pub async fn count_status(db: &Db, status: &str) -> Result<u64> {
 }
 
 /// 任务列表行：供控制台查看队列状态。
+///
+/// `spec` 里可能有访问凭据，永远不投影到这里。
 #[derive(serde::Serialize)]
 pub struct TaskRow {
     pub task_id: String,
     pub queue: String,
     pub status: String,
     pub source_id: String,
+    pub accessor: String,
     pub reason: String,
     pub attempt: u64,
     pub priority: u64,
+    pub generation: u64,
     pub created_at: String,
     pub retry_at: Option<String>,
     pub lease_until: Option<String>,
@@ -431,59 +475,358 @@ pub struct TaskRow {
     pub locator: serde_json::Value,
 }
 
-/// 任务列表：按队列与状态过滤，新任务在前。
-pub async fn list_tasks(
-    db: &Db,
-    queue: Option<QueueName>,
-    status: Option<&str>,
-    limit: usize,
-) -> Result<Vec<TaskRow>> {
-    let mut sql = Sql::new(db.dialect());
-    sql.push("SELECT task_id, queue, status, source_id, reason, attempt, priority, created_at, retry_at, lease_until, last_error, payload FROM g_tasks WHERE 1=1");
-    if let Some(queue) = queue {
-        sql.push(" AND queue = ");
-        sql.text(queue_text(queue));
-    }
-    if let Some(status) = status {
-        sql.push(" AND status = ");
-        sql.text(status.to_string());
-    }
-    sql.push(" ORDER BY created_at DESC LIMIT ");
-    sql.int(limit as i64);
-    let rows = db.fetch(&sql).await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let payload: serde_json::Value = serde_json::from_str(&row.text("payload")?)?;
-        items.push(TaskRow {
-            task_id: row.text("task_id")?.to_string(),
-            queue: row.text("queue")?.to_string(),
-            status: row.text("status")?.to_string(),
-            source_id: row.text("source_id")?.to_string(),
-            reason: row.text("reason")?.to_string(),
-            attempt: row.u64("attempt")?,
-            priority: row.u64("priority")?,
-            created_at: row.text("created_at")?.to_string(),
-            retry_at: row.opt_text("retry_at")?,
-            lease_until: row.opt_text("lease_until")?,
-            last_error: row.opt_text("last_error")?,
-            locator: payload
-                .get("locator")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-        });
-    }
-    Ok(items)
+/// 列表、统计与批量清理共用的条件。
+#[derive(Clone, Debug, Default)]
+pub struct TaskFilter {
+    pub queue: Option<QueueName>,
+    pub status: Option<String>,
+    pub source: Option<String>,
+    pub reason: Option<String>,
+    /// 关键字：任务号、信源或错误信息里包含这段文字。
+    pub query: Option<String>,
+    /// 只处理创建时间早于此时刻的任务。
+    pub before: Option<String>,
 }
 
-/// 手动重试：清空租约与重试时间，任务回到可立即租约的状态。
-/// 仅排队中的任务允许重试；租约中的任务由持有人完成或退回。
-pub async fn retry_task(db: &Db, task_id: &TaskId) -> Result<bool> {
+impl TaskFilter {
+    fn push(&self, sql: &mut Sql) -> Result<()> {
+        if let Some(queue) = self.queue {
+            sql.push(" AND queue = ");
+            sql.text(queue_text(queue));
+        }
+        if let Some(status) = self.status.as_deref().filter(|text| !text.is_empty()) {
+            sql.push(" AND status = ");
+            sql.text(status.to_string());
+        }
+        if let Some(source) = self.source.as_deref().filter(|text| !text.is_empty()) {
+            sql.push(" AND source_id = ");
+            sql.text(source.to_string());
+        }
+        if let Some(reason) = self.reason.as_deref().filter(|text| !text.is_empty()) {
+            sql.push(" AND reason = ");
+            sql.text(reason.to_string());
+        }
+        if let Some(query) = self
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            let pattern = format!("%{query}%");
+            sql.push(" AND (task_id LIKE ");
+            sql.text(pattern.clone());
+            sql.push(" OR source_id LIKE ");
+            sql.text(pattern.clone());
+            sql.push(" OR last_error LIKE ");
+            sql.text(pattern);
+            sql.push(")");
+        }
+        if let Some(before) = self.before.as_deref().filter(|text| !text.is_empty()) {
+            sql.push(" AND created_at < ");
+            sql.text(Timestamp::parse(before)?.to_rfc3339()?);
+        }
+        Ok(())
+    }
+}
+
+/// 一页任务：游标指向本页最后一行，`total` 是同一条件的总数。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPage {
+    pub rows: Vec<TaskRow>,
+    pub next_cursor: Option<String>,
+    pub total: u64,
+}
+
+/// 队列全景统计，供控制台直接展示而不必拉全量。
+#[derive(Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskStats {
+    pub total: u64,
+    pub by_status: BTreeMap<String, u64>,
+    pub by_queue: BTreeMap<String, u64>,
+    pub by_reason: BTreeMap<String, u64>,
+    pub oldest_queued_at: Option<String>,
+    pub next_retry_at: Option<String>,
+    /// 租约已过期但尚未回收的任务数。
+    pub leased_overdue: u64,
+}
+
+/// 按条件计数，供分页页脚与清理确认。
+pub async fn count_tasks(db: &Db, filter: &TaskFilter) -> Result<u64> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT CAST(COUNT(*) AS BIGINT) AS n FROM g_tasks WHERE 1=1");
+    filter.push(&mut sql)?;
+    Ok(db.fetch_int(&sql).await?.unwrap_or(0).max(0) as u64)
+}
+
+/// 任务列表行与单条读取共用的列。`payload` 用于取 `accessor` 与 `locator`，
+/// 其中的 `spec` 不进入列表投影。
+const TASK_COLUMNS: &str = "task_id, queue, status, source_id, reason, attempt, priority, created_at, retry_at, lease_until, last_error, generation, payload";
+
+fn row_of(row: &Row) -> Result<TaskRow> {
+    let payload: serde_json::Value = serde_json::from_str(&row.text("payload")?)?;
+    Ok(TaskRow {
+        task_id: row.text("task_id")?.to_string(),
+        queue: row.text("queue")?.to_string(),
+        status: row.text("status")?.to_string(),
+        source_id: row.text("source_id")?.to_string(),
+        accessor: payload
+            .get("accessor")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        reason: row.text("reason")?.to_string(),
+        attempt: row.u64("attempt")?,
+        priority: row.u64("priority")?,
+        generation: row.u64("generation")?,
+        created_at: row.text("created_at")?.to_string(),
+        retry_at: row.opt_text("retry_at")?,
+        lease_until: row.opt_text("lease_until")?,
+        last_error: row.opt_text("last_error")?,
+        locator: payload
+            .get("locator")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    })
+}
+
+/// 单条任务行，供新建后回显。
+pub async fn row(db: &Db, task_id: &TaskId) -> Result<Option<TaskRow>> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT ");
+    sql.push(TASK_COLUMNS);
+    sql.push(" FROM g_tasks WHERE task_id = ");
+    sql.text(task_id.as_str());
+    let Some(row) = db.fetch_one(&sql).await? else {
+        return Ok(None);
+    };
+    Ok(Some(row_of(&row)?))
+}
+
+/// 任务列表：按条件过滤，新任务在前，`created_at + task_id` 做 keyset 游标。
+pub async fn list_tasks(
+    db: &Db,
+    filter: &TaskFilter,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<TaskPage> {
+    let limit = limit.max(1);
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT ");
+    sql.push(TASK_COLUMNS);
+    sql.push(" FROM g_tasks WHERE 1=1");
+    filter.push(&mut sql)?;
+    if let Some((at, id)) = cursor.and_then(|value| value.split_once('|')) {
+        sql.push(" AND (created_at < ");
+        sql.text(at.to_string());
+        sql.push(" OR (created_at = ");
+        sql.text(at.to_string());
+        sql.push(" AND task_id < ");
+        sql.text(id.to_string());
+        sql.push("))");
+    }
+    sql.push(" ORDER BY created_at DESC, task_id DESC LIMIT ");
+    sql.int(limit as i64 + 1);
+    let rows = db.fetch(&sql).await?;
+    let more = rows.len() > limit;
+    let mut items = Vec::with_capacity(limit.min(rows.len()));
+    for row in rows.iter().take(limit) {
+        items.push(row_of(row)?);
+    }
+    let next_cursor = if more {
+        items
+            .last()
+            .map(|row| format!("{}|{}", row.created_at, row.task_id))
+    } else {
+        None
+    };
+    let total = count_tasks(db, filter).await?;
+    Ok(TaskPage {
+        rows: items,
+        next_cursor,
+        total,
+    })
+}
+
+/// 队列全景统计。
+pub async fn stats(db: &Db) -> Result<TaskStats> {
+    let by_status = group_count(db, "status").await?;
+    let by_queue = group_count(db, "queue").await?;
+    let by_reason = group_count(db, "reason").await?;
+    let mut oldest = Sql::new(db.dialect());
+    oldest.push("SELECT MIN(created_at) AS value FROM g_tasks WHERE status = ");
+    oldest.text(STATUS_QUEUED.to_string());
+    let oldest_queued_at = optional_text(db, &oldest).await?;
+    let mut next = Sql::new(db.dialect());
+    next.push("SELECT MIN(retry_at) AS value FROM g_tasks WHERE status = ");
+    next.text(STATUS_QUEUED.to_string());
+    next.push(" AND retry_at IS NOT NULL");
+    let next_retry_at = optional_text(db, &next).await?;
+    let mut overdue = Sql::new(db.dialect());
+    overdue.push("SELECT CAST(COUNT(*) AS BIGINT) AS n FROM g_tasks WHERE status = ");
+    overdue.text(STATUS_LEASED.to_string());
+    overdue.push(" AND lease_until < ");
+    overdue.text(stamp(Timestamp::now())?);
+    let leased_overdue = db.fetch_int(&overdue).await?.unwrap_or(0).max(0) as u64;
+    let total = by_status.values().sum();
+    Ok(TaskStats {
+        total,
+        by_status,
+        by_queue,
+        by_reason,
+        oldest_queued_at,
+        next_retry_at,
+        leased_overdue,
+    })
+}
+
+/// 单个队列的计数，供控制台队列卡。
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueCounts {
+    pub queue: String,
+    pub queued: u64,
+    pub leased: u64,
+    pub done: u64,
+    pub cancelled: u64,
+}
+
+/// 每队列 × 状态一次聚合。
+pub async fn queue_counts(db: &Db) -> Result<Vec<QueueCounts>> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT queue AS key, status AS state, CAST(COUNT(*) AS BIGINT) AS n FROM g_tasks GROUP BY queue, status");
+    let rows = db.fetch(&sql).await?;
+    let mut out: BTreeMap<String, QueueCounts> = BTreeMap::new();
+    for row in &rows {
+        let queue = row.text("key")?;
+        let count = row.u64("n")?;
+        let slot = out.entry(queue.clone()).or_insert_with(|| QueueCounts {
+            queue,
+            ..QueueCounts::default()
+        });
+        match row.text("state")?.as_str() {
+            STATUS_QUEUED => slot.queued = count,
+            STATUS_LEASED => slot.leased = count,
+            STATUS_DONE => slot.done = count,
+            STATUS_CANCELLED => slot.cancelled = count,
+            _ => {}
+        }
+    }
+    Ok(out.into_values().collect())
+}
+
+async fn group_count(db: &Db, column: &str) -> Result<BTreeMap<String, u64>> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT ")
+        .push(column)
+        .push(" AS key, CAST(COUNT(*) AS BIGINT) AS n FROM g_tasks GROUP BY ")
+        .push(column);
+    let rows = db.fetch(&sql).await?;
+    let mut out = BTreeMap::new();
+    for row in &rows {
+        let count = row.u64("n")?;
+        if count > 0 {
+            out.insert(row.text("key")?, count);
+        }
+    }
+    Ok(out)
+}
+
+async fn optional_text(db: &Db, sql: &Sql) -> Result<Option<String>> {
+    let Some(row) = db.fetch_one(sql).await? else {
+        return Ok(None);
+    };
+    row.opt_text("value")
+}
+
+/// 取消：排队中或持租约的任务都可以取消，已终态的任务不动。
+pub async fn cancel(db: &Db, task_id: &TaskId) -> Result<bool> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("UPDATE g_tasks SET status = ");
+    sql.text(STATUS_CANCELLED);
+    sql.push(", lease_until = NULL, retry_at = NULL, last_error = ");
+    sql.text("已取消".to_string());
+    sql.push(" WHERE task_id = ");
+    sql.text(task_id.as_str());
+    sql.push(" AND status IN (");
+    sql.text(STATUS_QUEUED.to_string());
+    sql.push(", ");
+    sql.text(STATUS_LEASED.to_string());
+    sql.push(")");
+    Ok(db.exec(&sql).await? > 0)
+}
+
+/// 重试或恢复：排队、持租约、已取消的任务都回到可立即租约的状态。
+pub async fn requeue(db: &Db, task_id: &TaskId) -> Result<bool> {
     let mut sql = Sql::new(db.dialect());
     sql.push("UPDATE g_tasks SET status = ");
     sql.text(STATUS_QUEUED);
     sql.push(", lease_until = NULL, retry_at = NULL WHERE task_id = ");
     sql.text(task_id.as_str());
-    sql.push(" AND status = ");
-    sql.text(STATUS_QUEUED);
+    sql.push(" AND status IN (");
+    sql.text(STATUS_QUEUED.to_string());
+    sql.push(", ");
+    sql.text(STATUS_LEASED.to_string());
+    sql.push(", ");
+    sql.text(STATUS_CANCELLED.to_string());
+    sql.push(")");
     Ok(db.exec(&sql).await? > 0)
+}
+
+/// 删除单条终态任务。未终态的任务要求先取消。
+pub async fn remove(db: &Db, task_id: &TaskId) -> Result<bool> {
+    let mut select = Sql::new(db.dialect());
+    select.push("SELECT status FROM g_tasks WHERE task_id = ");
+    select.text(task_id.as_str());
+    let Some(row) = db.fetch_one(&select).await? else {
+        return Err(Error::UnknownTask(task_id.to_string()));
+    };
+    if !terminal(&row.text("status")?) {
+        return Err(Error::TaskState(task_id.to_string()));
+    }
+    let mut sql = Sql::new(db.dialect());
+    sql.push("DELETE FROM g_tasks WHERE task_id = ");
+    sql.text(task_id.as_str());
+    Ok(db.exec(&sql).await? > 0)
+}
+
+/// 按条件清理终态任务，返回删除条数。
+pub async fn purge(db: &Db, filter: &TaskFilter) -> Result<u64> {
+    if let Some(status) = filter.status.as_deref().filter(|text| !text.is_empty()) {
+        if !terminal(status) {
+            return Err(Error::InvalidFilter(format!("只能清理终态任务: {status}")));
+        }
+    }
+    let mut sql = Sql::new(db.dialect());
+    sql.push("DELETE FROM g_tasks WHERE status IN (");
+    sql.text(STATUS_DONE.to_string());
+    sql.push(", ");
+    sql.text(STATUS_CANCELLED.to_string());
+    sql.push(")");
+    filter.push(&mut sql)?;
+    Ok(db.exec(&sql).await? as u64)
+}
+
+/// 一条任务及其当前状态。仅供装配层执行任务用。
+pub struct StoredTask {
+    pub status: String,
+    pub task: AccessTask,
+}
+
+/// 读取一条任务的完整内容（含 `spec`）。
+///
+/// 只给装配层执行任务用，不经能力层暴露——`spec` 里可能有凭据。
+pub async fn read(db: &Db, task_id: &TaskId) -> Result<Option<StoredTask>> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT status, payload FROM g_tasks WHERE task_id = ");
+    sql.text(task_id.as_str());
+    let Some(row) = db.fetch_one(&sql).await? else {
+        return Ok(None);
+    };
+    let task = serde_json::from_str(&row.text("payload")?)?;
+    Ok(Some(StoredTask {
+        status: row.text("status")?,
+        task,
+    }))
 }

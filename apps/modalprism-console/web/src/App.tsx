@@ -8,9 +8,11 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconConfig,
+  IconFlow,
   IconLayers,
   IconLibrary,
   IconOverview,
+  IconPlan,
   IconQueue,
   IconSearch,
   IconShield,
@@ -24,23 +26,28 @@ import { ConfigPage } from "./pages/Config";
 import { GovernancePage } from "./pages/Governance";
 import { LibraryPage } from "./pages/Library";
 import { OverviewPage } from "./pages/Overview";
+import { PlansPage } from "./pages/Plans";
 import { SourcesPage } from "./pages/Sources";
 import { StrataPage } from "./pages/Strata";
 import { TasksPage } from "./pages/Tasks";
+import { WorkflowsPage } from "./pages/Workflows";
 
 const NAV_ICONS: Record<RouteId, React.ReactNode> = {
   overview: <IconOverview />,
   sources: <IconSource />,
+  plans: <IconPlan />,
   tasks: <IconQueue />,
   strata: <IconLayers />,
   library: <IconLibrary />,
+  workflows: <IconFlow />,
   governance: <IconShield />,
   channels: <IconChannel />,
   config: <IconConfig />,
 };
 
 const GROUPS: { label: string; routes: RouteId[] }[] = [
-  { label: "观测 · observe", routes: ["overview", "sources", "tasks", "strata", "library"] },
+  { label: "观测 · observe", routes: ["overview", "sources", "plans", "tasks", "strata", "library"] },
+  { label: "加工 · process", routes: ["workflows"] },
   { label: "系统 · system", routes: ["governance", "channels", "config"] },
 ];
 
@@ -177,9 +184,11 @@ export default function App() {
           {state === "offline" || state === "error" ? <OfflineBanner /> : null}
           {route === "overview" ? <OverviewPage /> : null}
           {route === "sources" ? <SourcesPage /> : null}
+          {route === "plans" ? <PlansPage /> : null}
           {route === "tasks" ? <TasksPage /> : null}
           {route === "strata" ? <StrataPage /> : null}
           {route === "library" ? <LibraryPage /> : null}
+          {route === "workflows" ? <WorkflowsPage /> : null}
           {route === "governance" ? <GovernancePage /> : null}
           {route === "channels" ? <ChannelsPage /> : null}
           {route === "config" ? <ConfigPage /> : null}

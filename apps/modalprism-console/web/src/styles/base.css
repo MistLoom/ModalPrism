@@ -17,8 +17,8 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: var(--fs-lg);
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -115,7 +115,7 @@ kbd {
   border-bottom-color: var(--line-strong);
   border-radius: var(--radius);
   background: var(--paper-raised);
-  font: 10px/1.6 var(--mono);
+  font: var(--fs-2xs)/1.6 var(--mono);
   color: var(--muted);
 }
 

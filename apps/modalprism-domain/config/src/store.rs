@@ -22,7 +22,6 @@ const SYSTEM_RESTART: &[&str] = &[
     "strata.staging.dir",
     "strata.staging.ttl",
     "strata.fts",
-    "policy.egress.proxy",
 ];
 
 #[derive(Clone, Debug, PartialEq)]

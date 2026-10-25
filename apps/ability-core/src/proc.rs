@@ -551,6 +551,7 @@ pub(crate) fn unbound_guest_manifest() -> AbilityManifest {
         id: AbilityId::new("remote.unbound").expect("id"),
         depends: vec![],
         stateful: false,
+        protocols: vec![],
         config_schema: Value::Null,
         methods: vec![MethodMeta {
             id: MethodId::new("unbound").expect("m"),

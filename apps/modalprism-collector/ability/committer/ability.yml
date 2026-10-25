@@ -1,8 +1,8 @@
 framework_version: "1"
 id: committer
 open: true
-protocols: [fun]
-depends: []
+protocols: [fun, http]
+depends: [strata_write, strata_queue]
 stateful: true
 description: 发布快照并恢复存储
 methods:
@@ -10,6 +10,13 @@ methods:
     description: 发布已接受的变更
     input:
       type: object
+  - id: handle
+    description: 轮询一个长任务句柄的状态与结果
+    input:
+      type: object
+      properties:
+        handle: { type: string }
+      required: [handle]
   - id: recover
     description: 恢复存储
     input:
@@ -18,3 +25,15 @@ methods:
     description: 返回控制库、Blob 和暂存区路径
     input:
       type: object
+  - id: sweep
+    description: 按保留策略清理终态任务与过期存储行；带筛选时只清理命中的终态任务
+    input:
+      type: object
+      properties:
+        dryRun: { type: boolean }
+        status: { type: string, enum: [queued, leased, done, cancelled] }
+        source: { type: string }
+        queue: { type: string }
+        reason: { type: string }
+        query: { type: string }
+        before: { type: string }

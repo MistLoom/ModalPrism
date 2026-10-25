@@ -28,6 +28,11 @@ pub fn modules(snapshot: &Snapshot) -> Value {
                 ),
             );
             item.insert("labels".into(), member(module, "labels"));
+            let kind = module.get("kind").and_then(Value::as_str).unwrap_or("");
+            item.insert(
+                "domain".into(),
+                Value::String(domain_of_module(kind).into()),
+            );
             item.insert("file".into(), Value::String(file));
             item.insert("line".into(), Value::from(line));
             item.insert("config".into(), module.clone());
@@ -43,6 +48,121 @@ pub fn modules(snapshot: &Snapshot) -> Value {
 
 fn member(module: &Value, key: &str) -> Value {
     module.get(key).cloned().unwrap_or(Value::Null)
+}
+
+/// 模块所属功能域：按处理环节归类，而不是按文件类型。
+pub fn domain_of_module(kind: &str) -> &'static str {
+    match kind {
+        "source" => "collect",
+        "accessor" => "transport",
+        "adapter" => "parse",
+        "type" => "content",
+        "system" | "preset" => "policy",
+        _ => "other",
+    }
+}
+
+/// 按配置键路径归入功能域，供设置项分组。命中靠前的优先。
+pub fn domain_of_path(path: &str) -> &'static str {
+    let key = path.to_ascii_lowercase();
+    const BUCKETS: &[(&str, &[&str])] = &[
+        (
+            "scheduling",
+            &[
+                "schedule", "interval", "cadence", "tick", "nextrun", "cron", "jitter", "round",
+            ],
+        ),
+        (
+            "limits",
+            &[
+                "limit",
+                "max",
+                "budget",
+                "quota",
+                "pages",
+                "throttle",
+                "ratelimit",
+                "concurrency",
+                "attempts",
+                "timeout",
+            ],
+        ),
+        (
+            "retention",
+            &[
+                "retain",
+                "retention",
+                "keep",
+                "purge",
+                "ttl",
+                "snapshot_retain",
+                "facet_keep",
+                "prune",
+            ],
+        ),
+        (
+            "egress",
+            &[
+                "egress",
+                "proxy",
+                "robots",
+                "circuit",
+                "private",
+                "blocklist",
+                "allowlist",
+                "outbound",
+                "firewall",
+            ],
+        ),
+        (
+            "media",
+            &[
+                "media",
+                "deriv",
+                "embedding",
+                "ocr",
+                "blob",
+                "vector",
+                "image",
+                "audio",
+                "video",
+                "download",
+            ],
+        ),
+        (
+            "credentials",
+            &[
+                "credential",
+                "secret",
+                "token",
+                "apikey",
+                "api_key",
+                "password",
+                "auth",
+                "session",
+                "cookie",
+            ],
+        ),
+        (
+            "processing",
+            &[
+                "workflow",
+                "pipeline",
+                "parse",
+                "extract",
+                "render",
+                "transform",
+                "dedup",
+                "simhash",
+            ],
+        ),
+    ];
+    for (domain, needles) in BUCKETS {
+        if needles.iter().any(|needle| key.contains(needle)) {
+            return domain;
+        }
+    }
+    "general"
 }
 
 /// 模块定义处取自该模块最短的溯源路径，通常是 `id` 或 `kind`。

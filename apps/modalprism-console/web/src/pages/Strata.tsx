@@ -1,9 +1,10 @@
 // Strata 页：从资源出发看内容分层——facet、版本与血缘。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { IconBranch, IconCopy } from "../components/icons";
+import { IconBranch, IconCopy, IconTrash } from "../components/icons";
 import { Card, Empty, Pagination, SearchInput, Skeleton } from "../components/ui";
 import {
+  committerStatus,
   contentKinds,
   facet,
   facetHistory,
@@ -12,12 +13,14 @@ import {
   strataLineage,
   strataRelated,
   structCell,
+  sweep,
   type LibraryQuery,
 } from "../lib/api";
 import { asReadable, bytes, count, relative } from "../lib/format";
 import { useConsole } from "../lib/console";
 import { navigate, useRoute } from "../lib/router";
 import type {
+  CommitterStatus,
   ContentKind,
   FacetBody,
   FacetSummary,
@@ -25,6 +28,7 @@ import type {
   Lineage,
   RelatedEdge,
   StrataVersion,
+  SweepReport,
 } from "../lib/types";
 
 type FacetKey = { kind: string; variant: string | null };
@@ -302,6 +306,8 @@ export function StrataPage() {
           </span>
         </div>
       </header>
+
+      <RetentionCard />
 
       {param ? (
         <div className="note">
@@ -660,5 +666,157 @@ function FacetDetail({
         )}
       </Card>
     </div>
+  );
+}
+
+/** 保留与清理：先看各表现状，再试跑一次确认要删多少，确认后才真正执行。 */
+function RetentionCard() {
+  const { notify, refresh } = useConsole();
+  const [status, setStatus] = useState<CommitterStatus | null>(null);
+  const [preview, setPreview] = useState<SweepReport | null>(null);
+  const [last, setLast] = useState<SweepReport | null>(null);
+  const [lastAt, setLastAt] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"preview" | "run" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      setStatus(await committerStatus());
+      setError(null);
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : "读取存储现状失败");
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function dryRun() {
+    setBusy("preview");
+    try {
+      setPreview(await sweep(true));
+      setError(null);
+    } catch (problem) {
+      notify("bad", "试跑失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function execute() {
+    let report = preview;
+    if (!report) {
+      setBusy("preview");
+      try {
+        report = await sweep(true);
+        setPreview(report);
+      } catch (problem) {
+        notify("bad", "试跑失败", problem instanceof Error ? problem.message : undefined);
+        setBusy(null);
+        return;
+      }
+      setBusy(null);
+    }
+    const stale = report.resources + report.resourceMarks + report.facets + report.relations + report.state + report.blobs + report.vectors + report.text;
+    if (!window.confirm(`将删除 ${report.tasks} 条终态任务、${report.snapshots} 个快照与 ${stale} 条过期存储行，且不可撤销。继续？`)) {
+      return;
+    }
+    setBusy("run");
+    try {
+      const done = await sweep(false);
+      setLast(done);
+      setLastAt(new Date().toISOString());
+      setPreview(null);
+      notify("ok", `清理完成：${done.tasks} 条任务 / ${done.snapshots} 个快照`, "行数已刷新。");
+      await reload();
+      refresh();
+    } catch (problem) {
+      notify("bad", "清理失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const counts = status?.counts ?? null;
+
+  return (
+    <Card
+      title="保留与清理"
+      sub="按 policy.retention / versions / raw 的保留期清理；未配置的项不动"
+      action={
+        <div className="row" style={{ gap: 8 }}>
+          <button type="button" className="btn btn-sm" onClick={() => void dryRun()} disabled={busy !== null}>
+            {busy === "preview" ? "试跑中…" : "试跑一次"}
+          </button>
+          <button type="button" className="btn btn-sm btn-danger" onClick={() => void execute()} disabled={busy !== null}>
+            <IconTrash size={12} /> {busy === "run" ? "清理中…" : "执行清理"}
+          </button>
+        </div>
+      }
+    >
+      {error ? (
+        <div className="note is-warn">
+          <span>{error}</span>
+        </div>
+      ) : null}
+
+      {counts === null ? (
+        <Skeleton lines={3} />
+      ) : (
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>表</th>
+                <th className="align-right">行数</th>
+                <th>清理规则</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ["resources", counts.resources, "低于剩余快照的最小版本"],
+                ["resource marks", counts.marks, "同上（墓碑标记随资源清理）"],
+                ["facets", counts.facets, "低于版本下限；每个变体另留 facet_keep 版"],
+                ["blobs", counts.blobs, "不再被任何 facet 引用的字节"],
+                ["relations", counts.relations, "低于版本下限"],
+                ["state", counts.state, "低于版本下限"],
+                ["snapshots", counts.snapshots, "早于 snapshot_retain；至少保留最新一条"],
+                ["tasks", counts.tasks, "早于 retention.tasks 的终态任务"],
+              ].map(([name, value, rule]) => (
+                <tr key={String(name)}>
+                  <td className="mono">{name}</td>
+                  <td className="num align-right">{count(Number(value))}</td>
+                  <td className="muted" style={{ fontSize: "var(--fs-xs)" }}>
+                    {rule}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {preview ? (
+        <div style={{ marginTop: 12 }}>
+          <p className="faint" style={{ fontSize: "var(--fs-xs)" }}>
+            试跑（未写入）：快照 {preview.snapshots} · 资源 {preview.resources} · 标记 {preview.resourceMarks} · facet{" "}
+            {preview.facets} · 关系 {preview.relations} · 状态 {preview.state} · 字节 {preview.blobs} · 向量{" "}
+            {preview.vectors} · 全文 {preview.text} · 终态任务 {preview.tasks}
+          </p>
+        </div>
+      ) : null}
+
+      {last ? (
+        <p className="faint" style={{ fontSize: "var(--fs-xs)", marginTop: 8 }}>
+          上次清理：快照 {last.snapshots} · 资源 {last.resources} · facet {last.facets} · 终态任务 {last.tasks} ·{" "}
+          {relative(lastAt)}
+        </p>
+      ) : null}
+
+      <p className="faint" style={{ fontSize: "var(--fs-2xs)", lineHeight: 1.7, marginTop: 8 }}>
+        清理不会删掉墓碑资源：墓碑是删除语义的一部分，能恢复；这里只回收快照、旧版本行与不再被引用的字节。
+      </p>
+    </Card>
   );
 }

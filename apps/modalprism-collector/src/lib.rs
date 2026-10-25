@@ -1,5 +1,6 @@
 //! 采集进程。组合根直接链接 Ability，并持有调度、发布和健康循环。
 
+pub mod api;
 pub mod ops;
 
 use std::net::SocketAddr;
@@ -171,78 +172,61 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
     let read: Arc<dyn types::ReadCtx> = Arc::clone(&services) as Arc<dyn types::ReadCtx>;
-    let providers: Vec<(
-        &str,
-        std::sync::Arc<dyn ability_support::AbilityProvider>,
-        bool,
-    )> = vec![
-        (
-            "strata_read",
-            strata_read::provider(Arc::clone(&read)),
-            true,
-        ),
+    let providers: Vec<(&str, std::sync::Arc<dyn ability_support::AbilityProvider>)> = vec![
+        ("strata_read", strata_read::provider(Arc::clone(&read))),
         (
             "strata_write",
             strata_write::provider(Arc::clone(&services)),
-            false,
         ),
         (
             "strata_queue",
             strata_queue::provider(Arc::clone(&services)),
-            false,
         ),
         (
-            "committer",
-            committer::provider(Arc::clone(&services)),
-            false,
+            "content_admin",
+            content_admin::provider(Arc::clone(&services)),
+        ),
+        ("committer", committer::provider(Arc::clone(&services))),
+        ("planner", ability_planner::provider(Arc::clone(&services))),
+        ("runner", runner::provider(Arc::clone(&services))),
+        ("health", health::provider(Arc::clone(&read))),
+        (
+            "health_record",
+            health_record::provider(Arc::clone(&services)),
         ),
         (
-            "planner",
-            ability_planner::provider(Arc::clone(&services)),
-            true,
-        ),
-        ("runner", runner::provider(Arc::clone(&services)), false),
-        ("health", health::provider(Arc::clone(&read)), true),
-        (
-            "health_check",
-            health_check::provider(Arc::clone(&services)),
-            false,
-        ),
-        (
-            "config",
-            ability_config::provider(Arc::clone(&services)),
-            false,
+            "config_admin",
+            ability_config_admin::provider(Arc::clone(&services)),
         ),
         (
             "config_inspect",
             config_inspect::provider(Arc::clone(&read)),
-            false,
         ),
-        (
-            "egress",
-            ability_egress::provider(Arc::clone(&services)),
-            false,
-        ),
+        ("egress", ability_egress::provider(Arc::clone(&services))),
         (
             "paid_gateway",
             paid_gateway::provider(Arc::clone(&services)),
-            false,
         ),
         (
             "accessor_probe",
             accessor_probe::provider(Arc::clone(&services)),
-            false,
         ),
+        ("catalog_admin", catalog_admin::provider(Arc::clone(&read))),
+        ("workflow", ability_workflow::provider(Arc::clone(&read))),
+        ("type_article", type_article::provider(Arc::clone(&read))),
     ];
-    for (id, provider, http) in providers {
+    for (id, provider) in providers {
+        // 协议投影的唯一来源是能力自己的 manifest（与 ability.yml 由契约测试对齐），
+        // 组合根不再平行维护一份 bool 名单。
+        let kinds: Vec<AccessKind> = provider
+            .manifest()
+            .protocols
+            .iter()
+            .filter_map(|kind| AccessKind::from_protocol(*kind))
+            .collect();
         host.install_str(id, provider)
             .await
             .map_err(|error| assembly::Error::new(error.to_string()))?;
-        let kinds = if http {
-            vec![AccessKind::Fun, AccessKind::Http]
-        } else {
-            vec![AccessKind::Fun]
-        };
         host.set_protocol_support(id, kinds);
         let source = SourceId::new(id).map_err(|error| assembly::Error::new(error.to_string()))?;
         let instance =
@@ -268,37 +252,43 @@ fn spawn_loops(
             if stop_tick.load(Ordering::Relaxed) {
                 break;
             }
-            let value = match invoke(&host_tick, "planner", "tick", json!({})).await {
+            let value = match invoke(&host_tick, "planner", "round", json!({})).await {
                 Ok(value) => value,
                 Err(error) => {
-                    tracing::warn!(error = %error, "调度 tick 失败");
+                    tracing::warn!(error = %error, "调度派发失败");
                     continue;
                 }
             };
-            let Some(tasks) = value.as_array() else {
-                continue;
-            };
-            tracing::debug!(tasks = tasks.len(), "调度派发");
-            for task in tasks {
-                let value =
-                    match invoke(&host_tick, "runner", "run_task", json!({ "task": task })).await {
-                        Ok(value) => value,
-                        Err(error) => {
-                            tracing::warn!(error = %error, "任务执行失败");
-                            continue;
-                        }
-                    };
-                let Some(follows) = value.get("follows").and_then(Value::as_array) else {
-                    continue;
-                };
-                if follows.is_empty() {
-                    continue;
+            let leased = value.get("leased").and_then(Value::as_u64).unwrap_or(0);
+            let executed = value
+                .get("executed")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            let failed = value
+                .get("failed")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            if leased > 0 {
+                tracing::debug!(leased, executed, failed, "调度派发");
+            }
+        }
+    });
+    let host_sweep = Arc::clone(&host);
+    let stop_sweep = Arc::clone(&stop);
+    let sweep = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+            if stop_sweep.load(Ordering::Relaxed) {
+                break;
+            }
+            match invoke(&host_sweep, "committer", "sweep", json!({"dryRun": false})).await {
+                Ok(value) => {
+                    let tasks = value.get("tasks").and_then(Value::as_u64).unwrap_or(0);
+                    let snapshots = value.get("snapshots").and_then(Value::as_u64).unwrap_or(0);
+                    tracing::info!(tasks, snapshots, "保留清理完成");
                 }
-                let _ = invoke(&host_tick, "committer", "flush", json!({})).await;
-                for follow in follows {
-                    let _ =
-                        invoke(&host_tick, "runner", "run_task", json!({ "task": follow })).await;
-                }
+                // 清理失败只告警：保留策略不参与主链路成败。
+                Err(error) => tracing::warn!(error = %error, "保留清理失败"),
             }
         }
     });
@@ -325,6 +315,55 @@ fn spawn_loops(
         }
     });
     let stop_health = stop;
+    let host_flow = Arc::clone(&host);
+    let stop_flow = Arc::clone(&stop_health);
+    let flow = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(20)).await;
+            if stop_flow.load(Ordering::Relaxed) {
+                break;
+            }
+            let value = match invoke(&host_flow, "workflow", "tick", json!({})).await {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(error = %error, "内容加工失败");
+                    continue;
+                }
+            };
+            let processed = value.get("processed").and_then(Value::as_u64).unwrap_or(0);
+            let failed = value.get("failed").and_then(Value::as_u64).unwrap_or(0);
+            if processed > 0 || failed > 0 {
+                tracing::info!(processed, failed, "内容加工完成");
+            }
+        }
+    });
+    let services_derive = Arc::clone(&services);
+    let stop_derive = Arc::clone(&stop_health);
+    let derive = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            if stop_derive.load(Ordering::Relaxed) {
+                break;
+            }
+            // 声明式派生的执行端：没有声明时是空操作。
+            let run = match services_derive.run_derivations().await {
+                Ok(run) => run,
+                Err(error) => {
+                    tracing::warn!(error = %error, "派生执行失败");
+                    continue;
+                }
+            };
+            if run.leased > 0 {
+                tracing::info!(
+                    leased = run.leased,
+                    produced = run.produced,
+                    skipped = run.skipped,
+                    failed = run.failed,
+                    "派生执行完成"
+                );
+            }
+        }
+    });
     let health = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
@@ -332,12 +371,12 @@ fn spawn_loops(
             if stop_health.load(Ordering::Relaxed) {
                 break;
             }
-            if let Err(error) = invoke(&host, "health_check", "evaluate", json!({})).await {
+            if let Err(error) = invoke(&host, "health_record", "evaluate", json!({})).await {
                 tracing::warn!(error = %error, "健康评估失败");
             }
         }
     });
-    vec![tick, flush, health]
+    vec![tick, flush, flow, health, sweep, derive]
 }
 
 pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {

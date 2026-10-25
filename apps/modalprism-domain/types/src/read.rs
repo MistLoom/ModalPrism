@@ -284,6 +284,58 @@ pub async fn health_status(ctx: &dyn ReadCtx, args: &Value) -> Result<Value, Err
     }))
 }
 
+/// 通道与解析器的运行态。
+///
+/// 健康信号已按主体存成三条前缀 key，这里一次取全量后按前缀分组，
+/// 控制台不必逐信源查一次。
+pub async fn health_report(ctx: &dyn ReadCtx, args: &Value) -> Result<Value, Error> {
+    empty_args(args)?;
+    let mut sources = Vec::new();
+    let mut accessors = Vec::new();
+    let mut adapters = Vec::new();
+    for (key, state) in ctx.strata().states("health").await? {
+        let Some((scope, id)) = key.split_once('/') else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        let item = health_item(id, &state.value);
+        match scope {
+            "source" => sources.push(item),
+            "accessor" => accessors.push(item),
+            "adapter" => adapters.push(item),
+            _ => {}
+        }
+    }
+    Ok(json!({
+        "sources": sources,
+        "accessors": accessors,
+        "adapters": adapters,
+    }))
+}
+
+fn health_item(id: &str, value: &Value) -> Value {
+    let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
+    let count = |key: &str| value.get(key).and_then(Value::as_u64).unwrap_or(0);
+    json!({
+        "id": id,
+        "status": text("status").unwrap_or_else(|| "ok".into()),
+        "alert": value.get("alert").and_then(Value::as_bool).unwrap_or(false),
+        "lastError": text("last_error"),
+        "lastOkAt": text("last_ok_at"),
+        "blockedHits": count("blocked_hits"),
+        "selectorMiss": count("selector_miss"),
+    })
+}
+
+/// 内容库总览，服务端聚合，不再靠采样。
+pub async fn summary(ctx: &dyn ReadCtx, args: &Value) -> Result<Value, Error> {
+    empty_args(args)?;
+    let summary = ctx.strata().summary().await?;
+    serde_json::to_value(summary).map_err(|source| Error::with_source("spec 无效", source))
+}
+
 pub async fn config_validate(ctx: &dyn ReadCtx, args: &Value) -> Result<Value, Error> {
     empty_args(args)?;
     config::validate(ctx.config_dir(), ctx.load_options())?;
@@ -320,6 +372,7 @@ pub async fn config_explain(ctx: &dyn ReadCtx, args: &Value) -> Result<Value, Er
         .map(|field| {
             json!({
                 "path": field.path,
+                "domain": config::domain_of_path(&field.path),
                 "value": field.value,
                 "file": field.file,
                 "line": field.line,
@@ -348,7 +401,9 @@ pub async fn call(ctx: &dyn ReadCtx, method: &str, args: Value) -> Result<Value,
         "strata_read.related" => related(ctx, &args).await,
         "strata_read.query" => query(ctx, &args).await,
         "strata_read.changes" => changes(ctx, &args).await,
+        "strata_read.summary" => summary(ctx, &args).await,
         "health.status" => health_status(ctx, &args).await,
+        "health.report" => health_report(ctx, &args).await,
         "config_inspect.validate" => config_validate(ctx, &args).await,
         "config_inspect.diff" => config_diff(ctx, &args).await,
         "config_inspect.explain" => config_explain(ctx, &args).await,

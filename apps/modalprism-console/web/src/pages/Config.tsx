@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import { Drawer } from "../components/Drawer";
 import {
@@ -36,7 +36,26 @@ import { matchConfigFile, setYamlLineValue } from "../lib/files";
 import { navigate, useRoute } from "../lib/router";
 import type { ConfigChange, ConfigFileBody, ConfigFileMeta, FieldOrigin, Module } from "../lib/types";
 
-const KIND_ORDER = ["system", "source", "accessor", "adapter", "type", "preset"];
+// 功能域：来自 config_inspect 的投影，按处理环节而不是文件目录分组。
+const DOMAIN_ORDER = ["collect", "transport", "parse", "content", "policy", "other"];
+
+const DOMAIN_LABELS: Record<string, string> = {
+  collect: "采集信源",
+  transport: "取数通道",
+  parse: "解析规则",
+  content: "内容类型",
+  policy: "系统策略",
+  other: "其它",
+};
+
+const KIND_DOMAINS: Record<string, string> = {
+  system: "policy",
+  preset: "policy",
+  source: "collect",
+  accessor: "transport",
+  adapter: "parse",
+  type: "content",
+};
 
 export function ConfigPage() {
   const { snapshot, state, notify, now, refresh } = useConsole();
@@ -62,9 +81,10 @@ export function ConfigPage() {
   const generation = snapshot?.catalog.generation ?? null;
 
   const grouped = useMemo(() => {
-    return KIND_ORDER.map((kind) => ({
-      kind,
-      items: modules.filter((module) => module.kind === kind),
+    const domainOf = (module: Module) => module.domain ?? KIND_DOMAINS[module.kind] ?? "other";
+    return DOMAIN_ORDER.map((domain) => ({
+      domain,
+      items: modules.filter((module) => domainOf(module) === domain),
     })).filter((group) => group.items.length > 0);
   }, [modules]);
 
@@ -161,9 +181,10 @@ export function ConfigPage() {
           <span className="stat-label">生效模块</span>
           <span className="stat-value">{loading ? "—" : modules.length}</span>
           <span className="stat-foot">
-            信源 {modules.filter((module) => module.kind === "source").length} · 通道{" "}
-            {modules.filter((module) => module.kind === "accessor").length} · 解析器{" "}
-            {modules.filter((module) => module.kind === "adapter").length}
+            {grouped
+              .filter((group) => group.domain !== "policy")
+              .map((group) => `${DOMAIN_LABELS[group.domain] ?? group.domain} ${group.items.length}`)
+              .join(" · ") || "还没有声明文件"}
           </span>
         </div>
         <div className="stat">
@@ -246,10 +267,10 @@ export function ConfigPage() {
       {preset ? <PolicyCard preset={preset} onOpen={() => setSelected(preset)} /> : null}
 
       {grouped
-        .filter((group) => group.kind !== "system" && group.kind !== "preset")
+        .filter((group) => group.domain !== "policy")
         .map((group) => (
-          <div key={group.kind}>
-            <SectionTitle title={kindLabel(group.kind)} note={`${group.items.length} 个`} />
+          <div key={group.domain}>
+            <SectionTitle title={DOMAIN_LABELS[group.domain] ?? group.domain} note={`${group.items.length} 个`} />
             <div className="config-grid">
               {group.items.map((module) => (
                 <button
@@ -264,7 +285,7 @@ export function ConfigPage() {
                       {module.enabled ? "生效" : "停用"}
                     </Pill>
                   </span>
-                  <span className="module-id">{module.id}</span>
+                  <span className="module-id">{module.id} · {kindLabel(module.kind)}</span>
                   <span className="module-origin">
                     {module.file.split(/[\\/]/).slice(-2).join("/")}:{module.line}
                   </span>
@@ -276,7 +297,7 @@ export function ConfigPage() {
 
       {loading ? <Skeleton lines={6} /> : null}
 
-      <p className="faint" style={{ fontSize: 11.5, lineHeight: 1.7 }}>
+      <p className="faint" style={{ fontSize: "var(--fs-xs)", lineHeight: 1.7 }}>
         <IconConfig size={11} /> 配置以目录为唯一来源：保存后自动热加载，「应用配置」立即推进代际。这里同时展示生效值与来源。
       </p>
 
@@ -294,6 +315,7 @@ const POLICIES: { group: string; rows: { path: string[]; label: string; hint?: s
       { path: ["media", "mode"], label: "媒体文件" },
       { path: ["media", "max_size"], label: "单个媒体上限" },
       { path: ["versions", "snapshot_retain"], label: "快照保留期" },
+      { path: ["retention", "tasks"], label: "任务保留期", hint: "终态任务超过这个时长后由保留清理删除" },
       { path: ["commit", "flush_interval"], label: "提交间隔" },
       { path: ["state", "snapshot_interval"], label: "状态快照间隔" },
     ],
@@ -307,6 +329,13 @@ const POLICIES: { group: string; rows: { path: string[]; label: string; hint?: s
       { path: ["robots", "crawl_delay"], label: "抓取间隔" },
       { path: ["render", "max_level"], label: "渲染层级", hint: "需要时启用浏览器" },
       { path: ["capture", "screenshot"], label: "失败留证" },
+    ],
+  },
+  {
+    group: "网络与代理",
+    rows: [
+      { path: ["egress", "proxy"], label: "出站代理", hint: "system 跟随系统、off 直连，或写 http 代理地址" },
+      { path: ["egress", "private_networks"], label: "内网地址", hint: "是否允许访问私有网段" },
     ],
   },
   {
@@ -330,6 +359,81 @@ const POLICIES: { group: string; rows: { path: string[]; label: string; hint?: s
     ],
   },
 ];
+
+/**
+ * 字段来源的分组表：解释器返回的是点分路径（如 policy.egress.proxy），
+ * 按最长前缀归组，让一长串设置项按用途分开，而不是堆在一起。
+ */
+const ORIGIN_GROUPS: { group: string; prefixes: string[] }[] = [
+  {
+    group: "基础信息",
+    prefixes: ["id", "kind", "name", "description", "enabled", "slug", "type", "url", "site", "language"],
+  },
+  {
+    group: "访问与管线",
+    prefixes: ["accessor", "adapter", "pipeline", "surface", "expose", "catalog", "discover", "search"],
+  },
+  {
+    group: "网络与代理",
+    prefixes: ["egress", "proxy", "network", "headers", "auth", "cookie", "ua"],
+  },
+  {
+    group: "调度与准入",
+    prefixes: ["schedule", "interval", "cron", "backfill", "budget", "rate", "concurrency", "quota", "window", "jitter"],
+  },
+  {
+    group: "抓取与渲染",
+    prefixes: ["fetch", "request", "render", "browser", "capture", "robots", "timeout", "retry", "http"],
+  },
+  {
+    group: "内容与去重",
+    prefixes: ["identity", "dedupe", "reprocess", "extract", "content", "article", "field", "list", "mapping"],
+  },
+  {
+    group: "存储与版本",
+    prefixes: ["raw", "media", "versions", "commit", "state", "storage", "retain", "snapshot", "archive"],
+  },
+  {
+    group: "费用与健康",
+    prefixes: ["paid", "health", "notify", "alert", "cost", "budget_alert"],
+  },
+];
+
+/** 字段再多也不铺成一屏，超出部分提示去“合并后的配置”里看。 */
+const ORIGIN_LIMIT = 80;
+
+function groupOf(path: string): string {
+  const bare = path.startsWith("policy.") ? path.slice("policy.".length) : path;
+  let hit = "其它";
+  let length = 0;
+  for (const group of ORIGIN_GROUPS) {
+    for (const prefix of group.prefixes) {
+      const match = bare === prefix || bare.startsWith(`${prefix}.`);
+      if (match && prefix.length > length) {
+        hit = group.group;
+        length = prefix.length;
+      }
+    }
+  }
+  return hit;
+}
+
+/** 按固定顺序分组，保证同一模块每次打开的分组顺序一致。 */
+function groupFields(fields: FieldOrigin[]): { group: string; fields: FieldOrigin[] }[] {
+  const buckets = new Map<string, FieldOrigin[]>();
+  for (const field of fields.slice(0, ORIGIN_LIMIT)) {
+    const name = groupOf(field.path);
+    const bucket = buckets.get(name);
+    if (bucket) {
+      bucket.push(field);
+    } else {
+      buckets.set(name, [field]);
+    }
+  }
+  return [...ORIGIN_GROUPS.map((group) => group.group), "其它"]
+    .filter((name) => buckets.has(name))
+    .map((name) => ({ group: name, fields: buckets.get(name) ?? [] }));
+}
 
 function PolicyCard({ preset, onOpen }: { preset: Module; onOpen: () => void }) {
   return (
@@ -431,11 +535,7 @@ function ModuleDrawer({
         </Pill>
       </div>
 
-      {module.description ? (
-        <p className="muted" style={{ fontSize: 12.5 }}>
-          {module.description}
-        </p>
-      ) : null}
+      {module.description ? <p className="muted config-desc">{module.description}</p> : null}
 
       <div>
         <SectionTitle title="字段来源" note="点值可修改，来源是写入位置" />
@@ -444,18 +544,33 @@ function ModuleDrawer({
         ) : origins.length === 0 ? (
           <Empty title="没有可解释的字段" />
         ) : (
-          <div className="origin-list is-editable">
-            {origins.slice(0, 60).map((field) => (
-              <OriginField
-                key={field.path}
-                field={field}
-                onChanged={() => {
-                  refreshOrigins();
-                  onSaved();
-                }}
-              />
-            ))}
-          </div>
+          <>
+            <div className="origin-list is-editable">
+              {groupFields(origins).map((group) => (
+                <Fragment key={group.group}>
+                  <div className="origin-group">
+                    {group.group}
+                    <span className="origin-group-count">{group.fields.length}</span>
+                  </div>
+                  {group.fields.map((field) => (
+                    <OriginField
+                      key={field.path}
+                      field={field}
+                      onChanged={() => {
+                        refreshOrigins();
+                        onSaved();
+                      }}
+                    />
+                  ))}
+                </Fragment>
+              ))}
+            </div>
+            {origins.length > ORIGIN_LIMIT ? (
+              <p className="muted config-desc">
+                只列出前 {ORIGIN_LIMIT} 个字段，其余可在下方「合并后的配置」查看。
+              </p>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -643,6 +758,15 @@ const VALUES: Record<string, string> = {
 function describe(path: string[], value: unknown): string {
   if (value === undefined || value === null) {
     return "未设置";
+  }
+  if (typeof value === "string" && path[path.length - 1] === "proxy") {
+    if (value === "system") {
+      return "跟随系统";
+    }
+    if (value === "off") {
+      return "直连（不走代理）";
+    }
+    return value;
   }
   if (typeof value === "object") {
     if (Array.isArray(value)) {

@@ -2,7 +2,7 @@ framework_version: "1"
 id: paid_gateway
 open: true
 protocols: [fun]
-depends: []
+depends: [egress, strata_read, strata_write]
 stateful: true
 description: 付费回执
 methods:

@@ -30,6 +30,7 @@ fn hub_manifest() -> AbilityManifest {
             Dependency::optional(AbilityId::new("probe.wrap").expect("id")),
         ],
         stateful: true,
+        protocols: vec![],
         config_schema: json!({
             "type": "object",
             "properties": { "tag": { "type": "string" } }

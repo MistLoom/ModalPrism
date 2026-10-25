@@ -64,7 +64,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
     let response = running
         .host()
         .invoke(InvokeRequest::new(
-            InstanceId::new("config").unwrap(),
+            InstanceId::new("config_admin").unwrap(),
             MethodId::new("generation").unwrap(),
             json!({}),
         ))
@@ -315,5 +315,6 @@ fn hotlist_selector() -> Query {
         order_by: Vec::new(),
         limit: None,
         cursor: None,
+        include_tombstoned: false,
     }
 }

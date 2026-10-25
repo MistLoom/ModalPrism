@@ -45,6 +45,7 @@ fn plan() -> SourcePlan {
         expected_period: None,
         yield_drop_ratio: 0.3,
         failure_threshold: 5,
+        daily_limit: None,
     }
 }
 

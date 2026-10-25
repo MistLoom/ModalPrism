@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "ability-config"
+name = "ability-config-admin"
 version = "0.1.0"
 dependencies = [
  "ability-support",
@@ -89,6 +89,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "ability-workflow"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "serde_json",
+ "types",
+ "workflow",
 ]
 
 [[package]]
@@ -1991,6 +2001,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "catalog_admin"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "config",
+ "serde_json",
+ "types",
+]
+
+[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2350,6 +2370,16 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "content_admin"
+version = "0.1.0"
+dependencies = [
+ "ability-support",
+ "assembly",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "convert_case"
@@ -4689,7 +4719,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "health_check"
+name = "health_record"
 version = "0.1.0"
 dependencies = [
  "ability-support",
@@ -6029,7 +6059,9 @@ version = "0.1.0"
 dependencies = [
  "ability-core",
  "ability-support",
+ "ability-workflow",
  "async-trait",
+ "catalog_admin",
  "config",
  "config_inspect",
  "frame-core",
@@ -6051,24 +6083,28 @@ dependencies = [
 name = "modalprism-collector"
 version = "0.1.0"
 dependencies = [
- "ability-config",
+ "ability-config-admin",
  "ability-core",
  "ability-egress",
  "ability-planner",
  "ability-support",
+ "ability-workflow",
  "accessor_probe",
  "assembly",
  "async-trait",
  "axum 0.8.9",
+ "catalog_admin",
  "committer",
  "config",
  "config_inspect",
+ "content_admin",
  "frame-core",
  "frame-port-http",
  "health",
- "health_check",
+ "health_record",
  "modalprism-agent",
  "paid_gateway",
+ "reqwest 0.12.28",
  "runner",
  "serde",
  "serde_json",
@@ -6083,6 +6119,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "type_article",
  "types",
 ]
 
@@ -11368,6 +11405,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "serde",
  "serde_json",
  "strata-gateway",
  "strata-model",
@@ -13210,6 +13248,25 @@ dependencies = [
  "group 0.14.0",
  "hybrid-array",
  "primefield",
+]
+
+[[package]]
+name = "workflow"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "egress",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "strata-client",
+ "strata-model",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "types",
+ "url",
 ]
 
 [[package]]

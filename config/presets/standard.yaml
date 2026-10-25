@@ -47,6 +47,8 @@ policy:
     initial: { limit: 30, max_age: 365d }
   classify:
     detector: basic
+  retention:
+    tasks: 7d
   health:
     expected_period: 7d
     yield_drop_ratio: 0.3

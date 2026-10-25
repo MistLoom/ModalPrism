@@ -4,27 +4,31 @@ import { useEffect, useState } from "react";
 export type RouteId =
   | "overview"
   | "sources"
+  | "plans"
   | "tasks"
   | "strata"
   | "library"
+  | "workflows"
   | "governance"
   | "channels"
   | "config";
 
-export type RouteGroup = "观测" | "系统";
+export type RouteGroup = "观测" | "加工" | "系统";
 
 export const ROUTES: { id: RouteId; label: string; hint: string; group: RouteGroup }[] = [
   { id: "overview", label: "总览", hint: "信源健康与最近提交", group: "观测" },
   { id: "sources", label: "信源", hint: "信源清单与调度时间", group: "观测" },
-  { id: "tasks", label: "任务", hint: "任务队列、重试与调度", group: "观测" },
+  { id: "plans", label: "采集计划", hint: "每信源的节律、上限与启停", group: "观测" },
+  { id: "tasks", label: "任务", hint: "执行队列与任务生命周期", group: "观测" },
   { id: "strata", label: "Strata", hint: "内容分层、版本与血缘", group: "观测" },
   { id: "library", label: "内容库", hint: "已入库的内容与快照", group: "观测" },
+  { id: "workflows", label: "内容加工", hint: "工作流、模型与通知", group: "加工" },
   { id: "governance", label: "治理", hint: "限速、熔断与站点守则", group: "系统" },
   { id: "channels", label: "采集通道", hint: "通道配置与出站策略", group: "系统" },
   { id: "config", label: "系统配置", hint: "声明文件、校验与生效", group: "系统" },
 ];
 
-export const ROUTE_GROUPS: RouteGroup[] = ["观测", "系统"];
+export const ROUTE_GROUPS: RouteGroup[] = ["观测", "加工", "系统"];
 
 export function routeLabel(id: RouteId): string {
   return ROUTES.find((item) => item.id === id)?.label ?? id;

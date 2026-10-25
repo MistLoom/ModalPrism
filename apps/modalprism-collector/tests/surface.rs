@@ -3,6 +3,8 @@
 //! 同一份方法集必须在四处一致：`surface` 声明、`ability.yml`、
 //! 已装载 provider 的 manifest、`src/logic/*.rs` 文件集。
 //! 任何一处漂移都让这条测试失败，避免能力面悄悄长出没人声明的方法。
+//! 另有一条守住前端调用面：`api.ts` 里出现的每一个运维调用都必须被界面面放行，
+//! 否则按钮在运行时必然被自家白名单拦死。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -59,6 +61,8 @@ fn ability_dir(id: &str) -> PathBuf {
 
 #[derive(serde::Deserialize)]
 struct Decl {
+    #[serde(default)]
+    protocols: Vec<String>,
     methods: Vec<Declared>,
 }
 
@@ -67,10 +71,17 @@ struct Declared {
     id: String,
 }
 
-fn yml_methods(dir: &Path) -> BTreeSet<String> {
+fn yml_decl(dir: &Path) -> Decl {
     let source = fs::read_to_string(dir.join("ability.yml")).unwrap();
-    let decl: Decl = serde_yaml::from_str(&source).unwrap();
-    decl.methods.into_iter().map(|item| item.id).collect()
+    serde_yaml::from_str(&source).unwrap()
+}
+
+fn yml_methods(dir: &Path) -> BTreeSet<String> {
+    yml_decl(dir)
+        .methods
+        .into_iter()
+        .map(|item| item.id)
+        .collect()
 }
 
 fn logic_methods(dir: &Path) -> BTreeSet<String> {
@@ -137,6 +148,32 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
             "{} 的 logic 文件漂移",
             ability.id
         );
+        // 协议声明：yml 与 provider manifest 必须一致（协议投影的唯一来源）。
+        let decl = yml_decl(&dir);
+        let declared_protocols: BTreeSet<String> = decl.protocols.iter().cloned().collect();
+        let manifest_protocols: BTreeSet<String> = running
+            .host()
+            .manifest_protocols(ability.id)
+            .into_iter()
+            .collect();
+        assert_eq!(
+            declared_protocols, manifest_protocols,
+            "{} 的 protocols 在 ability.yml 与 provider 声明之间漂移",
+            ability.id
+        );
+    }
+
+    // 运维面走 HTTP，被开放的方法必须声明 http 协议；协议声明不再与运行现实脱钩。
+    for exposure in COLLECTOR_OPS {
+        let protocols: BTreeSet<String> = yml_decl(&ability_dir(exposure.id))
+            .protocols
+            .into_iter()
+            .collect();
+        assert!(
+            protocols.contains("http"),
+            "运维面引用的 {} 没有在 ability.yml 声明 http 协议",
+            exposure.id
+        );
     }
 
     // 开放面只能收窄，不能凭空多出方法。
@@ -168,4 +205,64 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
     }
 
     running.shutdown().await.unwrap();
+}
+
+/// 从源码里抽取 `call("<instance>", "<method>"` 形态的运维调用；
+/// 只认字符串字面量，变量拼接的调用不在守护范围内。
+fn frontend_calls(source: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let bytes = source.as_bytes();
+    let mut offset = 0;
+    while let Some(at) = source[offset..].find("call") {
+        let start = offset + at;
+        offset = start + 4;
+        // `app.call(...)` 之类的方法调用不是运维入口。
+        if start > 0 && bytes[start - 1] == b'.' {
+            continue;
+        }
+        let mut rest = source[start + 4..].trim_start();
+        if rest.starts_with('<') {
+            let Some(end) = rest.find('>') else { continue };
+            rest = rest[end + 1..].trim_start();
+        }
+        let Some(rest) = rest.strip_prefix('(') else {
+            continue;
+        };
+        let Some(pair) = two_strings(rest) else {
+            continue;
+        };
+        found.push(pair);
+    }
+    found
+}
+
+fn two_strings(text: &str) -> Option<(String, String)> {
+    let (first, rest) = quoted(text)?;
+    let rest = rest.trim_start().strip_prefix(',')?;
+    let (second, _) = quoted(rest.trim_start())?;
+    Some((first, second))
+}
+
+fn quoted(text: &str) -> Option<(String, &str)> {
+    let rest = text.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some((rest[..end].to_string(), &rest[end + 1..]))
+}
+
+#[test]
+fn frontend_only_calls_whitelisted_methods() {
+    let api =
+        fs::read_to_string(root().join("apps/modalprism-console/web/src/lib/api.ts")).unwrap();
+    let mut checked = 0;
+    for (instance, method) in frontend_calls(&api) {
+        assert!(
+            surface::exposes(CONSOLE, &instance, &method),
+            "前端调用 {instance}.{method} 没有登记到界面面，运行时会被拦拒"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 20,
+        "扫描到的运维调用过少，解析可能失效：{checked}"
+    );
 }

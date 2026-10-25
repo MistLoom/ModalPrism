@@ -17,6 +17,7 @@ pub fn project(status: &SourceStatus) -> serde_json::Value {
         "lastOkAt": status.last_ok_at,
         "lastYieldAt": status.last_yield_at,
         "yields7d": status.yields_7d,
+        "todayYield": status.today_yield,
     })
 }
 

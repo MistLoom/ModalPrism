@@ -97,6 +97,7 @@ pub async fn fetch(
     let policy = config::overlay_system_policy(&state.snapshot.system, &source_policy);
     let egress_policy = crate::transport::policy_from(&state.snapshot.system, &source_policy);
     let paid_policy = crate::transport::call_policy_from(&state.snapshot.system, &accessor_policy);
+    let source_proxy = egress::setting_of(&policy);
     let spec = if task.spec.is_object() {
         task.spec.clone()
     } else {
@@ -132,8 +133,11 @@ pub async fn fetch(
     let envelopes = crate::transport::REQUEST_DEADLINE
         .scope(
             deadline,
-            crate::transport::EGRESS_POLICY
-                .scope(egress_policy, accessor.access(request, &context)),
+            crate::transport::SOURCE_PROXY.scope(
+                source_proxy,
+                crate::transport::EGRESS_POLICY
+                    .scope(egress_policy, accessor.access(request, &context)),
+            ),
         )
         .await
         .map_err(from_access)?;

@@ -1,0 +1,53 @@
+framework_version: "1"
+id: content_admin
+open: false
+protocols: [fun, http]
+depends: [strata_read, strata_write]
+stateful: true
+description: 按筛选统计、删除与恢复已采集内容
+methods:
+  - id: count
+    description: 统计匹配的内容条数与其中已删除的条数
+    input:
+      type: object
+      properties:
+        source: { type: string }
+        before: { type: string }
+        after: { type: string }
+        includeTombstoned: { type: boolean }
+  - id: purge
+    description: 按筛选或选中行写入墓碑
+    input:
+      type: object
+      properties:
+        rids:
+          type: array
+          items: { type: string }
+        source: { type: string }
+        before: { type: string }
+        after: { type: string }
+        reason: { type: string }
+        dryRun: { type: boolean }
+  - id: label
+    description: 为用户分类写入或撤销标签
+    input:
+      type: object
+      properties:
+        rids:
+          type: array
+          items: { type: string }
+        set: { type: object }
+        unset:
+          type: array
+          items: { type: string }
+      required: [rids]
+  - id: restore
+    description: 撤销墓碑，把内容放回默认列表
+    input:
+      type: object
+      properties:
+        rids:
+          type: array
+          items: { type: string }
+        reason: { type: string }
+      required: [rids]

@@ -17,7 +17,9 @@ A multi-source data collection system written in Rust: it collects data from RSS
 - **Filter, full-text, and vector search fused in one query interface** — business code never writes SQL.
 - **Centralized traffic governance**: rate limiting, circuit breaking, robots compliance, private-network protection; paid calls get budgets and duplicate-request merging.
 - **Hot-reloaded configuration**: strictly validated YAML, changes applied atomically.
-- **Read-only MCP surface**: agents run queries, health checks, and config provenance over collected data directly.
+- **New sources without writing code**: templates for search, RSS, web lists, and JSON APIs; form editing, bulk enable/disable/delete, per-source proxy; shipped adapters are protected, everything else is editable and deletable.
+- **Content processing workflows**: models over API, local endpoints, or CLI; steps compose LLM, template, and HTTP; outputs are written back as lineage-carrying facets; webhook and Feishu notifications.
+- **Three public entry points**: fixed `/api/v1` routes, read-only MCP tools, and a SKILL package — scripts and agents need no knowledge of internals.
 
 ## Positioning
 
@@ -31,8 +33,8 @@ Tools like Firecrawl, Crawl4AI, and RSSHub solve "extract once" or "emit a feed"
 | Storage | Unified resources + facets, SQLite → PostgreSQL | Bring-your-own sink | — | Bring-your-own sink |
 | Query | Filter + full-text + vector DSL | Search / extract endpoints | RSS subscription | — |
 | Paid-API governance | Budgets, logical request keys, idempotent receipts | Credit-based (SaaS) | — | DIY |
-| Adding sources | YAML declaration | Templates / code | Code routes | Code |
-| Agent interface | Read-only MCP surface | API/SDK | Feeds | — |
+| Adding sources | YAML declaration, or templates in the console | Templates / code | Code routes | Code |
+| Agent interface | Read-only MCP tools · HTTP · SKILL package | API/SDK | Feeds | — |
 
 ## Features
 
@@ -54,8 +56,14 @@ Every outbound request — including a headless browser's sub-requests — goes 
 ### Declarative configuration with atomic hot-reload
 Sources, accessors, adapters, and policy presets are validated YAML — unknown fields fail validation, config never touches a database. Hot reload builds an immutable generation and switches atomically; in-flight tasks keep the generation they were dispatched with.
 
+### Source authoring without code
+Adding a site needs no commit: start from a template (RSS/Atom, web list, search query, JSON API), fill in the address and selectors in the console, and the save goes through the same loader that validates and hot-reloads the directory. Sources, accessors, and adapters all support create, rewrite, enable/disable, delete, and batch operations; each declaration carries a reference count so the blast radius is visible before deleting. Adapters shipped with the code cannot be deleted, but they can be disabled, rewritten, or copied under a new name and changed freely.
+
+### Content processing
+Collection is followed by a processing stage: model declarations (`api` / `local` / `cli`) plus workflow declarations (trigger, step sequence, outputs, notifications). A step is an LLM call, a template, or an HTTP request; outputs are written back as new facets with lineage and never touch the original; every run leaves a `struct:workflow-run` record, successful or not. Notifications support webhooks and Feishu bots, testable from the console. See [`docs/specs/content-processing.md`](docs/specs/content-processing.md).
+
 ### Read-only surface for agents
-Collected data is exposed over MCP: typed queries, health status, and config provenance for any MCP-capable client; scenario-agnostic abstract types (`Article`, `HotList`) provide business views.
+Collected data is exposed over MCP: typed queries, health status, source inventory, workflows and runs, and config provenance for any MCP-capable client; scenario-agnostic abstract types (`Article`, `HotList`) provide business views. Write methods never appear in the tool list, and the read-only process opens the data directory read-only.
 
 ## Architecture
 
@@ -85,9 +93,9 @@ Boundaries: only Strata touches storage; accessors reach the network solely thro
 
 | Process | Description | Surface |
 |---|---|---|
-| `modalprism-collector` | One command: initialize storage, enter the collection loop | Loopback ops HTTP `:17880`, forward proxy `:17881`, push `:17882` |
+| `modalprism-collector` | One command: initialize storage, enter the collection loop | Loopback ops HTTP `:17880` (incl. public `/api/v1`), forward proxy `:17881`, push `:17882` |
 | `modalprism-console` | Rust BFF aggregating the ops plane, hosting the SPA | HTTP, `127.0.0.1:17890` |
-| `modalprism-agent` | Read-only surface (query / health / provenance / type views) | MCP stdio, tools named `instance.method` |
+| `modalprism-agent` | Read-only surface (query / health / source inventory / workflows & runs / provenance / type views) | MCP stdio, tools named `instance.method` |
 
 ## Quick start
 
@@ -128,7 +136,7 @@ cd apps/modalprism-console/web && pnpm install && pnpm build
 cargo run -p modalprism-console -- --ops http://127.0.0.1:17880 --bind 127.0.0.1:17890
 ```
 
-Open `http://127.0.0.1:17890`. Front-end routes are hash-based (`#/overview`, `#/sources`, `#/library`, `#/channels`, `#/config`).
+Open `http://127.0.0.1:17890`. Front-end routes are hash-based (`#/overview`, `#/sources`, `#/channels`, `#/library`, `#/workflows`, `#/config`).
 
 ## Declaring a source
 
@@ -156,12 +164,82 @@ admission:
 
 Merge order: common config → type base → policy preset → profile → instance → environment override, then a system-level lock check yields an immutable snapshot.
 
-## Read-only MCP surface
+## Content processing
 
-For external agents to query collected data over MCP:
+Workflows and models live under `config/workflows/` and `config/models/`, or can be created in the console's processing page. The smallest workflow:
+
+```yaml
+# config/models/digest.yaml
+name: Digest model
+mode: api
+endpoint: https://api.deepseek.com/v1
+model: deepseek-chat
+keyEnv: DEEPSEEK_API_KEY
+```
+
+```yaml
+# config/workflows/daily-digest.yaml
+name: Daily digest
+trigger:
+  on: commit
+model: digest
+steps:
+  - id: summary
+    kind: llm
+    prompt: "Summarize in three sentences:\n{{article.text}}"
+outputs:
+  facet:
+    kind: struct
+    variant: digest
+    body: '{"summary":"{{steps.summary}}"}'
+notify:
+  - kind: feishu
+    url: https://open.feishu.cn/open-apis/bot/v2/hook/xxxx
+    on: [failure]
+```
+
+Three model channels: `api` talks to a remote OpenAI-compatible endpoint (only the env var name is declared), `local` targets a loopback or LAN endpoint (Ollama, vLLM, LM Studio), `cli` pipes the prompt into a subprocess (`claude -p`, `llm`). The processing loop advances the cursor every 20 seconds; you can also run one article or one batch manually.
+
+Feishu setup: group bot → custom bot → copy the webhook; pick keyword verification with `ModalPrism` as the keyword (signature verification is not supported). Paste it into the console's processing → notifications view and send a test.
+
+## Public API
+
+Three entry points, one capability set. Full fields and examples in [`docs/specs/public-api.md`](docs/specs/public-api.md).
+
+### HTTP
+
+Fixed routes on the collector's ops port, without going through the console BFF:
+
+```sh
+curl -s http://127.0.0.1:17880/api/v1/health
+curl -s "http://127.0.0.1:17880/api/v1/articles?source=hugging-face&limit=5"
+curl -s "http://127.0.0.1:17880/api/v1/articles?q=agent%20memory"
+curl -s http://127.0.0.1:17880/api/v1/articles/r_01ARZ3NDEKTSV4RRFFQ69G5FAV
+curl -s http://127.0.0.1:17880/api/v1/sources
+curl -s http://127.0.0.1:17880/api/v1/workflows
+curl -s -X POST http://127.0.0.1:17880/api/v1/process
+```
+
+Only two write routes: run a workflow (`POST /api/v1/workflows/{slug}/run`) and advance processing once (`POST /api/v1/process`). Configuration changes are not exposed to a bare endpoint — use the console or the declaration files.
+
+### MCP
+
+For any MCP-capable client to query collected data:
 
 ```sh
 cargo run -p modalprism-agent -- --data var --config config
+```
+
+Tools are named `instance.method`, e.g. `strata_read.query`, `type_article.project`, `catalog_admin.list`, `workflow.runs`. Write methods (`workflow.save`, `catalog_admin.create`, …) never appear in the tool list; forcing one is rejected by the gateway.
+
+### SKILL package
+
+`skills/modalprism/` is an Agent Skill: call order, field notes, and task recipes, plus a zero-dependency HTTP client for clients without MCP:
+
+```sh
+node skills/modalprism/scripts/prism.mjs health
+node skills/modalprism/scripts/prism.mjs articles --source hugging-face --limit 5
+node skills/modalprism/scripts/prism.mjs run daily-digest r_01ARZ3NDEKTSV4RRFFQ69G5FAV
 ```
 
 ## Repository layout
@@ -174,21 +252,22 @@ apps/modalprism-domain/    strata-model · strata-sqlite-vec · strata-gateway �
 apps/modalprism-collector/ Collection process (ability/ = in-proc abilities; subsystems/ = accessors, adapters, egress, …)
 apps/modalprism-agent/     Read-only MCP process
 apps/modalprism-console/   Console (Rust BFF + web/ SPA)
-abilitys/                  Shared abilities: strata_read · config_inspect · health · type_article · type_hotlist
+abilitys/                  Shared abilities: strata_read · config_inspect · health · type_article · type_hotlist · catalog_admin · workflow
 config/                    System config, accessors, adapters, sources, presets, schemas (YAML / JSON)
 docs/                      Design document & implementation specs
 manual/                    LEAF framework manual
+skills/                    Agent Skill package (SKILL.md + zero-dependency HTTP script)
 ```
 
 Dependency boundaries: domain libraries depend on none of `frame-core` / `ability-core` / `ability-support` / ports; ability crates depend only on `ability-support`; the composition root depends on `frame-core` and `ability-core`.
 
 ## Development
 
-Tests and the clippy gate cover only this project's crates; `frame/`, `SDK/`, and `apps/ability-core` are vendored LEAF code built as-is from upstream.
+Tests and the clippy gate cover only this project's crates; `frame/`, `SDK/`, and `apps/ability-core` are vendored LEAF code compiled as-is from upstream (their own upstream lints are outside the gate), hence `--no-deps` for clippy.
 
 ```sh
 cargo test --workspace --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core
-cargo clippy --workspace --all-targets --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core -- -D warnings
+cargo clippy --workspace --all-targets --no-deps --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core -- -D warnings
 ```
 
 The workspace forbids `unsafe_code`; releases build with `lto = true`, `codegen-units = 1`. The frontend is built with pnpm under `apps/modalprism-console/web`.

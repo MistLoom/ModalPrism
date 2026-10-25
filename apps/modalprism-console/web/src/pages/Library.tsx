@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { BatchBar } from "../components/batch";
 import { Drawer } from "../components/Drawer";
-import { IconAlert, IconLibrary } from "../components/icons";
+import { IconAlert, IconLibrary, IconRefresh, IconTrash } from "../components/icons";
 import {
   Card,
   Empty,
@@ -13,11 +14,12 @@ import {
   Seg,
   Skeleton,
 } from "../components/ui";
-import { contentBody, contentKinds, library, structCell } from "../lib/api";
+import { contentBody, contentCount, contentKinds, contentPurge, contentRestore, contentTag, library, strataSummary, structCell } from "../lib/api";
 import { useConsole } from "../lib/console";
-import { asReadable, relative, stamp } from "../lib/format";
+import { asReadable, count, relative, stamp } from "../lib/format";
 import { navigate, useRoute } from "../lib/router";
-import type { ContentKind, LibraryRow } from "../lib/types";
+import { useSelection } from "../lib/selection";
+import type { ContentKind, ContentSummary, LibraryRow } from "../lib/types";
 
 /** 一条内容 = 资源行 + 它的内容类型。 */
 interface Entry {
@@ -40,16 +42,29 @@ const BODY_OPTIONS = [
   { value: "with", label: "仅有正文" },
 ];
 
+/** 加工层级：按 facet 存在性区分原始/可读/结构化；加工产出按 workflow 标签判定。 */
+const LEVEL_OPTIONS = [
+  { value: "all", label: "全部分层" },
+  { value: "raw", label: "原始层" },
+  { value: "md", label: "可读层" },
+  { value: "struct", label: "结构化" },
+  { value: "processed", label: "加工产出" },
+];
+
 export function LibraryPage() {
-  const { snapshot, cursor, state } = useConsole();
+  const { snapshot, cursor, state, notify } = useConsole();
   const { param } = useRoute();
   const [kinds, setKinds] = useState<ContentKind[] | null>(null);
+  const [summary, setSummary] = useState<ContentSummary | null>(null);
   const [kind, setKind] = useState("all");
   const [text, setText] = useState("");
   const [query, setQuery] = useState("");
   const [sourceId, setSourceId] = useState("all");
   const [span, setSpan] = useState("all");
   const [body, setBody] = useState("any");
+  const [level, setLevel] = useState("all");
+  const [category, setCategory] = useState("all");
+  const [withTombstoned, setWithTombstoned] = useState(false);
   const [page, setPage] = useState(0);
   // keyset 锚点：next 向更早翻（seq < 锚点）；prev 向更新翻（seq > 锚点，升序拉取后反转）。
   const [anchor, setAnchor] = useState<{ seq: number; dir: "next" | "prev" } | null>(null);
@@ -57,6 +72,9 @@ export function LibraryPage() {
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Entry | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState(0);
+  const selection = useSelection<string>();
 
   useEffect(() => {
     let alive = true;
@@ -70,7 +88,22 @@ export function LibraryPage() {
     return () => {
       alive = false;
     };
-  }, [cursor]);
+  }, [version]);
+
+  // 来源分布由服务端聚合：只统计真实存在的内容，不受分页影响。
+  useEffect(() => {
+    let alive = true;
+    strataSummary()
+      .then((next) => {
+        if (alive) {
+          setSummary(next);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [version]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(text.trim()), 320);
@@ -94,6 +127,11 @@ export function LibraryPage() {
       return;
     }
     const spanMs = SPANS.find((item) => item.value === span)?.ms ?? 0;
+    // 标签值里可能含 =，只按第一个分隔符拆。
+    const split = category === "all" ? null : (() => {
+      const at = category.indexOf("=");
+      return at < 0 ? null : { key: category.slice(0, at), value: category.slice(at + 1) };
+    })();
     library({
       variant: kind === "all" ? null : kind,
       variants: known,
@@ -103,6 +141,10 @@ export function LibraryPage() {
       sourceId: sourceId === "all" ? null : sourceId,
       since: spanMs > 0 ? new Date(Date.now() - spanMs).toISOString() : null,
       withBody: body === "with",
+      includeTombstoned: withTombstoned,
+      level: level === "all" ? null : level,
+      processedOnly: level === "processed",
+      label: split,
       before: anchor?.dir === "next" ? anchor.seq : null,
       after: anchor?.dir === "prev" ? anchor.seq : null,
       rid: param,
@@ -122,16 +164,171 @@ export function LibraryPage() {
     return () => {
       alive = false;
     };
-  }, [kind, query, cursor, kinds, sourceId, span, body, anchor, param]);
+  }, [kind, query, cursor, kinds, sourceId, span, body, level, category, withTombstoned, anchor, param, version]);
 
   // hasMore 描述的是本次拉取的方向：向上翻时它说明「更新的方向」还有没有。
   const hasPrev = param ? false : anchor?.dir === "prev" ? hasMore : page > 0;
   const hasNext = param ? false : anchor?.dir === "prev" ? true : hasMore;
   const total = useMemo(() => rows?.length ?? 0, [rows]);
 
+  // 来源选项来自服务端聚合：只列真实有内容的来源，名字取自信源清单，条数直接标注。
+  const sourceOptions = useMemo(() => {
+    const names = new Map((snapshot?.sources ?? []).map((item) => [item.id, item.name]));
+    const totals = new Map((summary?.sources ?? []).map((item) => [item.sourceId, item.total]));
+    const ids = new Set<string>([...totals.keys(), ...names.keys()]);
+    return [
+      { value: "all", label: "全部来源" },
+      ...[...ids]
+        .filter(Boolean)
+        .sort()
+        .map((id) => {
+          const name = names.get(id) ?? shortId(id);
+          const total = totals.get(id);
+          return { value: id, label: total === undefined ? name : `${name} · ${count(total)}` };
+        }),
+    ];
+  }, [summary, snapshot]);
+
+  // 分类选项来自服务端标签分布：只列真实用过的分类，工作流内部标签不展示给用户。
+  const categoryOptions = useMemo(() => {
+    const groups = new Map<string, { value: string; total: number }[]>();
+    for (const item of summary?.labels ?? []) {
+      if (item.key === "workflow") {
+        continue;
+      }
+      const bucket = groups.get(item.key) ?? [];
+      bucket.push({ value: item.value, total: item.total });
+      groups.set(item.key, bucket);
+    }
+    const options = [...groups.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .flatMap(([key, items]) =>
+        items
+          .sort((left, right) => right.total - left.total || left.value.localeCompare(right.value))
+          .map((item) => ({ value: `${key}=${item.value}`, label: `${key} · ${item.value} · ${count(item.total)}` })),
+      );
+    return [{ value: "all", label: "全部分类" }, ...options];
+  }, [summary]);
+
+  const picked = rows?.filter((entry) => selection.has(entry.row.rid)).length ?? 0;
+  const sourceIdFilter = sourceId === "all" ? null : sourceId;
+
+  /** 删除写入墓碑、恢复撤销墓碑：两者都作用在一组 RID 上。 */
+  async function act(kind: "tombstone" | "restore", rids: string[]) {
+    if (rids.length === 0) {
+      return;
+    }
+    if (
+      kind === "tombstone" &&
+      !window.confirm(`将选中的 ${rids.length} 条内容写入墓碑？不会物理删除，勾选「包含已删除」后可以在这里恢复。`)
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      if (kind === "tombstone") {
+        const report = await contentPurge({ rids, reason: "控制台删除", dryRun: false });
+        notify("ok", `已删除 ${report.tombstoned} 条内容`, "默认列表不再显示；勾选「包含已删除」可以找回。");
+      } else {
+        const restored = await contentRestore(rids, "控制台恢复");
+        notify("ok", `已恢复 ${restored} 条内容`);
+      }
+      selection.clear();
+      setSelected(null);
+      setRows(null);
+      setVersion((current) => current + 1);
+    } catch (problem) {
+      notify("bad", kind === "tombstone" ? "删除失败" : "恢复失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 按当前筛选一次清理：时间范围在这里是清理边界（早于窗口的内容才被写墓碑）。 */
+  async function purgeFiltered() {
+    const spanMs = SPANS.find((item) => item.value === span)?.ms ?? 0;
+    if (span === "all" && !sourceIdFilter) {
+      notify("info", "先把来源或时间范围收窄到一个明确的清理边界", "清理是批量写墓碑，避免「全部时间 + 全部来源」一刀切。");
+      return;
+    }
+    if (query.trim()) {
+      notify("info", "检索模式下不能按筛选清理", "清空检索词后，来源与时间筛选会重新生效。");
+      return;
+    }
+    setBusy(true);
+    try {
+      const scope = {
+        sourceId: sourceIdFilter,
+        ...(spanMs > 0 ? { before: new Date(Date.now() - spanMs).toISOString() } : {}),
+      };
+      const stats = await contentCount({ ...scope, includeTombstoned: true });
+      const pending = stats.matched - stats.tombstoned;
+      if (pending <= 0) {
+        notify("info", "当前筛选下没有待删除的内容", stats.matched > 0 ? "匹配到的条目都已写入墓碑。" : undefined);
+        return;
+      }
+      const boundary = [
+        sourceIdFilter ? `来源 ${shortId(sourceIdFilter)}` : null,
+        spanMs > 0 ? `入库早于 ${SPANS.find((item) => item.value === span)?.label.replace("最近 ", "")}以前` : null,
+      ]
+        .filter(Boolean)
+        .join("、");
+      if (
+        !window.confirm(
+          `将给${boundary}下未删除的 ${pending} 条内容写入墓碑？不会物理删除，勾选「包含已删除」后可以找回。继续？`,
+        )
+      ) {
+        return;
+      }
+      let tombstoned = 0;
+      for (;;) {
+        const report = await contentPurge({ ...scope, reason: "控制台按筛选清理", dryRun: false });
+        tombstoned += report.tombstoned;
+        if (!report.truncated || report.tombstoned === 0) {
+          break;
+        }
+      }
+      notify("ok", `已清理 ${tombstoned} 条内容`, "默认列表不再显示；勾选「包含已删除」可以找回。");
+      selection.clear();
+      setSelected(null);
+      setRows(null);
+      setVersion((current) => current + 1);
+    } catch (problem) {
+      notify("bad", "清理失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function resetPage() {
     setPage(0);
     setAnchor(null);
+  }
+
+  /** 打标/摘标后统一刷新列表与抽屉：标签同时是筛选维度。 */
+  async function writeTags(
+    targets: Entry[],
+    set: Record<string, string>,
+    unset: string[],
+    done: string,
+  ) {
+    const rids = targets.map((entry) => entry.row.rid);
+    if (rids.length === 0) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await contentTag(rids, set, unset);
+      notify("ok", done);
+      selection.clear();
+      setSelected(null);
+      setRows(null);
+      setVersion((current) => current + 1);
+    } catch (problem) {
+      notify("bad", "标签没有写入", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function goNext() {
@@ -202,7 +399,10 @@ export function LibraryPage() {
             label="内容类型"
             options={[
               { value: "all", label: "全部" },
-              ...kinds.map((item) => ({ value: item.variant, label: item.label })),
+              ...kinds.map((item) => ({
+                value: item.variant,
+                label: `${item.label} · ${count(item.total)}`,
+              })),
             ]}
           />
         ) : null}
@@ -210,7 +410,7 @@ export function LibraryPage() {
         {cursor !== null ? (
           <Pill tone="warn">历史快照 #{cursor}</Pill>
         ) : (
-          <span className="faint" style={{ fontSize: 11.5 }}>
+          <span className="faint" style={{ fontSize: "var(--fs-xs)" }}>
             {rows === null ? "读取中" : `${total} 条内容`}
           </span>
         )}
@@ -225,13 +425,7 @@ export function LibraryPage() {
               setSourceId(value);
               resetPage();
             }}
-            options={[
-              { value: "all", label: "全部来源" },
-              ...(snapshot?.sources ?? []).map((source) => ({
-                value: source.id,
-                label: source.name,
-              })),
-            ]}
+            options={sourceOptions}
           />
           <FilterSelect
             label="时间"
@@ -253,13 +447,76 @@ export function LibraryPage() {
             disabled={query.trim() !== ""}
             title={query.trim() ? "全文检索与正文筛选不能同时使用" : undefined}
           />
+          <FilterSelect
+            label="分层"
+            value={level}
+            onChange={(value) => {
+              setLevel(value);
+              resetPage();
+            }}
+            options={LEVEL_OPTIONS}
+            disabled={query.trim() !== ""}
+            title={query.trim() ? "检索模式下不能按分层筛选，清空检索词后恢复" : undefined}
+          />
+          <FilterSelect
+            label="分类"
+            value={category}
+            onChange={(value) => {
+              setCategory(value);
+              resetPage();
+            }}
+            options={categoryOptions}
+          />
+          <label className="pick-inline" title="已删除的内容只写了墓碑，勾选后可以找回">
+            <input
+              type="checkbox"
+              checked={withTombstoned}
+              onChange={(event) => {
+                setWithTombstoned(event.target.checked);
+                resetPage();
+              }}
+            />
+            包含已删除
+          </label>
         </div>
       ) : null}
       {query.trim() ? (
-        <p className="faint" style={{ fontSize: 11.5, margin: 0 }}>
+        <p className="faint" style={{ fontSize: "var(--fs-xs)", margin: 0 }}>
           检索模式按相关度返回前 {PAGE_SIZE} 条，不支持翻页与正文筛选；清空检索词可恢复分页。
         </p>
       ) : null}
+
+      <BatchBar
+        count={picked}
+        busy={busy}
+        onClear={selection.clear}
+        actions={[
+          {
+            key: "remove",
+            label: "删除",
+            icon: <IconTrash size={12} />,
+            danger: true,
+            onClick: () => void act("tombstone", selection.list()),
+          },
+          {
+            key: "restore",
+            label: "恢复",
+            icon: <IconRefresh size={12} />,
+            onClick: () => void act("restore", selection.list()),
+          },
+          ...(param || query.trim()
+            ? []
+            : [
+                {
+                  key: "purge-filtered",
+                  label: "按筛选清理",
+                  icon: <IconAlert size={12} />,
+                  danger: true,
+                  onClick: () => void purgeFiltered(),
+                },
+              ]),
+        ]}
+      />
 
       <Card tight>
         {rows === null ? (
@@ -312,7 +569,13 @@ export function LibraryPage() {
         ) : (
           <div className="library-list">
             {rows.map((entry) => (
-              <LibraryLine key={`${entry.variant}-${entry.row.rid}`} entry={entry} onOpen={setSelected} />
+              <LibraryLine
+                key={`${entry.variant}-${entry.row.rid}`}
+                entry={entry}
+                picked={selection.has(entry.row.rid)}
+                onPick={(rid) => selection.toggle(rid)}
+                onOpen={setSelected}
+              />
             ))}
           </div>
         )}
@@ -331,19 +594,75 @@ export function LibraryPage() {
         />
       ) : null}
 
-      <ItemDrawer entry={selected} onClose={() => setSelected(null)} />
+      <ItemDrawer entry={selected} busy={busy} onClose={() => setSelected(null)} onAct={act} onTags={writeTags} />
     </div>
   );
 }
 
-function LibraryLine({ entry, onOpen }: { entry: Entry; onOpen: (entry: Entry) => void }) {
+function LibraryLine({
+  entry,
+  picked,
+  onPick,
+  onOpen,
+}: {
+  entry: Entry;
+  picked: boolean;
+  onPick: (rid: string) => void;
+  onOpen: (entry: Entry) => void;
+}) {
   const label = kindTitle(entry.variant);
+  const source = entry.row.sourceId ?? "";
+  const ns = nsBadge(entry.row.ns);
   return (
-    <button type="button" className="library-row" onClick={() => onOpen(entry)}>
+    <div
+      role="button"
+      tabIndex={0}
+      className="library-row"
+      onClick={() => onOpen(entry)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          onOpen(entry);
+        }
+      }}
+    >
+      <span className="pick-inline" onClick={(event) => event.stopPropagation()}>
+        <input
+          type="checkbox"
+          aria-label={`选择 ${entry.row.rid}`}
+          checked={picked}
+          onChange={() => onPick(entry.row.rid)}
+        />
+      </span>
       <span className="library-text">
         <span className="library-title">{titleOf(entry)}</span>
         <span className="library-meta">
           <Pill tone="idle">{label}</Pill>
+          {ns ? <Pill tone="idle">{ns}</Pill> : null}
+          {entry.row.tombstone ? <Pill tone="warn">已删除</Pill> : null}
+          {entry.row.labels?.workflow ? (
+            <Pill tone="info">加工程序 · {entry.row.labels.workflow}</Pill>
+          ) : null}
+          {Object.entries(entry.row.labels ?? {})
+            .filter(([key]) => key !== "workflow")
+            .slice(0, 3)
+            .map(([key, value]) => (
+              <span key={key} className="tag">
+                {key} · {value}
+              </span>
+            ))}
+          {source ? (
+            <button
+              type="button"
+              className="tag"
+              title={`来自 ${source}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                navigate(`sources/${encodeURIComponent(source)}`);
+              }}
+            >
+              来源 · {shortId(source)}
+            </button>
+          ) : null}
           {metaOf(entry).map((item, index) => (
             <span key={index} className="row" style={{ gap: 8 }}>
               {index > 0 ? <span className="sep" /> : null}
@@ -358,14 +677,30 @@ function LibraryLine({ entry, onOpen }: { entry: Entry; onOpen: (entry: Entry) =
           {entry.row.rid}
         </span>
       </span>
-    </button>
+    </div>
   );
 }
 
-function ItemDrawer({ entry, onClose }: { entry: Entry | null; onClose: () => void }) {
+function ItemDrawer({
+  entry,
+  busy,
+  onClose,
+  onAct,
+  onTags,
+}: {
+  entry: Entry | null;
+  busy: boolean;
+  onClose: () => void;
+  onAct: (kind: "tombstone" | "restore", rids: string[]) => void;
+  onTags: (targets: Entry[], set: Record<string, string>, unset: string[], done: string) => Promise<void>;
+}) {
   const { notify } = useConsole();
   const [readable, setReadable] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [tagText, setTagText] = useState("");
+
+  const writeTags = (set: Record<string, string>, unset: string[], done: string) =>
+    onTags([entry as Entry], set, unset, done);
 
   useEffect(() => {
     setReadable(null);
@@ -433,8 +768,17 @@ function ItemDrawer({ entry, onClose }: { entry: Entry | null; onClose: () => vo
           >
             复制 RID
           </button>
+          {entry.row.tombstone ? (
+            <button type="button" className="btn" disabled={busy} onClick={() => onAct("restore", [entry.row.rid])}>
+              <IconRefresh size={12} /> 恢复
+            </button>
+          ) : (
+            <button type="button" className="btn btn-danger" disabled={busy} onClick={() => onAct("tombstone", [entry.row.rid])}>
+              <IconTrash size={12} /> 删除
+            </button>
+          )}
           <span className="spacer" />
-          <span className="faint mono" style={{ fontSize: 10.5 }}>
+          <span className="faint mono" style={{ fontSize: "var(--fs-2xs)" }}>
             #{entry.row.seq}
           </span>
         </>
@@ -443,12 +787,12 @@ function ItemDrawer({ entry, onClose }: { entry: Entry | null; onClose: () => vo
       <div className="row">
         <Pill tone="ok">{kindTitle(entry.variant)}</Pill>
         {published ? (
-          <span className="faint" style={{ fontSize: 11.5 }}>
+          <span className="faint" style={{ fontSize: "var(--fs-xs)" }}>
             {stamp(published)} · {relative(published)}
           </span>
         ) : null}
         {typeof hints?.author === "string" && hints.author ? (
-          <span className="faint" style={{ fontSize: 11.5 }}>
+          <span className="faint" style={{ fontSize: "var(--fs-xs)" }}>
             {hints.author}
           </span>
         ) : null}
@@ -474,12 +818,81 @@ function ItemDrawer({ entry, onClose }: { entry: Entry | null; onClose: () => vo
         <pre className="code">{JSON.stringify(struct, null, 2)}</pre>
       </div>
 
-      <p className="faint" style={{ fontSize: 11, lineHeight: 1.6 }}>
+      <div>
+        <SectionTitle title="分类标签" note="用户分类；工作流产出带 workflow 标签" />
+        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+          {Object.entries(entry.row.labels ?? {}).map(([key, value]) => (
+            <Pill key={key} tone={key === "workflow" ? "info" : "idle"}>
+              {key === "workflow" ? `加工 · ${value}` : `${key} · ${value}`}
+              {key !== "workflow" ? (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-quiet"
+                  style={{ marginLeft: 4 }}
+                  disabled={busy}
+                  onClick={() => void writeTags({}, [key], `已撤销 ${key}`)}
+                  title="撤销这个标签"
+                >
+                  ×
+                </button>
+              ) : null}
+            </Pill>
+          ))}
+          {Object.keys(entry.row.labels ?? {}).filter((key) => key !== "workflow").length === 0 ? (
+            <span className="faint" style={{ fontSize: "var(--fs-xs)" }}>
+              还没有分类标签。
+            </span>
+          ) : null}
+        </div>
+        <div className="row" style={{ gap: 6, marginTop: 8 }}>
+          <input
+            type="text"
+            className="form-input mono"
+            style={{ maxWidth: 260 }}
+            value={tagText}
+            onChange={(event) => setTagText(event.target.value)}
+            placeholder="分类=值，如 topic=AI"
+            aria-label="新标签"
+          />
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy || !tagText.includes("=")}
+            onClick={() => {
+              const at = tagText.indexOf("=");
+              const key = tagText.slice(0, at).trim();
+              const value = tagText.slice(at + 1).trim();
+              if (key && value) {
+                void writeTags({ [key]: value }, [], `已打上 ${key}=${value}`);
+                setTagText("");
+              }
+            }}
+          >
+            打标
+          </button>
+        </div>
+      </div>
+
+      <p className="faint" style={{ fontSize: "var(--fs-2xs)", lineHeight: 1.6 }}>
         <IconLibrary size={11} /> 内容按 RID 归并，每次提交产生新版本；点「查看分层」可以在 Strata
         页看到这条内容的原文、正文与结构化各层，以及它们的版本与血缘。
       </p>
     </Drawer>
   );
+}
+
+/** 命名空间只读徽标：采集默认层不标注，其余空间（如工作流产出）显式区分。 */
+function nsBadge(ns: string | undefined): string | null {
+  if (!ns || ns === "data" || ns === "default") {
+    return null;
+  }
+  return `空间 · ${ns}`;
+}
+
+/** 去掉 `source/` 之类前缀，界面上只显示短名字。 */
+function shortId(id: string): string {
+  const index = id.indexOf("/");
+  return index >= 0 ? id.slice(index + 1) : id;
 }
 
 /** 行里第一个带内容的类型，就是这条内容的类型。 */

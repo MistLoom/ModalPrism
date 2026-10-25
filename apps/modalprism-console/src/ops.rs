@@ -39,6 +39,10 @@ pub struct Ops {
     http: reqwest::Client,
 }
 
+/// 长任务句柄的轮询预算：采集进程返回 pending 句柄后，这里轮询到完成为止。
+const POLL_BUDGET: Duration = Duration::from_secs(15 * 60);
+const POLL_INTERVAL: Duration = Duration::from_millis(800);
+
 impl Ops {
     pub fn new(base: &str) -> Result<Self, OpsError> {
         let base = base.trim().trim_end_matches('/');
@@ -60,7 +64,50 @@ impl Ops {
     }
 
     /// 调用 `instance.method`。`args` 必须是对象。
+    ///
+    /// 长任务由采集进程的门面切面立即返回句柄，这里轮询到完成；
+    /// 调用方不再需要为不同方法维护多套超时。
     pub async fn call(&self, instance: &str, method: &str, args: Value) -> Result<Value, OpsError> {
+        let started = Instant::now();
+        let data = self.raw(instance, method, args).await?;
+        let handle = pending_handle(&data);
+        if handle.is_none() {
+            return Ok(data);
+        }
+        let deadline = started + POLL_BUDGET;
+        loop {
+            tokio::time::sleep(POLL_INTERVAL).await;
+            let poll = self
+                .raw(
+                    "committer",
+                    "handle",
+                    json!({ "handle": handle.as_ref().expect("handle checked") }),
+                )
+                .await?;
+            match poll.get("status").and_then(Value::as_str) {
+                Some("done") => {
+                    return Ok(poll.get("data").cloned().unwrap_or(Value::Null));
+                }
+                Some("failed") => {
+                    let message = poll
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("长任务失败")
+                        .to_string();
+                    return Err(OpsError::Rejected(message));
+                }
+                Some("unknown") => {
+                    return Err(OpsError::Shape("句柄不存在或已过期".into()));
+                }
+                _ if Instant::now() >= deadline => {
+                    return Err(OpsError::Rejected("长任务轮询超时".into()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    async fn raw(&self, instance: &str, method: &str, args: Value) -> Result<Value, OpsError> {
         let started = Instant::now();
         let url = format!("{}/v1/abilities/{instance}/invoke", self.base);
         let response = self
@@ -108,4 +155,15 @@ impl Ops {
             ),
         }
     }
+}
+
+/// 响应是否为待完成的长任务句柄。
+fn pending_handle(data: &Value) -> Option<String> {
+    if data.get("status").and_then(Value::as_str) == Some("pending") {
+        return data
+            .get("handle")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    None
 }

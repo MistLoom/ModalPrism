@@ -17,7 +17,9 @@ Rust 编写的多信源数据采集系统：把 RSS、网页、动态页面、AP
 - **过滤、全文、向量检索融合在同一查询接口**，业务代码不写 SQL。
 - **出站流量集中治理**：限速、熔断、robots 合规、私网地址防护；付费调用有预算控制与重复请求合并。
 - **配置热加载**：严格校验的 YAML，变更原子生效。
-- **MCP 只读表面**：Agent 直接对已采集数据做查询、健康检查与配置溯源。
+- **不改代码就能长出新信源**：搜索、RSS、网页列表、JSON 接口都有模板可起步，表单编辑、批量启停与删除、按源配代理；内置适配器受保护，其余全部可改可删。
+- **内容加工工作流**：模型支持 API、本地端点与 CLI 三种调用，步骤可组合 LLM、模板与 HTTP，产出写回内容并带血缘；支持 webhook 与飞书通知。
+- **三个公共入口**：固定地址的 `/api/v1`、MCP 只读工具、SKILL 包；脚本与 Agent 不必了解内部结构。
 
 ## 定位
 
@@ -31,8 +33,8 @@ Firecrawl、Crawl4AI、RSSHub 等解决的是“抽一下”或“发个订阅�
 | 存储 | 统一资源 + facet，SQLite → PostgreSQL | 自带落地目标 | — | 自带落地目标 |
 | 查询 | 过滤 + 全文 + 向量 DSL | 搜索/抽取接口 | RSS 订阅 | — |
 | 付费调用治理 | 预算、逻辑请求键、幂等回执 | 额度制（SaaS） | — | 自行实现 |
-| 扩展信源 | YAML 声明 | 模板 / 代码 | 代码路由 | 代码 |
-| Agent 接口 | MCP 只读表面 | API/SDK | 订阅源 | — |
+| 扩展信源 | YAML 声明，或控制台模板新建 | 模板 / 代码 | 代码路由 | 代码 |
+| Agent 接口 | MCP 只读工具 · HTTP · SKILL 包 | API/SDK | 订阅源 | — |
 
 ## 特性
 
@@ -54,8 +56,14 @@ Firecrawl、Crawl4AI、RSSHub 等解决的是“抽一下”或“发个订阅�
 ### 声明式配置，原子热加载
 信源、访问器、适配器与策略预设全部是校验严格的 YAML 文件——未知字段校验报错，配置不存数据库。热加载按代际生成不可变快照并原子切换，在途任务保持派发时的代际。
 
+### 建源不用改代码
+新增一个站点不需要提交代码：从模板（RSS/Atom、网页列表、搜索查询、JSON 接口）起步，在控制台填地址与选择器，保存即按同一套加载器校验并热加载。信源、访问器、适配器都支持完整的新建、改写、启停、删除与批量操作；每份声明带「还有几个信源在用它」的引用计数，删除前能看清影响面。随代码发布的内置适配器不可删除，但可以停用、改写，或复制一份改名后随意改。
+
+### 内容加工
+采集之后还有一段加工：模型声明（`api` / `local` / `cli` 三种调用方式）+ 工作流声明（触发条件、步骤序列、产出与通知）。步骤可以是 LLM、模板或 HTTP；产出以新 facet 写回文章并附带血缘，不改原文；每次运行留一条 `struct:workflow-run` 记录，成功与失败都留。通知支持 webhook 与飞书机器人，在控制台里可以直接试发。详细规格见 [`docs/specs/content-processing.md`](docs/specs/content-processing.md)。
+
 ### 面向 Agent 的只读表面
-已采集数据通过 MCP 暴露：类型化查询、健康状态与配置溯源，供任意支持 MCP 的客户端接入；抽象类型（`Article`、`HotList`）提供业务视图。
+已采集数据通过 MCP 暴露：类型化查询、健康状态、信源清单、工作流与运行记录、配置溯源，供任意支持 MCP 的客户端接入；抽象类型（`Article`、`HotList`）提供业务视图。写入方法不出现在工具列表里，只读进程连数据目录也只读打开。
 
 ## 架构
 
@@ -85,9 +93,9 @@ Firecrawl、Crawl4AI、RSSHub 等解决的是“抽一下”或“发个订阅�
 
 | 进程 | 说明 | 对外表面 |
 |---|---|---|
-| `modalprism-collector` | 一条命令初始化存储并进入采集循环 | 环回运维 HTTP `:17880`、正向代理 `:17881`、推送 `:17882` |
+| `modalprism-collector` | 一条命令初始化存储并进入采集循环 | 环回运维 HTTP `:17880`（含公共 API `/api/v1`）、正向代理 `:17881`、推送 `:17882` |
 | `modalprism-console` | Rust BFF 同源聚合运维面并托管前端 SPA | HTTP，`127.0.0.1:17890` |
-| `modalprism-agent` | 只读表面（查询 / 健康 / 配置溯源 / 类型视图） | MCP stdio，工具名 `instance.method` |
+| `modalprism-agent` | 只读表面（查询 / 健康 / 信源清单 / 工作流与运行 / 配置溯源 / 类型视图） | MCP stdio，工具名 `instance.method` |
 
 ## 快速开始
 
@@ -128,7 +136,7 @@ cd apps/modalprism-console/web && pnpm install && pnpm build
 cargo run -p modalprism-console -- --ops http://127.0.0.1:17880 --bind 127.0.0.1:17890
 ```
 
-浏览器访问 `http://127.0.0.1:17890`，页面路由为哈希模式（`#/overview`、`#/sources`、`#/library`、`#/channels`、`#/config`）。
+浏览器访问 `http://127.0.0.1:17890`，页面路由为哈希模式（`#/overview`、`#/sources`、`#/channels`、`#/library`、`#/workflows`、`#/config`）。
 
 ## 信源声明
 
@@ -156,12 +164,82 @@ admission:
 
 配置合并顺序：通用配置 → 类型基础配置 → 策略预设 → Profile → 模块实例 → 环境覆盖，最后经系统级锁定检查得到不可变快照。
 
-## 只读 MCP 表面
+## 内容加工
 
-供外部 Agent 以 MCP 协议查询已采集数据：
+工作流与模型都写在 `config/workflows/`、`config/models/` 下，也可以在控制台「内容加工」页里建。最小的一条工作流：
+
+```yaml
+# config/models/digest.yaml
+name: 摘要模型
+mode: api
+endpoint: https://api.deepseek.com/v1
+model: deepseek-chat
+keyEnv: DEEPSEEK_API_KEY
+```
+
+```yaml
+# config/workflows/daily-digest.yaml
+name: 每日摘要
+trigger:
+  on: commit
+model: digest
+steps:
+  - id: 摘要
+    kind: llm
+    prompt: "用三句话概括：\n{{article.text}}"
+outputs:
+  facet:
+    kind: struct
+    variant: digest
+    body: '{"summary":"{{steps.摘要}}"}'
+notify:
+  - kind: feishu
+    url: https://open.feishu.cn/open-apis/bot/v2/hook/xxxx
+    on: [failure]
+```
+
+三种模型调用方式：`api` 走远端 OpenAI 兼容接口（密钥只写环境变量名），`local` 走本机或局域网端点（Ollama、vLLM、LM Studio），`cli` 把提示词写进子进程标准输入（`claude -p`、`llm`）。加工循环每 20 秒推进一次游标，也可以手动跑单篇或立即加工一批。
+
+飞书接入：群机器人 → 自定义机器人 → 复制 Webhook；安全设置选「自定义关键词」并把关键词填成 `ModalPrism`（不支持签名校验）。在控制台「内容加工 → 通知接入」里粘贴后点「试发一条」，收到即通。
+
+## 公共 API
+
+三个入口，一套能力。详细字段与示例见 [`docs/specs/public-api.md`](docs/specs/public-api.md)。
+
+### HTTP
+
+采集进程的运维端口上直接提供固定地址，不经过控制台 BFF：
+
+```sh
+curl -s http://127.0.0.1:17880/api/v1/health
+curl -s "http://127.0.0.1:17880/api/v1/articles?source=hugging-face&limit=5"
+curl -s "http://127.0.0.1:17880/api/v1/articles?q=agent%20memory"
+curl -s http://127.0.0.1:17880/api/v1/articles/r_01ARZ3NDEKTSV4RRFFQ69G5FAV
+curl -s http://127.0.0.1:17880/api/v1/sources
+curl -s http://127.0.0.1:17880/api/v1/workflows
+curl -s -X POST http://127.0.0.1:17880/api/v1/process
+```
+
+写操作只有两个：跑一条工作流（`POST /api/v1/workflows/{slug}/run`）与推进一次加工（`POST /api/v1/process`）。改配置不开放给裸接口，只能在控制台或声明文件里做。
+
+### MCP
+
+供任意支持 MCP 的客户端查询已采集数据：
 
 ```sh
 cargo run -p modalprism-agent -- --data var --config config
+```
+
+工具名为 `实例.方法`，例如 `strata_read.query`、`type_article.project`、`catalog_admin.list`、`workflow.runs`。写入方法（`workflow.save`、`catalog_admin.create` 等）不出现在工具列表里，即使硬拼出来也会被网关拒绝。
+
+### SKILL 包
+
+`skills/modalprism/` 是一份 Agent Skill：调用顺序、字段说明与常见任务配方，附一个零依赖的 HTTP 客户端脚本，没有 MCP 客户端也能用：
+
+```sh
+node skills/modalprism/scripts/prism.mjs health
+node skills/modalprism/scripts/prism.mjs articles --source hugging-face --limit 5
+node skills/modalprism/scripts/prism.mjs run daily-digest r_01ARZ3NDEKTSV4RRFFQ69G5FAV
 ```
 
 ## 仓库结构
@@ -174,21 +252,22 @@ apps/modalprism-domain/    strata-model · strata-sqlite-vec · strata-gateway �
 apps/modalprism-collector/ 采集进程（ability/ 为进程内能力；subsystems/ 为访问器、适配器、出站治理等）
 apps/modalprism-agent/     只读 MCP 进程
 apps/modalprism-console/   控制台（Rust BFF + web/ 前端 SPA）
-abilitys/                  共享能力：strata_read · config_inspect · health · type_article · type_hotlist
+abilitys/                  共享能力：strata_read · config_inspect · health · type_article · type_hotlist · catalog_admin · workflow
 config/                    系统配置、访问器、适配器、信源、策略预设与 schema（YAML / JSON）
 docs/                      设计文档与实现规格
 manual/                    LEAF 框架手册
+skills/                    Agent Skill 包（SKILL.md + 零依赖 HTTP 脚本）
 ```
 
 依赖边界：领域库不依赖 `frame-core` / `ability-core` / `ability-support` 与任一 port；ability crate 只依赖 `ability-support`；组合根依赖 `frame-core` 与 `ability-core`。
 
 ## 开发与验证
 
-测试与 clippy 门禁只覆盖本项目 crate；`frame/`、`SDK/` 与 `apps/ability-core` 为随仓库提供的 LEAF 框架代码，按上游状态构建。
+测试与 clippy 门禁只覆盖本项目 crate；`frame/`、`SDK/` 与 `apps/ability-core` 为随仓库提供的 LEAF 框架代码，按上游状态原样编译（其自带的上游 lint 不计入门禁），因此 clippy 使用 `--no-deps`。
 
 ```sh
 cargo test --workspace --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core
-cargo clippy --workspace --all-targets --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core -- -D warnings
+cargo clippy --workspace --all-targets --no-deps --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core -- -D warnings
 ```
 
 工作区禁止 `unsafe_code`；release 配置 `lto = true`、`codegen-units = 1`。前端在 `apps/modalprism-console/web` 下以 pnpm 构建。

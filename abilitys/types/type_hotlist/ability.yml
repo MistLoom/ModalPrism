@@ -1,7 +1,7 @@
 framework_version: "1"
 id: type_hotlist
 open: true
-protocols: [fun, mcp, tools]
+protocols: [fun, http, mcp, tools]
 depends: []
 stateful: false
 description: 热榜快照投影与变更集

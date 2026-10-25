@@ -1,0 +1,12 @@
+framework_version: "1"
+id: health_record
+open: true
+protocols: [fun, http]
+depends: [health]
+stateful: true
+description: 把信源健康写入存储
+methods:
+  - id: evaluate
+    description: 将评估出的健康状态写入存储
+    input:
+      type: object

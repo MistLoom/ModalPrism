@@ -2,7 +2,7 @@ framework_version: "1"
 id: planner
 open: true
 protocols: [fun, http]
-depends: []
+depends: [strata_queue, runner, health, config_admin]
 stateful: true
 description: 扫描到期信源并租约任务
 methods:
@@ -11,13 +11,47 @@ methods:
     input:
       type: object
   - id: trigger
-    description: 把信源标成到期并派出
+    description: 把信源标成到期并立即采集一轮
     input:
       type: object
+      properties:
+        source: { type: string }
+      required: [source]
+  - id: round
+    description: 执行一轮派发
+    input:
+      type: object
+      properties:
+        source: { type: string }
+  - id: manual
+    description: 为信源新建一条采集任务，可指定目标地址
+    input:
+      type: object
+      properties:
+        source: { type: string }
+        queue: { type: string }
+        runNow: { type: boolean }
+        locator: { type: string }
+      required: [source]
+  - id: queues
+    description: 每队列的排队、租约与暂停状态
+    input:
+      type: object
+  - id: pause
+    description: 暂停或恢复一个队列
+    input:
+      type: object
+      properties:
+        queue: { type: string }
+        paused: { type: boolean }
+      required: [queue, paused]
   - id: next
     description: 读取信源的下一次时间
     input:
       type: object
+      properties:
+        source: { type: string }
+      required: [source]
   - id: status
     description: 列出所有信源的调度与健康状态
     input:

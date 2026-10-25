@@ -4,11 +4,16 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 use types::ReadCtx;
 
 pub fn provider(ctx: Arc<dyn ReadCtx>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("type_hotlist");
+    let mut spec = AbilitySpec::must("type_hotlist").protocols(&[
+        ProtocolKind::Fun,
+        ProtocolKind::Http,
+        ProtocolKind::Mcp,
+        ProtocolKind::Tools,
+    ]);
     spec = spec.on(
         "project",
         "投影一期热榜",

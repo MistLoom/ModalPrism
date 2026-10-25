@@ -4,19 +4,40 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 
 pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("health").stateful();
+    let mut spec = AbilitySpec::must("health").stateful().protocols(&[
+        ProtocolKind::Fun,
+        ProtocolKind::Http,
+        ProtocolKind::Mcp,
+        ProtocolKind::Tools,
+    ]);
     spec = spec.on(
         "status",
         "读取信源健康",
-        serde_json::json!({"type": "object"}),
+        serde_json::json!({
+            "type": "object",
+            "properties": { "source": { "type": "string" } },
+            "required": ["source"]
+        }),
         {
             let ctx = Arc::clone(&ctx);
             move |_ctx, args| {
                 let ctx = Arc::clone(&ctx);
                 ability_support::box_fut(logic::status::run(ctx, args))
+            }
+        },
+    );
+    spec = spec.on(
+        "report",
+        "读取信源、通道与解析器的运行态",
+        serde_json::json!({"type": "object"}),
+        {
+            let ctx = Arc::clone(&ctx);
+            move |_ctx, args| {
+                let ctx = Arc::clone(&ctx);
+                ability_support::box_fut(logic::report::run(ctx, args))
             }
         },
     );

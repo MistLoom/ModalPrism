@@ -1,0 +1,17 @@
+[package]
+name = "content_admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "按筛选统计、删除与恢复已采集内容"
+publish = false
+
+[dependencies]
+ability-support.workspace = true
+assembly = { path = "../../subsystems/assembly" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

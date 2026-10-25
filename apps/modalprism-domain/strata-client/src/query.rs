@@ -39,6 +39,13 @@ pub(crate) fn execute(view: &View, query: &Query) -> Result<Page, Error> {
         QueryFrom::Facets => facet_rows(view)?,
         QueryFrom::Relations => relation_rows(view)?,
     };
+    if query.from == QueryFrom::Resources && !query.include_tombstoned {
+        rows.retain(|row| {
+            !row.get("tombstone")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        });
+    }
     if let Some(expr) = &query.r#where {
         let mut kept = Vec::new();
         for row in rows {
@@ -469,6 +476,16 @@ fn eval(expr: &Expr, row: &Value) -> Result<bool, Error> {
         "lt" => {
             let (field_name, expected) = pair(value)?;
             Ok(cmp_field(field_name, field(row, field_name)?, expected)? == Ordering::Less)
+        }
+        // 标签过滤：资源没有标记行时当成空标签，不报错；与数据层 SQL 路径口径一致。
+        "label" => {
+            let (name, expected) = pair(value)?;
+            let matched = row
+                .get("labels")
+                .and_then(Value::as_object)
+                .and_then(|map| map.get(name))
+                .is_some_and(|actual| actual == expected);
+            Ok(matched)
         }
         _ => Err(Error::UnsupportedExpr),
     }

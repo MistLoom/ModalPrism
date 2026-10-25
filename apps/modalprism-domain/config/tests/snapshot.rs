@@ -649,6 +649,21 @@ fn egress_proxy_accepts_system_off_and_url() {
         "sources/demo.yaml",
         &source_yaml("policy:\n  egress:\n    proxy: off"),
     );
+    let snapshot = validate(dir.path(), &options()).unwrap();
+    assert_eq!(
+        snapshot
+            .modules
+            .get("source/demo")
+            .and_then(|module| module.pointer("/policy/egress/proxy"))
+            .and_then(|value| value.as_str()),
+        Some("off")
+    );
+
+    write(
+        dir.path(),
+        "sources/demo.yaml",
+        &source_yaml("policy:\n  egress:\n    proxy: bogus"),
+    );
     assert!(validate(dir.path(), &options()).is_err());
 }
 

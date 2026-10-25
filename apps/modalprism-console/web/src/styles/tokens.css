@@ -34,6 +34,13 @@
   --sans: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Segoe UI", system-ui, sans-serif;
   --mono: "Cascadia Mono", "JetBrains Mono", "SFMono-Regular", Consolas, "Courier New", monospace;
 
+  /* 字号：正文 15px，密集区域逐级收窄。界面里不再写死 px，改这里即可整体调整。 */
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+
   /* 尺度 */
   --rail: 232px;
   --rail-tight: 76px;

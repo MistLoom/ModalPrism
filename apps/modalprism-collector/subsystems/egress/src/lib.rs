@@ -20,4 +20,4 @@ pub use policy::{
 };
 pub use proxy::{serve, serve_each};
 pub use ssrf::is_blocked;
-pub use upstream::{ProxyRoute, ProxySetting, bypassed, probe, route};
+pub use upstream::{ProxyRoute, ProxySetting, bypassed, probe, route, setting_of};

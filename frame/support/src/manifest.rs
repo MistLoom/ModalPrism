@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AbilityId, MethodId};
+use crate::{AbilityId, MethodId, ProtocolKind};
 
 /// 依赖一项能力（按 id，可选别名与 optional）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,6 +90,9 @@ pub struct AbilityManifest {
     pub depends: Vec<Dependency>,
     #[serde(default)]
     pub stateful: bool,
+    /// 对外协议投影种类。空表示由组合根自行决定（兼容旧声明）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<ProtocolKind>,
     #[serde(default)]
     pub config_schema: Value,
     pub methods: Vec<MethodMeta>,

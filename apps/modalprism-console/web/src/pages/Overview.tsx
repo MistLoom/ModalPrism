@@ -265,7 +265,7 @@ export function OverviewPage() {
                 label="上次同步"
                 value={lastCommit ? relative(lastCommit.publishedAt, now) : "刚刚"}
               />
-              <p className="faint" style={{ fontSize: 11, lineHeight: 1.6 }}>
+              <p className="faint" style={{ fontSize: "var(--fs-2xs)", lineHeight: 1.6 }}>
                 控制台不直接读写数据目录，所有数值来自采集进程的运维面；进程停止时界面会明确提示，而不是显示旧值。
               </p>
             </div>
@@ -303,7 +303,7 @@ function WatchItem({ source, now }: { source: Source; now: number }) {
 
 function ProcRow({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: "var(--fs-xs)" }}>
       <span className="faint">{label}</span>
       <span className="mono" style={{ color: "var(--ink-soft)" }}>
         {value}

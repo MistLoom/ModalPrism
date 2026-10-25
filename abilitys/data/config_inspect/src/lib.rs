@@ -4,10 +4,15 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec};
+use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
 
 pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("config_inspect");
+    let mut spec = AbilitySpec::must("config_inspect").protocols(&[
+        ProtocolKind::Fun,
+        ProtocolKind::Http,
+        ProtocolKind::Mcp,
+        ProtocolKind::Tools,
+    ]);
     spec = spec.on(
         "validate",
         "重新校验配置目录",
@@ -35,7 +40,11 @@ pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
     spec = spec.on(
         "explain",
         "解释模块字段来源",
-        serde_json::json!({"type": "object"}),
+        serde_json::json!({
+            "type": "object",
+            "properties": { "module": { "type": "string" } },
+            "required": ["module"]
+        }),
         {
             let ctx = Arc::clone(&ctx);
             move |_ctx, args| {

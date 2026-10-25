@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     Ability, AbilityCtx, AbilityId, AbilityManifest, AbilityProvider, Dependency, Error, EventDecl,
-    EventDir, Lifecycle, MethodId, MethodMeta, Result, StaticProvider,
+    EventDir, Lifecycle, MethodId, MethodMeta, ProtocolKind, Result, StaticProvider,
 };
 
 type BoxCtxFut<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
@@ -70,6 +70,7 @@ pub struct AbilitySpec {
     id: String,
     depends: Vec<Dependency>,
     stateful: bool,
+    protocols: Vec<ProtocolKind>,
     config_schema: Value,
     methods: Vec<MethodMeta>,
     events: Vec<EventDecl>,
@@ -85,6 +86,7 @@ impl AbilitySpec {
             id,
             depends: Vec::new(),
             stateful: false,
+            protocols: Vec::new(),
             config_schema: Value::Null,
             methods: Vec::new(),
             events: Vec::new(),
@@ -103,6 +105,7 @@ impl AbilitySpec {
             id: manifest.id.to_string(),
             depends: manifest.depends,
             stateful: manifest.stateful,
+            protocols: manifest.protocols,
             config_schema: manifest.config_schema,
             methods: manifest.methods,
             events: manifest.events,
@@ -113,6 +116,12 @@ impl AbilitySpec {
 
     pub fn stateful(mut self) -> Self {
         self.stateful = true;
+        self
+    }
+
+    /// 声明对外协议投影（与 `ability.yml` 的 `protocols` 一致，由契约测试守住）。
+    pub fn protocols(mut self, kinds: &[ProtocolKind]) -> Self {
+        self.protocols = kinds.to_vec();
         self
     }
 
@@ -203,6 +212,7 @@ impl AbilitySpec {
             id: AbilityId::new(&self.id).expect("id"),
             depends: self.depends.clone(),
             stateful: self.stateful,
+            protocols: self.protocols.clone(),
             config_schema: self.config_schema.clone(),
             methods: self.methods.clone(),
             events: self.events.clone(),
