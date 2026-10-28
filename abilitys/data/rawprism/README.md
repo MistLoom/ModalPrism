@@ -1,12 +1,13 @@
 # rawprism（仓颉 Guest Ability）
 
-> **ModalPrism 落位说明（产品 ability，非 leaf_builtin）**
+> **ModalPrism 落位说明（产品 ability）**
 >
-> - 路径：bilitys/data/rawprism（跨应用共享 data 类 ability）
-> - 来源：自 D:\Project\Leaf\external\rawprism 复制（不含 	arget/）
-> - cjpm.toml 依赖已改为相对本仓：SDK/ability-sdk-cj；RawPrism 库指向仓库外同级 D:\Project\RawPrism（../../../../RawPrism）
-> - **Host 缺口**：当前 LEAF Host/bility-support 的 RuntimeKind 仅有 Rust / Node / Python；ramework_version: cangjie@1 **尚不能被 Host 加载或 compose 编入**。落位仅供后续仓颉运行时/桥接接线，**不宣称已可运行**。
-> - 尚未写入 Cargo.toml workspace，亦未在 collector 做 install 接线。
+> - 路径：`abilitys/data/rawprism`（跨应用共享 data 类 ability）
+> - 来源：自 `D:\Project\Leaf\external\rawprism` 复制（不含 `target/`）
+> - `cjpm.toml` 依赖已改为相对本仓：`SDK/ability-sdk-cj`；RawPrism 库指向仓库外同级 `D:\Project\RawPrism`（`../../../../RawPrism`）
+> - **Host**：`RuntimeKind` 已含 `Cangjie`；`cangjie@1` / `cj@1` 可解析，compose 与 Guest 装载路径可用。
+> - **装载前提**：需仓颉工具链（`cjpm`）或预构建产物。Host 约定产物为 `target/release/<包名>`（本包 `rawprism_guest[.exe]`）。若构建实际落到 `bin/main.exe` 等非约定路径，或缺少工具链，装载会失败——这是产物/工具链问题，不是 RuntimeKind 缺失。
+> - collector 已在 boot 路径接线 `install_parse_guest`；本包不加入 Cargo workspace members（仓颉包不走 Cargo member）。
 
 # rawprism（仓颉 Guest Ability）
 
