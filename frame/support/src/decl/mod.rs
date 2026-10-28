@@ -26,6 +26,7 @@ pub use protocol::{
 };
 pub use runtime_resolve::parse_framework_tag;
 pub use runtime_resolve::{
-    GUEST_SERVE_MJS, GUEST_SERVE_PY, guest_entry_path, resolve_runtime_kind,
+    GUEST_CJPM_TOML, GUEST_SERVE_CJ, GUEST_SERVE_MJS, GUEST_SERVE_PY, guest_entry_path,
+    resolve_runtime_kind,
 };
 pub use version::{FRAMEWORK_VERSION, validate_framework_version, validate_schema_version};

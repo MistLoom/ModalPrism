@@ -19,6 +19,8 @@ mod invoke_mask;
 mod lifecycle;
 mod load;
 mod manifest;
+pub mod monitor;
+pub mod rate_limit;
 pub mod remote;
 mod schema;
 mod spec;
@@ -32,14 +34,14 @@ pub use catalog::{
 };
 pub use context::AbilityCtx;
 pub use decl::{
-    AbilityDecl, AbilityPackageMeta, CliArgDecl, CliInfo, FRAMEWORK_VERSION, GUEST_SERVE_MJS,
-    GUEST_SERVE_PY, GrpcInfo, GrpcRpcDecl, LintOptions, LintReport, McpInfo, McpToolDecl,
-    MethodDecl, OutboundTopicDeclYaml, ProtocolKind, RuntimeKind, SkillInfo, ToolsInfo,
-    ToolsMethodDecl, assert_clean_reports, detect_protocols, discover_ability_roots,
-    guest_entry_path, lint_ability_package, lint_workspace, load_ability_decl,
-    load_ability_package, load_cli_info, load_grpc_info, load_mcp_info, load_skill_info,
-    load_tools_info, manifest_from_decl, parse_framework_tag, resolve_runtime_kind,
-    validate_framework_version, validate_schema_version,
+    AbilityDecl, AbilityPackageMeta, CliArgDecl, CliInfo, FRAMEWORK_VERSION, GUEST_CJPM_TOML,
+    GUEST_SERVE_CJ, GUEST_SERVE_MJS, GUEST_SERVE_PY, GrpcInfo, GrpcRpcDecl, LintOptions,
+    LintReport, McpInfo, McpToolDecl, MethodDecl, OutboundTopicDeclYaml, ProtocolKind, RuntimeKind,
+    SkillInfo, ToolsInfo, ToolsMethodDecl, assert_clean_reports, detect_protocols,
+    discover_ability_roots, guest_entry_path, lint_ability_package, lint_workspace,
+    load_ability_decl, load_ability_package, load_cli_info, load_grpc_info, load_mcp_info,
+    load_skill_info, load_tools_info, manifest_from_decl, parse_framework_tag,
+    resolve_runtime_kind, validate_framework_version, validate_schema_version,
 };
 pub use effect::{Effect, Undo};
 pub use encoding::{decode_text_bytes, decode_text_bytes_strict};
@@ -63,6 +65,7 @@ pub use invoke_mask::InvokeMask;
 pub use lifecycle::Lifecycle;
 pub use load::LoadSpec;
 pub use manifest::{AbilityManifest, Dependency, EventDecl, EventDir, MethodMeta};
+pub use rate_limit::{RateLimiter, TokenBucket};
 pub use schema::{SchemaError, is_unrestricted_schema, validate_schema};
 pub use spec::{AbilitySpec, FactoryProvider, box_fut, box_life_fut};
 pub use status::ChainStatus;

@@ -10,10 +10,12 @@ publish = false
 [dependencies]
 jsonschema.workspace = true
 notify.workspace = true
+ordered-float.workspace = true
 saphyr.workspace = true
 serde_json.workspace = true
 signal-hook = { workspace = true }
 thiserror.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

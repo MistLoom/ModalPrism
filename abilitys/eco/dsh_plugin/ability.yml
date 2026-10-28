@@ -1,0 +1,22 @@
+framework_version: "1"
+id: dsh_plugin
+leaf_builtin: true
+open: true
+protocols: [fun]
+depends: []
+stateful: true
+methods:
+  - id: doctor
+    description: 检查 DSH 插件路径与 Node 前提
+    input:
+      type: object
+  - id: invoke
+    description: 调用 DSH 钩子
+    input:
+      type: object
+      properties:
+        tool:
+          type: string
+        args:
+          type: object
+      required: [tool]

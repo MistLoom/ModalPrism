@@ -18,7 +18,10 @@ mod store;
 
 pub use engine::{Engine, Tick};
 pub use error::{Error, Result};
+pub use http::{Reply, request as http_request};
+pub use llm::complete as complete_model;
 pub use notify::deliver;
+pub use render::render as render_template;
 pub use spec::{
     FacetOut, Mode, ModelSpec, Notify, NotifyKind, Step, StepKind, Trigger, WorkflowSpec,
 };

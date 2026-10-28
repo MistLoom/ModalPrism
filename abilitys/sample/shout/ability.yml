@@ -1,0 +1,17 @@
+framework_version: "1"
+id: app.shout
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends:
+  - algo.echo
+stateful: false
+methods:
+  - id: run
+    description: 经 algo.echo 后转大写
+    input:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]

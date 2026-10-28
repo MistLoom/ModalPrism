@@ -9,9 +9,11 @@ description = "框架 HTTP(S) 端口"
 [dependencies]
 async-trait = { workspace = true }
 axum = { workspace = true }
+ability-support = { workspace = true }
 frame-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
+reqwest = { workspace = true }
 tracing = { workspace = true }

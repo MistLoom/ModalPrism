@@ -4,12 +4,10 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("committer")
-        .stateful()
-        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
+    let mut spec = AbilitySpec::must("committer").stateful();
     spec = spec.on(
         "handle",
         "轮询一个长任务句柄的状态与结果",

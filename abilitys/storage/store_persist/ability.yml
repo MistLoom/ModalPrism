@@ -1,0 +1,61 @@
+framework_version: "1"
+id: store.persist
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends:
+  - store
+stateful: false
+methods:
+  - id: get
+    description: 读取
+    input:
+      type: object
+  - id: put
+    description: 写入
+    input:
+      type: object
+  - id: merge
+    description: 合并
+    input:
+      type: object
+  - id: delete
+    description: 删除
+    input:
+      type: object
+  - id: exists
+    description: 是否存在
+    input:
+      type: object
+  - id: list
+    description: 列举
+    input:
+      type: object
+  - id: purge
+    description: 按前缀删除
+    input:
+      type: object
+  - id: stat
+    description: 元信息
+    input:
+      type: object
+  - id: blob_get
+    description: 分块读二进制
+    input:
+      type: object
+  - id: blob_put
+    description: 写二进制
+    input:
+      type: object
+  - id: blob_write
+    description: 流式写二进制
+    input:
+      type: object
+  - id: acquire
+    description: 加锁
+    input:
+      type: object
+  - id: release
+    description: 解锁
+    input:
+      type: object

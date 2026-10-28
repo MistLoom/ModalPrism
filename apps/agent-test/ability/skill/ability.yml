@@ -1,0 +1,24 @@
+framework_version: "1"
+id: skill
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends: []
+stateful: false
+methods:
+  - id: load
+    description: 加载单个 Skill 目录
+    input:
+      type: object
+      properties:
+        path:
+          type: string
+      required: [path]
+  - id: list
+    description: 扫描根目录下的 Skill
+    input:
+      type: object
+      properties:
+        root:
+          type: string
+      required: [root]

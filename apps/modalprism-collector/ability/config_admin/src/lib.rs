@@ -4,12 +4,10 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("config_admin")
-        .stateful()
-        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
+    let mut spec = AbilitySpec::must("config_admin").stateful();
     spec = spec.on(
         "load",
         "重新读取配置目录",

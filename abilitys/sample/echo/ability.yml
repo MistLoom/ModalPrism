@@ -1,0 +1,16 @@
+framework_version: "1"
+id: algo.echo
+leaf_builtin: true
+open: true
+protocols: [tools, cli, http, fun]
+depends: []
+stateful: false
+methods:
+  - id: run
+    description: 回显输入文本
+    input:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]

@@ -45,7 +45,7 @@ export function buildProvider(decl, handlers, lifecycle = {}, hooks = {}) {
     if (!fn) {
       throw new Error(`缺少方法处理器: ${m.id}`);
     }
-    spec.on(m.id, m.description || m.id, m.input, fn);
+    spec.on(m.id, m.description || m.id, m.input, withLongTask(fn));
   }
   const base = spec.intoProvider();
   return {
@@ -79,6 +79,55 @@ export function buildProvider(decl, handlers, lifecycle = {}, hooks = {}) {
 /** 标记异步 handler，便于 IDE 与文档。 */
 export function handler(fn) {
   return fn;
+}
+
+/**
+ * 把一个 Promise 标记为长任务：方法立即返回 `{ task_handle }`，
+ * 调用方以同一方法 + `{ handle }` 参数轮询，直到 `done` / `failed`。
+ */
+export function pending(promise) {
+  return { $pending: Promise.resolve(promise) };
+}
+
+/** 长任务注册表与轮询逻辑（协议级，不新增帧类型）。 */
+export function withLongTask(fn) {
+  const tasks = new Map();
+  let seq = 0;
+  return async (ctx, args) => {
+    // 轮询：同一方法携带 { handle } 即查询任务状态，不进入业务 handler。
+    if (args && typeof args.handle === "string") {
+      const handle = args.handle;
+      const task = tasks.get(handle);
+      if (!task) {
+        return { state: "not_found", handle };
+      }
+      const settled = await Promise.race([
+        task,
+        new Promise((resolve) => setTimeout(() => resolve({ running: true }), 0)),
+      ]);
+      if (settled.running) {
+        return { state: "running", handle };
+      }
+      tasks.delete(handle);
+      return settled.done
+        ? { state: "done", data: settled.value ?? null }
+        : { state: "failed", error: settled.error };
+    }
+    const result = await fn(ctx, args);
+    if (result && typeof result === "object" && result.$pending instanceof Promise) {
+      const handle = `task-${Date.now().toString(36)}-${++seq}`;
+      // 入表即挂接终态处理：拒绝不会被当作 unhandledRejection 终止 Guest 进程。
+      tasks.set(
+        handle,
+        result.$pending.then(
+          (value) => ({ done: true, value }),
+          (error) => ({ done: false, error: error?.message ?? String(error) }),
+        ),
+      );
+      return { task_handle: handle };
+    }
+    return result;
+  };
 }
 
 function resolveAbilityRoot(explicit) {

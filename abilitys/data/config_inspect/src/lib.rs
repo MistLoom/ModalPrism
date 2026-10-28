@@ -4,15 +4,10 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 
 pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("config_inspect").protocols(&[
-        ProtocolKind::Fun,
-        ProtocolKind::Http,
-        ProtocolKind::Mcp,
-        ProtocolKind::Tools,
-    ]);
+    let mut spec = AbilitySpec::must("config_inspect");
     spec = spec.on(
         "validate",
         "重新校验配置目录",

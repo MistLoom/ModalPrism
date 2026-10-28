@@ -1,0 +1,93 @@
+framework_version: "1"
+id: turn
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends:
+  - session
+  - dispatch
+  - chat
+  - id: prompt
+    optional: true
+stateful: true
+factory: true
+config_schema:
+  type: object
+  properties:
+    max_rounds:
+      type: integer
+      minimum: 1
+      default: 32
+    system_prompt:
+      type: string
+    workspace_root:
+      type: string
+events:
+  - name: started
+    dir: emit
+    payload_schema:
+      type: object
+      properties:
+        session_id: { type: string }
+        turn_id: { type: string }
+      required: [session_id, turn_id]
+  - name: round
+    dir: emit
+    payload_schema:
+      type: object
+      properties:
+        turn_id: { type: string }
+        round: { type: integer }
+        stop: { type: boolean }
+      required: [turn_id, round, stop]
+  - name: tool_batch
+    dir: emit
+    payload_schema:
+      type: object
+      properties:
+        turn_id: { type: string }
+        calls: { type: array }
+      required: [turn_id, calls]
+  - name: completed
+    dir: emit
+    payload_schema:
+      type: object
+      properties:
+        session_id: { type: string }
+        turn_id: { type: string }
+        reason:
+          type: string
+          enum: [stopped, max_rounds, cancelled, provider_error]
+        text:
+          type: string
+      required: [session_id, turn_id, reason]
+methods:
+  - id: run
+    description: 对已有或新建 session 执行一整轮用户输入
+    input:
+      type: object
+      properties:
+        session_id: { type: string }
+        text: { type: string }
+        create_session: { type: boolean }
+        skill_paths:
+          type: array
+          items: { type: string }
+        skill_root: { type: string }
+      required: [text]
+  - id: cancel
+    description: 协作式取消在途 turn
+    input:
+      type: object
+      properties:
+        turn_id: { type: string }
+      required: [turn_id]
+  - id: spawn
+    description: 子代理：分叉会话并执行独立 turn
+    input:
+      type: object
+      properties:
+        session_id: { type: string }
+        prompt: { type: string }
+        summarize: { type: boolean, default: true }
+      required: [session_id, prompt]

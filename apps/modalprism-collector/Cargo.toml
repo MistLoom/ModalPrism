@@ -23,11 +23,12 @@ ability-egress = { path = "ability/egress" }
 ability-planner = { path = "ability/planner" }
 config = { path = "../modalprism-domain/config" }
 config_inspect = { path = "../../abilitys/data/config_inspect" }
+domain-api = { path = "../modalprism-domain/api" }
 frame-core.workspace = true
-frame-port-http.workspace = true
 health = { path = "../../abilitys/ops/health" }
 health_record = { path = "ability/health_record" }
 paid_gateway = { path = "ability/paid_gateway" }
+reqwest.workspace = true
 runner = { path = "ability/runner" }
 serde.workspace = true
 serde_json.workspace = true
@@ -59,6 +60,7 @@ serde_yaml.workspace = true
 strata-client = { path = "../modalprism-domain/strata-client" }
 strata-model = { path = "../modalprism-domain/strata-model" }
 tempfile.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

@@ -28,15 +28,25 @@ const base = (flags.base ?? process.env.MODALPRISM_BASE ?? DEFAULT_BASE).replace
 
 const usage = `用法: node prism.mjs <命令> [参数] [--base http://host:port]
 
-  health                              服务状态与配置代际
-  articles [--limit N] [--source S] [--q 关键词]
-  article <rid>
-  sources
-  workflows
-  runs [--limit N]
-  run <slug> <rid>
-  process
+  status                                    系统状态与配置代际
+  content [--query Q] [--source ID] [--status active|tombstoned] [--limit N]
+  content-item <contentId>                  内容详情与正文
+  sources [--limit N]
+  workflows                                 工作流身份列表
+  versions <workflowId>                     工作流版本
+  inputs [--limit N]                        输入集
+  input-text <name> <text>                  冻结一个文本输入集
+  runs [--limit N] [--status S]             生产运行
+  run <inputSetId> <workflowVersionId>      创建生产运行（返回 Operation）
+  candidates [--status S]                   候选
+  review <candidateId> approve|reject|returnForRegeneration [--comment C]
+  op <operationId>                          Operation 状态
+  logs [--correlation ID] [--level L] [--limit N]
 `;
+
+function newKey() {
+  return `skill-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 async function request(path, init) {
   const response = await fetch(`${base}${path}`, init);
@@ -57,43 +67,91 @@ async function request(path, init) {
 function query(pairs) {
   const search = new URLSearchParams();
   for (const [key, value] of pairs) {
-    if (value !== undefined) {
-      search.set(key, value);
-    }
+    if (value !== undefined) search.set(key, value);
   }
   const text = search.toString();
   return text ? `?${text}` : "";
 }
 
 function need(value, hint) {
-  if (!value) {
-    throw new Error(hint);
-  }
+  if (!value) throw new Error(hint);
   return value;
+}
+
+function post(path, payload) {
+  return request(path, {
+    method: "POST",
+    headers: { "content-type": "application/json", "idempotency-key": newKey() },
+    body: JSON.stringify(payload),
+  });
 }
 
 async function main() {
   switch (command) {
-    case "health":
-      return request("/api/v1/health");
-    case "articles":
-      return request(`/api/v1/articles${query([["limit", flags.limit], ["source", flags.source], ["q", flags.q]])}`);
-    case "article":
-      return request(`/api/v1/articles/${encodeURIComponent(need(rest[0], "需要 rid"))}`);
+    case "status":
+      return request("/api/v1/system/status");
+    case "content":
+      return request(
+        `/api/v1/content/items${query([
+          ["limit", flags.limit ?? "20"],
+          ["query", flags.query],
+          ["sourceId", flags.source],
+          ["status", flags.status],
+        ])}`,
+      );
+    case "content-item": {
+      const id = encodeURIComponent(need(rest[0], "需要 contentId"));
+      const [item, body] = await Promise.all([
+        request(`/api/v1/content/items/${id}`),
+        request(`/api/v1/content/items/${id}/body`),
+      ]);
+      return { item, body };
+    }
     case "sources":
-      return request("/api/v1/sources");
+      return request(`/api/v1/catalog/sources${query([["limit", flags.limit ?? "50"]])}`);
     case "workflows":
-      return request("/api/v1/workflows");
-    case "runs":
-      return request(`/api/v1/runs${query([["limit", flags.limit]])}`);
-    case "run":
-      return request(`/api/v1/workflows/${encodeURIComponent(need(rest[0], "需要工作流 slug"))}/run`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rid: need(rest[1], "需要 rid") }),
+      return request("/api/v1/production/workflows?limit=100");
+    case "versions":
+      return request(`/api/v1/production/workflows/${encodeURIComponent(need(rest[0], "需要 workflowId"))}/versions?limit=100`);
+    case "inputs":
+      return request(`/api/v1/production/inputSets${query([["limit", flags.limit ?? "50"]])}`);
+    case "input-text":
+      return post("/api/v1/production/inputSets", {
+        name: need(rest[0], "需要输入集名称"),
+        inputs: [{ kind: "text", text: need(rest.slice(1).join(" "), "需要文本") }],
       });
-    case "process":
-      return request("/api/v1/process", { method: "POST" });
+    case "runs":
+      return request(`/api/v1/production/runs${query([["limit", flags.limit ?? "50"], ["status", flags.status]])}`);
+    case "run":
+      return post("/api/v1/production/runs", {
+        inputSetId: need(rest[0], "需要 inputSetId"),
+        workflowVersionId: need(rest[1], "需要 workflowVersionId"),
+        mode: "manual",
+      });
+    case "candidates":
+      return request(`/api/v1/production/candidates${query([["limit", flags.limit ?? "50"], ["status", flags.status]])}`);
+    case "review": {
+      const candidateId = need(rest[0], "需要 candidateId");
+      const decision = need(rest[1], "需要 decision");
+      const page = await request("/api/v1/production/candidates?limit=200");
+      const candidate = (page.items ?? []).find((item) => item.id === candidateId);
+      if (!candidate) throw new Error(`候选不存在: ${candidateId}`);
+      return request(`/api/v1/production/candidates/${encodeURIComponent(candidateId)}/reviews`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": newKey(), "if-match": candidate.etag },
+        body: JSON.stringify({ decision, comment: flags.comment ?? "" }),
+      });
+    }
+    case "op":
+      return request(`/api/v1/operations/${encodeURIComponent(need(rest[0], "需要 operationId"))}`);
+    case "logs":
+      return request(
+        `/api/v1/observability/logs${query([
+          ["limit", flags.limit ?? "50"],
+          ["correlationId", flags.correlation],
+          ["level", flags.level],
+        ])}`,
+      );
     default:
       process.stdout.write(usage);
       return null;
@@ -102,9 +160,7 @@ async function main() {
 
 main()
   .then((data) => {
-    if (data !== null) {
-      process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
-    }
+    if (data !== null) process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
   })
   .catch((error) => {
     process.stderr.write(`${error.message}\n`);

@@ -1,0 +1,12 @@
+framework_version: "1"
+binary: read_file
+entry: run
+args:
+  - name: path
+    positional: true
+  - name: offset
+    flag: --offset
+    type: integer
+  - name: limit
+    flag: --limit
+    type: integer

@@ -1,0 +1,40 @@
+{
+  "bridgeVersion": 1,
+  "loaders": ["thin", "cordis", "external", "auto"],
+  "defaultLoader": "auto",
+  "packages": {
+    "@deepseek-ai/cordis": {
+      "pinned": "4.0.4",
+      "supportedMajor": [4]
+    },
+    "@deepseek-ai/dsh-tools": {
+      "pinned": "0.0.1-rc.1",
+      "supportedPrefixes": ["0.0.1-rc."]
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "pinned": "0.0.1-rc.1",
+      "supportedPrefixes": ["0.0.1-rc."],
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "pinned": "0.0.1-rc.5",
+      "supportedPrefixes": ["0.0.1"],
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "pinned": "0.0.1-rc.5",
+      "supportedPrefixes": ["0.0.1"],
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "pinned": "0.0.1-rc.5",
+      "supportedPrefixes": ["0.0.1"],
+      "optional": true
+    },
+    "@deepseek-ai/dsh-attachment": {
+      "pinned": "0.0.1-rc.5",
+      "supportedPrefixes": ["0.0.1"],
+      "optional": true
+    }
+  }
+}

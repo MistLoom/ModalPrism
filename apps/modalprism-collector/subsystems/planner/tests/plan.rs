@@ -27,6 +27,7 @@ fn plan() -> SourcePlan {
         spec: json!({}),
         generation: 1,
         config_hash: "hash-a".into(),
+        migration_generation: false,
         timeout: Duration::from_secs(30),
         paid: false,
         budget_requests: None,
@@ -363,6 +364,53 @@ async fn changed_config_hash_drops_the_validator() {
         .await
         .unwrap();
     assert_eq!(handler.seen_cursor.lock().unwrap().clone().unwrap(), None);
+}
+
+/// R11.3：迁移代即便 config_hash 翻转，也保留既有回填游标，不清空进度。
+#[tokio::test]
+async fn migration_generation_preserves_the_validator() {
+    let queue = MemoryQueue::new();
+    let planner = Planner::new(queue, MemoryPersist::default());
+    let task = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap()
+        .remove(0);
+    let seeded = strata_model::ChangeSet {
+        producer: strata_model::Producer {
+            module: "planner".into(),
+            version: "1".into(),
+            config_generation: 1,
+        },
+        idempotency_key: None,
+        ack: None,
+        ops: vec![strata_model::Op::SetState {
+            scope: "cursor".into(),
+            key: "source/blog".into(),
+            value: json!({"page": 1, "configHash": "old"}),
+            expect_version: None,
+        }],
+    };
+    planner.queue().apply(seeded).await.unwrap();
+    let handler = Script {
+        hits: AtomicUsize::new(0),
+        error: None,
+        seen_cursor: std::sync::Mutex::new(None),
+    };
+    let mut next = plan();
+    next.config_hash = "hash-b".into();
+    next.generation = 2;
+    next.migration_generation = true;
+    planner
+        .run(&next, task, &handler, &(), now(), now())
+        .await
+        .unwrap();
+    let seen = handler.seen_cursor.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        seen,
+        Some(json!({"page": 1, "configHash": "old"})),
+        "迁移代应把旧游标原样交给处理器，而非清空"
+    );
 }
 
 struct Seen(std::sync::Mutex<Option<String>>);

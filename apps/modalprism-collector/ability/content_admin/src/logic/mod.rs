@@ -3,4 +3,3 @@
 pub mod count;
 pub mod label;
 pub mod purge;
-pub mod restore;

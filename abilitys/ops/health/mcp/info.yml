@@ -1,0 +1,8 @@
+framework_version: "1"
+tools:
+  - method: status
+    name: health_status
+    description: health status
+  - method: report
+    name: health_report
+    description: health report

@@ -1,0 +1,18 @@
+framework_version: "1"
+id: write_file
+leaf_builtin: true
+open: true
+protocols: [tools, mcp, cli, http, fun]
+depends: []
+stateful: false
+methods:
+  - id: run
+    description: Write contents to a file.
+    input:
+      type: object
+      properties:
+        path:
+          type: string
+        contents:
+          type: string
+      required: [path, contents]

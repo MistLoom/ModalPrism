@@ -6,9 +6,12 @@
 //! 内置适配器的判定不写死清单：`implementation` 为 `builtin:<name>` 且 id 恰好是
 //! `adapter/<name>` 的声明就是系统自带的那一份，可以修改、可以停用，但不能删除。
 
+use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 
+use ordered_float::OrderedFloat;
+use saphyr::{Mapping, Scalar, Yaml, YamlEmitter};
 use serde_json::{Map, Value, json};
 
 use crate::error::{Diagnostic, Diagnostics, Error};
@@ -224,6 +227,9 @@ pub fn update(dir: &Path, options: &LoadOptions, draft: &Draft) -> Result<Saved,
 }
 
 /// 删除一份声明。内置适配器拒绝删除；被其它声明引用时由校验兜底并恢复原文。
+///
+/// 绑定额外带生命周期护栏（R5.2/R5.3）：仍被信源引用的绑定直接拒删并回显占用方；
+/// 删除信源时级联清理其**独占**绑定，共享绑定保留。
 pub fn remove(dir: &Path, options: &LoadOptions, kind: &str, slug: &str) -> Result<Saved, Error> {
     let (folder, prefix) = folder_of(kind)?;
     let slug = check_slug(slug)?;
@@ -234,15 +240,117 @@ pub fn remove(dir: &Path, options: &LoadOptions, kind: &str, slug: &str) -> Resu
     if prefix == "adapter" && builtin_adapter(&doc) {
         return Err(invalid(&file, "内置适配器不能删除，可以停用或改写"));
     }
+    // R5.2：绑定被引用则拒删，错误里回显占用它的信源。
+    if prefix == "binding" {
+        let binding_id = format!("binding/{slug}");
+        let occupiers = binding_referrer_source_ids(dir, &binding_id)?;
+        if !occupiers.is_empty() {
+            return Err(invalid(
+                &file,
+                format!("绑定仍被信源引用，不能删除: {}", occupiers.join(", ")),
+            ));
+        }
+    }
+    // R5.3：删除信源前先记下它引用的绑定，供删除后判定哪些变成孤儿。
+    let referenced_bindings = if prefix == "source" {
+        collect_binding_refs(&doc)
+    } else {
+        Vec::new()
+    };
     fs::remove_file(&target).map_err(|_| invalid(&file, "删除失败"))?;
     if let Err(error) = validate(dir, options) {
         restore(&target, &original)?;
         return Err(error);
     }
+    // R5.3：级联删除该信源独占、现已无人引用的绑定；共享绑定保留。
+    if prefix == "source" {
+        cascade_orphan_bindings(dir, options, &referenced_bindings)?;
+    }
     Ok(Saved {
         id: format!("{prefix}/{slug}"),
         file,
     })
+}
+
+/// 从任意声明正文里收集 `binding/<slug>` 引用（数组/对象递归）。
+fn collect_binding_refs(value: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_binding_refs(value, &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn walk_binding_refs(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if text.starts_with("binding/") {
+                out.push(text.clone());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                walk_binding_refs(item, out);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values() {
+                walk_binding_refs(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 哪些信源引用了给定绑定 id（占用方，R5.1/R5.2）。
+fn binding_referrer_source_ids(dir: &Path, binding_id: &str) -> Result<Vec<String>, Error> {
+    let mut out = Vec::new();
+    for entry in entries(dir, "source")? {
+        let id = id_of(&entry);
+        if id != binding_id && mentions(&entry.doc, binding_id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// 信源删除后，对其引用过的绑定做私有级联：剩余信源不再引用的绑定文件被移除；
+/// 仍被其它信源引用的共享绑定保留。移除后整库校验，失败则回滚刚删的绑定。
+fn cascade_orphan_bindings(
+    dir: &Path,
+    options: &LoadOptions,
+    referenced: &[String],
+) -> Result<(), Error> {
+    let sources: Vec<Value> = entries(dir, "source")?
+        .into_iter()
+        .map(|entry| entry.doc)
+        .collect();
+    let mut removed: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for binding_id in referenced {
+        if sources.iter().any(|doc| mentions(doc, binding_id)) {
+            continue;
+        }
+        let Some(stem) = binding_id.split_once('/') else {
+            continue;
+        };
+        let path = dir.join("bindings").join(format!("{}.yaml", stem.1));
+        let Ok(original) = fs::read_to_string(&path) else {
+            continue;
+        };
+        match fs::remove_file(&path) {
+            Ok(()) => removed.push((path, original)),
+            Err(_) => continue,
+        }
+    }
+    if !removed.is_empty() {
+        if let Err(error) = validate(dir, options) {
+            for (path, original) in removed.iter().rev() {
+                let _ = fs::write(path, original);
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 /// 启用或停用一份声明。
@@ -382,10 +490,12 @@ pub fn list(dir: &Path) -> Result<Value, Error> {
     let sources = entries(dir, "source")?;
     let accessors = entries(dir, "accessor")?;
     let adapters = entries(dir, "adapter")?;
+    let bindings = entries(dir, "binding")?;
     let all: Vec<&Entry> = sources
         .iter()
         .chain(accessors.iter())
         .chain(adapters.iter())
+        .chain(bindings.iter())
         .collect();
     let sources: Vec<Value> = sources
         .iter()
@@ -399,10 +509,15 @@ pub fn list(dir: &Path) -> Result<Value, Error> {
         .iter()
         .map(|entry| adapter_row(entry, &all))
         .collect();
+    let bindings: Vec<Value> = bindings
+        .iter()
+        .map(|entry| binding_row(entry, &all))
+        .collect();
     Ok(json!({
         "sources": sources,
         "accessors": accessors,
         "adapters": adapters,
+        "bindings": bindings,
     }))
 }
 
@@ -486,6 +601,25 @@ fn adapter_row(entry: &Entry, all: &[&Entry]) -> Value {
     })
 }
 
+/// 绑定行：带被哪些信源引用（R5.1）与「是否可删」判定（R5.2 前置信息）。
+fn binding_row(entry: &Entry, all: &[&Entry]) -> Value {
+    let doc = &entry.doc;
+    json!({
+        "id": id_of(entry),
+        "slug": entry.slug,
+        "file": entry.file,
+        "name": name_of(doc, &entry.slug),
+        "description": doc.get("description").cloned().unwrap_or(Value::Null),
+        "enabled": enabled_of(doc),
+        "adapter": doc.get("adapter"),
+        "params": doc.get("params").cloned().unwrap_or(Value::Null),
+        "referencedBy": referrer_ids(all, entry),
+        "references": referrers(all, entry),
+        "removable": referrers(all, entry) == 0,
+        "doc": doc,
+    })
+}
+
 fn id_of(entry: &Entry) -> String {
     entry
         .doc
@@ -513,6 +647,16 @@ fn referrers(all: &[&Entry], entry: &Entry) -> usize {
         .filter(|other| !(other.kind == entry.kind && other.slug == entry.slug))
         .filter(|other| mentions(&other.doc, &needle))
         .count()
+}
+
+/// 除自己之外，哪些声明引用了它的 id（返回它们的 id，供删除守卫回显占用方）。
+fn referrer_ids(all: &[&Entry], entry: &Entry) -> Vec<String> {
+    let needle = id_of(entry);
+    all.iter()
+        .filter(|other| !(other.kind == entry.kind && other.slug == entry.slug))
+        .filter(|other| mentions(&other.doc, &needle))
+        .map(|other| id_of(other))
+        .collect()
 }
 
 fn mentions(value: &Value, needle: &str) -> bool {
@@ -552,7 +696,8 @@ fn folder_of(kind: &str) -> Result<(&'static str, &'static str), Error> {
         "source" => Ok(("sources", "source")),
         "accessor" => Ok(("accessors", "accessor")),
         "adapter" => Ok(("adapters", "adapter")),
-        _ => Err(invalid("", "只支持信源、访问器与适配器")),
+        "binding" => Ok(("bindings", "binding")),
+        _ => Err(invalid("", "只支持信源、访问器、适配器与绑定")),
     }
 }
 
@@ -618,113 +763,60 @@ fn invalid(file: &str, message: impl Into<String>) -> Error {
     }]))
 }
 
-/// 生成块状 YAML。字符串一律加引号，避免把 `yes`、数字或含冒号的值读成别的类型。
+/// 用 saphyr 序列化器生成块状 YAML——与加载用的解析器同库，保证「写出即可读回」。
+///
+/// 不再手写标量加引号规则：由成熟发射器统一处理结尾冒号、`: `、前后空白、`#`/`-` 起始、
+/// flow 指示符、`yes/null/数字` 歧义等边界，避免逐条打补丁仍漏（历史上就漏过 `sectionTitle:`）。
 pub fn to_yaml(value: &Value) -> String {
-    let mut out = String::new();
-    if let Some(map) = value.as_object() {
-        write_map(&mut out, map, 0);
-    }
-    out
-}
-
-fn write_map(out: &mut String, map: &Map<String, Value>, indent: usize) {
-    for (key, value) in map {
-        let pad = " ".repeat(indent);
-        match value {
-            Value::Object(inner) if !inner.is_empty() => {
-                out.push_str(&format!("{pad}{}:\n", key_text(key)));
-                write_map(out, inner, indent + 2);
-            }
-            Value::Array(items) if !items.is_empty() => {
-                out.push_str(&format!("{pad}{}:\n", key_text(key)));
-                write_seq(out, items, indent + 2);
-            }
-            _ => out.push_str(&format!("{pad}{}: {}\n", key_text(key), scalar(value))),
-        }
+    let node = to_saphyr(value);
+    let mut buffer = String::new();
+    let emitted = {
+        let mut emitter = YamlEmitter::new(&mut buffer);
+        emitter.dump(&node)
+    };
+    // 纯 JSON 树（无二进制/别名/标签）不会发射失败；万一失败兜底回 JSON——
+    // YAML 是 JSON 超集，仍能被同一解析器读回，不丢数据。
+    let text = match emitted {
+        Ok(()) => buffer,
+        Err(_) => serde_json::to_string(value).unwrap_or_default(),
+    };
+    let body = text.strip_prefix("---\n").unwrap_or(&text);
+    if body.ends_with('\n') {
+        body.to_string()
+    } else {
+        format!("{body}\n")
     }
 }
 
-fn write_seq(out: &mut String, items: &[Value], indent: usize) {
-    let pad = " ".repeat(indent);
-    for item in items {
-        match item {
-            Value::Object(map) if !map.is_empty() => {
-                let mut nested = String::new();
-                write_map(&mut nested, map, indent + 2);
-                out.push_str(&format!("{pad}- {}", nested.trim_start_matches(' ')));
-            }
-            Value::Array(inner) if !inner.is_empty() => {
-                let mut nested = String::new();
-                write_seq(&mut nested, inner, indent + 2);
-                out.push_str(&format!("{pad}- {}", nested.trim_start_matches(' ')));
-            }
-            _ => out.push_str(&format!("{pad}- {}\n", scalar(item))),
-        }
-    }
-}
-
-fn key_text(key: &str) -> String {
-    let plain = !key.is_empty()
-        && key
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        && key
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'));
-    if plain { key.to_string() } else { quoted(key) }
-}
-
-fn scalar(value: &Value) -> String {
+/// 把 `serde_json::Value` 映射成 saphyr 节点（键按 BTreeMap 字典序，与既有写出形态一致）。
+fn to_saphyr(value: &Value) -> Yaml<'static> {
     match value {
-        Value::Null => "null".into(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        Value::String(text) => {
-            if plain(text) {
-                text.clone()
+        Value::Null => Yaml::Value(Scalar::Null),
+        Value::Bool(flag) => Yaml::Value(Scalar::Boolean(*flag)),
+        Value::Number(number) => {
+            if let Some(int) = number.as_i64() {
+                Yaml::Value(Scalar::Integer(int))
+            } else if let Some(uint) = number.as_u64() {
+                Yaml::Value(Scalar::Integer(uint as i64))
+            } else if let Some(float) = number.as_f64() {
+                Yaml::Value(Scalar::FloatingPoint(OrderedFloat(float)))
             } else {
-                quoted(text)
+                Yaml::Value(Scalar::String(Cow::Owned(number.to_string())))
             }
         }
-        Value::Array(_) => "[]".into(),
-        Value::Object(_) => "{}".into(),
-    }
-}
-
-fn plain(text: &str) -> bool {
-    !text.is_empty()
-        && text
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '/')
-        && text.chars().all(|ch| {
-            ch.is_ascii_alphanumeric()
-                || matches!(ch, '_' | '.' | '/' | ':' | '-' | '+' | '@' | '=')
-        })
-        && !matches!(
-            text.to_ascii_lowercase().as_str(),
-            "true" | "false" | "null" | "yes" | "no" | "on" | "off" | "~"
-        )
-        && text.parse::<f64>().is_err()
-}
-
-fn quoted(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('"');
-    for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            ch if (ch as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
+        Value::String(text) => Yaml::Value(Scalar::String(Cow::Owned(text.clone()))),
+        Value::Array(items) => Yaml::Sequence(items.iter().map(to_saphyr).collect()),
+        Value::Object(map) => {
+            let mut mapping = Mapping::new();
+            for (key, value) in map {
+                mapping.insert(
+                    Yaml::Value(Scalar::String(Cow::Owned(key.clone()))),
+                    to_saphyr(value),
+                );
+            }
+            Yaml::Mapping(mapping)
         }
     }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]
@@ -744,6 +836,45 @@ mod tests {
         let text = to_yaml(&doc);
         let parsed = yaml::parse_value("demo.yaml", &text).expect("可解析");
         assert_eq!(parsed, doc);
+    }
+
+    /// 结尾冒号（如 `sectionTitle:`）等歧义标量必须能写出后原样读回。
+    ///
+    /// 断言的是「值往返」而非具体引号形态——发射器用单引号/双引号皆可，只要可读回。
+    #[test]
+    fn yaml_roundtrip_preserves_trailing_colon_and_urls() {
+        let doc = json!({
+            "spec": {"extract": [{"endMarker": "sectionTitle:", "type": "quoted-fields"}]},
+            "locator": {"url": "https://mimo.xiaomi.com/"}
+        });
+        let text = to_yaml(&doc);
+        let parsed = yaml::parse_value("mimo.yaml", &text).expect("迁移产物必须可重新解析");
+        assert_eq!(parsed, doc, "往返必须保持原值:\n{text}");
+    }
+
+    /// 覆盖 YAML 标量的全部典型歧义：类型陷阱、前后空白、控制符、注释/序列起始、数字与浮点。
+    #[test]
+    fn yaml_roundtrip_ambiguous_scalars() {
+        let doc = json!({
+            "nullWord": "null",
+            "yesWord": "yes",
+            "octalLike": "0755",
+            "empty": "",
+            "padded": "  padded  ",
+            "multiline": "line1\nline2",
+            "hashStart": "#hash",
+            "dashStart": "- dash",
+            "colonInside": "x: y",
+            "floatWord": "1.5",
+            "boolTrue": true,
+            "intVal": 42,
+            "floatVal": 3.5,
+            "nested": [{"a": "b:c"}, []],
+            "emptyMap": {}
+        });
+        let text = to_yaml(&doc);
+        let parsed = yaml::parse_value("amb.yaml", &text).expect("可解析");
+        assert_eq!(parsed, doc, "歧义标量必须原样往返:\n{text}");
     }
 
     #[test]
@@ -781,5 +912,130 @@ mod tests {
         let custom = json!({"id": "adapter/my-list", "implementation": "builtin:html-list"});
         assert!(builtin_adapter(&shipped));
         assert!(!builtin_adapter(&custom));
+    }
+
+    /// 搭一份能过 `validate` 的最小配置：系统 + 预设 + 访问器 + 适配器。
+    fn seed_config(dir: &Path) {
+        let preset = crate::builtin_presets()
+            .into_iter()
+            .find(|item| item.id == "preset/standard")
+            .expect("内置预设");
+        std::fs::create_dir_all(dir.join("presets")).unwrap();
+        std::fs::write(dir.join("presets/standard.yaml"), preset.source).unwrap();
+        std::fs::write(
+            dir.join("system.yaml"),
+            "id: system\nkind: system\nname: s\npolicy:\n  preset: standard\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("accessors")).unwrap();
+        std::fs::write(
+            dir.join("accessors/rss.yaml"),
+            "id: accessor/rss\nkind: accessor\nname: RSS\nimplementation: builtin:rss\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("adapters")).unwrap();
+        std::fs::write(
+            dir.join("adapters/json-list.yaml"),
+            "id: adapter/json-list\nkind: adapter\nname: JSON\nimplementation: builtin:json-list\nrole: search\nconsumes:\n  - {kind: raw, part_role: document, media_type: application/json}\nproduces: [discovery]\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: exponential\n    base: 1s\n    max: 30s\n",
+        )
+        .unwrap();
+    }
+
+    fn create_binding(dir: &Path, slug: &str) -> Saved {
+        create(
+            dir,
+            &LoadOptions::default(),
+            &Draft {
+                kind: "binding".into(),
+                slug: slug.into(),
+                doc: json!({
+                    "name": slug,
+                    "adapter": "adapter/json-list",
+                    "params": {"items": "/data"},
+                }),
+            },
+        )
+        .expect("创建绑定")
+    }
+
+    fn create_bound_source(dir: &Path, slug: &str, binding: &str) -> Saved {
+        create(
+            dir,
+            &LoadOptions::default(),
+            &Draft {
+                kind: "source".into(),
+                slug: slug.into(),
+                doc: json!({
+                    "name": slug,
+                    "access": {"accessor": "accessor/rss", "locator": {"url": "https://example.com/feed"}},
+                    "pipeline": [{"binding": binding}],
+                    "schedule": {"interval": "1h"},
+                    "admission": {},
+                }),
+            },
+        )
+        .expect("创建绑定信源")
+    }
+
+    /// R5.2：仍被信源引用的绑定拒删。
+    #[test]
+    fn referenced_binding_cannot_be_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_config(dir.path());
+        create_binding(dir.path(), "b1");
+        create_bound_source(dir.path(), "s1", "binding/b1");
+        let options = LoadOptions::default();
+        let error = match remove(dir.path(), &options, "binding", "b1") {
+            Ok(_) => panic!("被引用的绑定应拒删"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("binding/s1") || error.to_string().contains("source/s1"),
+            "错误应回显占用方: {error}"
+        );
+        // 绑定文件仍在。
+        assert!(dir.path().join("bindings/b1.yaml").exists());
+    }
+
+    /// R5.3：删除信源时，独占绑定级联清理，共享绑定保留。
+    #[test]
+    fn source_delete_cascades_private_binding_and_retains_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_config(dir.path());
+        let shared = create_binding(dir.path(), "shared");
+        let private = create_binding(dir.path(), "private");
+        // s1 独占 private，与 s2 共享 shared。
+        create(
+            dir.path(),
+            &LoadOptions::default(),
+            &Draft {
+                kind: "source".into(),
+                slug: "s1".into(),
+                doc: json!({
+                    "name": "s1",
+                    "access": {"accessor": "accessor/rss", "locator": {"url": "https://example.com/feed"}},
+                    "pipeline": [{"binding": "binding/private"}, {"binding": "binding/shared"}],
+                    "schedule": {"interval": "1h"},
+                    "admission": {},
+                }),
+            },
+        )
+        .unwrap();
+        create_bound_source(dir.path(), "s2", "binding/shared");
+        let options = LoadOptions::default();
+        remove(dir.path(), &options, "source", "s1").expect("删除 s1");
+        // 独占的 private 被级联删除；共享的 shared 保留。
+        assert!(
+            !dir.path().join("bindings/private.yaml").exists(),
+            "私有绑定应级联删除"
+        );
+        assert!(
+            dir.path().join("bindings/shared.yaml").exists(),
+            "共享绑定应保留"
+        );
+        // 二次删除 s2 后，shared 变孤儿被清理。
+        remove(dir.path(), &options, "source", "s2").expect("删除 s2");
+        assert!(!dir.path().join("bindings/shared.yaml").exists());
+        let _ = (shared.id, private.id);
     }
 }

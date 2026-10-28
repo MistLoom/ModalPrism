@@ -1,0 +1,14 @@
+framework_version: "1"
+tools:
+  - method: validate
+    name: config_inspect_validate
+    description: config_inspect validate
+  - method: diff
+    name: config_inspect_diff
+    description: config_inspect diff
+  - method: explain
+    name: config_inspect_explain
+    description: config_inspect explain
+  - method: modules
+    name: config_inspect_modules
+    description: config_inspect modules

@@ -1,0 +1,29 @@
+framework_version: "1"
+id: prompt
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends:
+  - id: skill
+    optional: true
+stateful: false
+methods:
+  - id: build
+    description: 装配提示词消息
+    input:
+      type: object
+      properties:
+        system:
+          type: string
+        user:
+          type: string
+        assistant:
+          type: string
+        skill_path:
+          type: string
+        skill_paths:
+          type: array
+          items:
+            type: string
+        skill_root:
+          type: string

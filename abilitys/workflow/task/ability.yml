@@ -1,0 +1,36 @@
+framework_version: "1"
+id: task
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends:
+  - store.persist
+stateful: true
+factory: true
+config_schema:
+  type: object
+methods:
+  - id: project_set
+    description: 设置工程参数
+    input:
+      type: object
+  - id: submit
+    description: 提交任务 DAG
+    input:
+      type: object
+  - id: status
+    description: 查询任务或工程状态
+    input:
+      type: object
+  - id: next
+    description: 认领下一个就绪任务
+    input:
+      type: object
+  - id: get
+    description: 获取可认领或全部任务
+    input:
+      type: object
+  - id: update
+    description: 更新任务状态
+    input:
+      type: object

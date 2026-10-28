@@ -1,6 +1,7 @@
 //! 协议中心化注册：聚合 MCP / Tools / Skill / gRPC 声明。
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use ability_core::AbilityHost;

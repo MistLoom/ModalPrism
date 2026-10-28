@@ -1,0 +1,7 @@
+{
+  "bridgeVersion": 1,
+  "supportedTier": "hooks_command",
+  "denyHooksJsonModules": true,
+  "denyModuleExtensions": [".ts", ".tsx"],
+  "unsupportedError": "claude_mod_unsupported:hooks_modules"
+}

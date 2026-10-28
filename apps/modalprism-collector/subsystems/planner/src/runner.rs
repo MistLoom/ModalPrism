@@ -93,7 +93,12 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             .queue()
             .accepted_cursor(plan.source_id.as_str())
             .await?;
-        let cursor = strip_cursor(cursor, &plan.config_hash);
+        let cursor = if plan.migration_generation {
+            // 迁移代：保留既有游标，不因 config_hash 翻转而清空回填进度（R11.3）。
+            cursor
+        } else {
+            strip_cursor(cursor, &plan.config_hash)
+        };
         let first = handler.execute(&task, cursor.clone()).await;
         let outcome = match first {
             Err(error)

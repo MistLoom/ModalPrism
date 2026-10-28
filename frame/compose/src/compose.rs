@@ -158,7 +158,8 @@ pub async fn load_exposed(
             .load(LoadSpec::new(source, as_name).with_config(config))
             .await
         {
-            tracing::warn!(id = %id, error = %e, "load ability 失败");
+            // 失败同时记入 host.load_failures() / host.readiness()，供调用方分类查询。
+            tracing::error!(id = %id, code = e.code(), error = %e, "load ability 失败");
         }
     }
 }

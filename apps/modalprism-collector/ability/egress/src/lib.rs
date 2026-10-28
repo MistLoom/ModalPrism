@@ -4,12 +4,10 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("egress")
-        .stateful()
-        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
+    let mut spec = AbilitySpec::must("egress").stateful();
     spec = spec.on(
         "check",
         "检查地址是否被私网规则挡住",

@@ -1,0 +1,20 @@
+framework_version: "1"
+id: read_file
+leaf_builtin: true
+open: true
+protocols: [tools, mcp, cli, http, fun]
+depends: []
+stateful: false
+methods:
+  - id: run
+    description: Read a file from the local filesystem.
+    input:
+      type: object
+      properties:
+        path:
+          type: string
+        offset:
+          type: integer
+        limit:
+          type: integer
+      required: [path]

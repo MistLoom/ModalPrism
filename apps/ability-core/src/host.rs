@@ -73,9 +73,36 @@ pub struct AbilityGrant {
     pub open: bool,
 }
 
+/// 一次 `load` 失败的调用方可见记录（分类码 + 原始信息）。
+#[derive(Clone, Debug)]
+pub struct LoadFailure {
+    pub source: String,
+    pub instance: String,
+    /// 错误分类码（`toolchain_missing` / `artifact_missing` / `handshake_failed` / …）。
+    pub code: &'static str,
+    pub message: String,
+}
+
+/// Guest/实例就绪探针结果。
+///
+/// 契约：**装载成功 ≠ 可 invoke**。只有 [`Readiness::Ready`] 表示实例已通过
+/// 装载（含 Guest 握手与生命周期回调）且处于就绪阶段；调用方（如对外入口的
+/// 注册逻辑）应在暴露依赖该实例的能力前先探测就绪。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Readiness {
+    /// 实例已装载且生命周期就绪，可 invoke。
+    Ready,
+    /// 未装载或装载已回滚（未 install / load 失败 / 已 unload）。
+    Absent,
+    /// 最近一次装载失败；携带错误分类码与原始信息。
+    Failed { code: &'static str, message: String },
+}
+
 pub(crate) struct HostInner {
     pub sources: StdRwLock<HashMap<SourceId, Arc<dyn AbilityProvider>>>,
     pub instances: StdRwLock<HashMap<InstanceId, InstanceSlot>>,
+    /// 最近一次装载失败记录（按实例去重，成功装载即清除）。
+    pub load_failures: StdMutex<HashMap<String, LoadFailure>>,
     pub events: EventBus,
     /// ability id / instance id → 归属。
     pub grants: StdRwLock<HashMap<String, AbilityGrant>>,
@@ -96,6 +123,7 @@ impl HostInner {
         Self {
             sources: StdRwLock::new(HashMap::new()),
             instances: StdRwLock::new(HashMap::new()),
+            load_failures: StdMutex::new(HashMap::new()),
             events: EventBus::new(),
             grants: StdRwLock::new(HashMap::new()),
             entry_app: StdRwLock::new(None),
@@ -246,38 +274,6 @@ impl HostInner {
         out
     }
 
-    /// 已装实例 manifest 里的协议声明（名称形式）；供治理契约测试核对 yml 一致性。
-    pub fn manifest_protocols(&self, instance: &str) -> Vec<String> {
-        let map = self.instances.read().expect("instances");
-        map.iter()
-            .find(|(id, _)| id.as_str() == instance)
-            .map(|(_, slot)| {
-                slot.ability
-                    .manifest()
-                    .protocols
-                    .iter()
-                    .map(|kind| kind.as_str().to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// 已装实例 manifest 里的依赖能力 id；供治理契约测试核对 yml 一致性。
-    pub fn manifest_depends(&self, instance: &str) -> Vec<String> {
-        let map = self.instances.read().expect("instances");
-        map.iter()
-            .find(|(id, _)| id.as_str() == instance)
-            .map(|(_, slot)| {
-                slot.ability
-                    .manifest()
-                    .depends
-                    .iter()
-                    .map(|dep| dep.id.to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     pub fn catalog_snapshot(&self) -> Vec<CatalogEntry> {
         method_catalog(&self.instances_snapshot())
     }
@@ -390,11 +386,31 @@ impl HostInner {
         false
     }
 
-    async fn emit_lifecycle(&self, instance: &InstanceId, phase: Lifecycle) {
+    #[allow(unused_variables)] // used inside monitor_emit!; empty when feature off
+    async fn emit_lifecycle(
+        &self,
+        instance: &InstanceId,
+        from: Option<Lifecycle>,
+        phase: Lifecycle,
+        ability_id: Option<&str>,
+    ) {
         let mut discovery = self.discovery_of(instance);
         if let Some(ref mut d) = discovery {
             d.phase = phase;
         }
+        ability_support::monitor_emit!({
+            let mut ev = ability_support::monitor::MonitorEvent::new("lifecycle", now_ms())
+                .phase(phase.as_str())
+                .instance(instance.as_str())
+                .to_state(phase.as_str());
+            if let Some(f) = from {
+                ev = ev.from_state(f.as_str());
+            }
+            if let Some(aid) = ability_id {
+                ev = ev.ability_id(aid);
+            }
+            ev
+        });
         self.events
             .emit_host(HostEvent {
                 name: host_event::lifecycle(phase.as_str()),
@@ -402,6 +418,30 @@ impl HostInner {
                 discovery,
                 detail: Value::Null,
             })
+            .await;
+    }
+
+    fn ability_id_of(&self, instance: &InstanceId) -> Option<String> {
+        self.instances
+            .read()
+            .expect("instances")
+            .get(instance)
+            .map(|s| s.ability.manifest().id.to_string())
+    }
+
+    fn phase_of(&self, instance: &InstanceId) -> Option<Lifecycle> {
+        self.instances
+            .read()
+            .expect("instances")
+            .get(instance)
+            .map(|s| s.phase)
+    }
+
+    async fn transition_lifecycle(&self, instance: &InstanceId, to: Lifecycle) {
+        let from = self.phase_of(instance);
+        let aid = self.ability_id_of(instance);
+        self.set_phase(instance, to);
+        self.emit_lifecycle(instance, from, to, aid.as_deref())
             .await;
     }
 
@@ -477,6 +517,7 @@ impl HostInner {
         locals_scope: LocalsScope,
         chain_id: String,
         span: u64,
+        span_id: String,
         port_path: bool,
         invoke_mask: InvokeMask,
     ) -> InvokeContext {
@@ -486,6 +527,7 @@ impl HostInner {
             method,
             chain_id,
             span,
+            span_id,
             locals_scope,
             bindings,
             undos: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -573,10 +615,16 @@ impl HostInner {
             );
         }
         self.copy_grant(manifest.id.as_str(), spec.as_name.as_str());
-        self.emit_lifecycle(&spec.as_name, Lifecycle::Loaded).await;
+        self.emit_lifecycle(
+            &spec.as_name,
+            None,
+            Lifecycle::Loaded,
+            self.ability_id_of(&spec.as_name).as_deref(),
+        )
+        .await;
 
-        self.set_phase(&spec.as_name, Lifecycle::Bound);
-        self.emit_lifecycle(&spec.as_name, Lifecycle::Bound).await;
+        self.transition_lifecycle(&spec.as_name, Lifecycle::Bound)
+            .await;
 
         let ctx = self.make_ctx(
             spec.as_name.clone(),
@@ -585,6 +633,7 @@ impl HostInner {
             LocalsScope::new(),
             Uuid::new_v4().to_string(),
             0,
+            Uuid::new_v4().to_string(),
             false,
             InvokeMask::default(),
         );
@@ -594,19 +643,27 @@ impl HostInner {
         };
         if let Err(e) = with_scope(life_scope, ability.on_lifecycle(Lifecycle::Started, &ctx)).await
         {
-            self.set_phase(&spec.as_name, Lifecycle::Failed);
-            self.emit_lifecycle(&spec.as_name, Lifecycle::Failed).await;
+            self.transition_lifecycle(&spec.as_name, Lifecycle::Failed)
+                .await;
             self.instances
                 .write()
                 .expect("instances")
                 .remove(&spec.as_name);
             return Err(e);
         }
-        self.set_phase(&spec.as_name, Lifecycle::Started);
-        self.emit_lifecycle(&spec.as_name, Lifecycle::Started).await;
+        self.transition_lifecycle(&spec.as_name, Lifecycle::Started)
+            .await;
 
-        self.set_phase(&spec.as_name, Lifecycle::Ready);
-        self.emit_lifecycle(&spec.as_name, Lifecycle::Ready).await;
+        self.transition_lifecycle(&spec.as_name, Lifecycle::Ready)
+            .await;
+        ability_support::monitor_emit!(
+            ability_support::monitor::MonitorEvent::new("host", now_ms())
+                .phase("load")
+                .instance(spec.as_name.as_str())
+                .ability_id(ability.manifest().id.as_str())
+                .from_state("absent")
+                .to_state("loaded")
+        );
         self.events
             .emit_host(HostEvent {
                 name: host_event::LOAD.into(),
@@ -621,25 +678,33 @@ impl HostInner {
 
     pub async fn unload(self: &Arc<Self>, instance: &InstanceId) -> Result<()> {
         let _guard = self.load_lock.lock().await;
-        let (ability, bindings, inflight) = {
+        let (ability, bindings, inflight, from_phase) = {
             let mut map = self.instances.write().expect("instances");
             let slot = map
                 .get_mut(instance)
                 .ok_or_else(|| Error::not_found(instance))?;
             if slot.phase != Lifecycle::Ready && slot.phase != Lifecycle::Started {
                 return Err(Error::failed(format!(
-                    "实例 {} 当前相位 {:?} 不可卸载",
+                    "instance {} phase {:?} cannot unload",
                     instance, slot.phase
                 )));
             }
+            let from_phase = slot.phase;
             slot.phase = Lifecycle::Stopping;
             (
                 Arc::clone(&slot.ability),
                 slot.bindings.clone(),
                 Arc::clone(&slot.inflight),
+                from_phase,
             )
         };
-        self.emit_lifecycle(instance, Lifecycle::Stopping).await;
+        self.emit_lifecycle(
+            instance,
+            Some(from_phase),
+            Lifecycle::Stopping,
+            Some(ability.manifest().id.as_str()),
+        )
+        .await;
         inflight.wait_idle().await;
 
         let ctx = self.make_ctx(
@@ -649,6 +714,7 @@ impl HostInner {
             LocalsScope::new(),
             Uuid::new_v4().to_string(),
             0,
+            Uuid::new_v4().to_string(),
             false,
             InvokeMask::default(),
         );
@@ -657,11 +723,19 @@ impl HostInner {
             span: ctx.span,
         };
         let _ = with_scope(life_scope, ability.on_lifecycle(Lifecycle::Stopped, &ctx)).await;
-        self.set_phase(instance, Lifecycle::Stopped);
-        self.emit_lifecycle(instance, Lifecycle::Stopped).await;
+        self.transition_lifecycle(instance, Lifecycle::Stopped)
+            .await;
         self.drop_event_ids(instance);
 
         self.instances.write().expect("instances").remove(instance);
+        ability_support::monitor_emit!(
+            ability_support::monitor::MonitorEvent::new("host", now_ms())
+                .phase("unload")
+                .instance(instance.as_str())
+                .ability_id(ability.manifest().id.as_str())
+                .from_state("loaded")
+                .to_state("unloaded")
+        );
         self.events
             .emit_host(HostEvent {
                 name: host_event::UNLOAD.into(),
@@ -686,6 +760,7 @@ impl HostInner {
         locals_scope: LocalsScope,
         chain_id: String,
         span: u64,
+        parent_span_id: Option<String>,
         port_path: bool,
         invoke_mask: InvokeMask,
     ) -> Result<InvokeResponse> {
@@ -715,15 +790,35 @@ impl HostInner {
 
         let discovery =
             DiscoveryPayload::from_manifest(instance.clone(), Lifecycle::Ready, ability.manifest());
+        let ability_id = ability.manifest().id.to_string();
+        let span_id = Uuid::new_v4().to_string();
+        let started = now_ms();
+        ability_support::monitor_emit!({
+            let mut before = ability_support::monitor::MonitorEvent::new("invoke", started)
+                .phase("before")
+                .instance(instance.as_str())
+                .method(method.as_str())
+                .chain(&chain_id, span)
+                .span_id(&span_id)
+                .ability_id(&ability_id)
+                .started_at(started);
+            if let Some(ref p) = parent_span_id {
+                before = before.parent_span_id(p);
+            }
+            before
+        });
         self.events
             .emit_host(HostEvent {
                 name: host_event::INVOKE_BEFORE.into(),
-                at: now_ms(),
+                at: started,
                 discovery: Some(discovery.clone()),
                 detail: serde_json::json!({
                     "method": method.as_str(),
                     "chain_id": chain_id,
                     "span": span,
+                    "span_id": span_id,
+                    "parent_span_id": parent_span_id,
+                    "ability_id": ability_id,
                     "args": args.clone(),
                 }),
             })
@@ -736,21 +831,29 @@ impl HostInner {
             locals_scope.clone(),
             chain_id.clone(),
             span,
+            span_id.clone(),
             port_path,
             invoke_mask,
         );
         {
             let mut g = self.chains.write().expect("chains");
-            g.insert(
-                chain_id.clone(),
-                ChainStatus {
-                    chain_id: chain_id.clone(),
-                    instance: instance.to_string(),
-                    method: Some(method.to_string()),
-                    span,
-                    running: true,
-                },
-            );
+            // Root only: register chain; nested calls share the chain (C1).
+            if span == 0 {
+                g.insert(
+                    chain_id.clone(),
+                    ChainStatus {
+                        chain_id: chain_id.clone(),
+                        instance: instance.to_string(),
+                        method: Some(method.to_string()),
+                        span,
+                        running: true,
+                        started_at: Some(started),
+                        span_id: Some(span_id.clone()),
+                        parent_span_id: parent_span_id.clone(),
+                        ability_id: Some(ability_id.clone()),
+                    },
+                );
+            }
         }
         let aspects = self.aspects.read().expect("aspects").clone();
         let scope = FeedbackScope {
@@ -762,33 +865,79 @@ impl HostInner {
             ctx.run_undos(result).await
         })
         .await;
-        self.chains.write().expect("chains").remove(&chain_id);
+        // 仅根（span==0）返回时拆链；嵌套子调用返回不得拆掉父链（C1）。
+        if span == 0 {
+            self.chains.write().expect("chains").remove(&chain_id);
+        }
 
         match &result {
             Ok(_) => {
+                let ended = now_ms();
+                ability_support::monitor_emit!({
+                    let mut after = ability_support::monitor::MonitorEvent::new("invoke", ended)
+                        .phase("after")
+                        .instance(instance.as_str())
+                        .method(method.as_str())
+                        .chain(&chain_id, span)
+                        .span_id(&span_id)
+                        .ability_id(&ability_id)
+                        .started_at(started)
+                        .ended_at(ended);
+                    if let Some(ref p) = parent_span_id {
+                        after = after.parent_span_id(p);
+                    }
+                    after
+                });
                 self.events
                     .emit_host(HostEvent {
                         name: host_event::INVOKE_AFTER.into(),
-                        at: now_ms(),
+                        at: ended,
                         discovery: Some(discovery),
                         detail: serde_json::json!({
                             "method": method.as_str(),
                             "chain_id": chain_id,
                             "span": span,
+                            "span_id": span_id,
+                            "parent_span_id": parent_span_id,
+                            "ability_id": ability_id,
+                            "started_at": started,
+                            "ended_at": ended,
                         }),
                     })
                     .await;
             }
             Err(e) => {
+                let ended = now_ms();
+                ability_support::monitor_emit!({
+                    let mut err_ev = ability_support::monitor::MonitorEvent::new("invoke", ended)
+                        .phase("error")
+                        .instance(instance.as_str())
+                        .method(method.as_str())
+                        .chain(&chain_id, span)
+                        .span_id(&span_id)
+                        .ability_id(&ability_id)
+                        .started_at(started)
+                        .ended_at(ended)
+                        .error(e.to_string());
+                    if let Some(ref p) = parent_span_id {
+                        err_ev = err_ev.parent_span_id(p);
+                    }
+                    err_ev
+                });
                 self.events
                     .emit_host(HostEvent {
                         name: host_event::INVOKE_ERROR.into(),
-                        at: now_ms(),
+                        at: ended,
                         discovery: Some(discovery),
                         detail: serde_json::json!({
                             "method": method.as_str(),
                             "chain_id": chain_id,
                             "span": span,
+                            "span_id": span_id,
+                            "parent_span_id": parent_span_id,
+                            "ability_id": ability_id,
+                            "started_at": started,
+                            "ended_at": ended,
                             "error": e.to_string()
                         }),
                     })
@@ -837,11 +986,98 @@ impl AbilityHost {
     }
 
     pub async fn load(&self, spec: LoadSpec) -> Result<InstanceId> {
-        self.inner.load(spec).await
+        let result = self.inner.load(spec.clone()).await;
+        let instance = spec.as_name.to_string();
+        let source = spec.source.to_string();
+        match &result {
+            Ok(_) => {
+                self.inner
+                    .load_failures
+                    .lock()
+                    .expect("load_failures")
+                    .remove(&instance);
+            }
+            Err(e) => {
+                self.inner
+                    .load_failures
+                    .lock()
+                    .expect("load_failures")
+                    .insert(
+                        instance.clone(),
+                        LoadFailure {
+                            source,
+                            instance,
+                            code: e.code(),
+                            message: e.to_string(),
+                        },
+                    );
+            }
+        }
+        result
     }
 
     pub async fn unload(&self, instance: &InstanceId) -> Result<()> {
         self.inner.unload(instance).await
+    }
+
+    /// 就绪探针：装载成功 ≠ 可 invoke。
+    ///
+    /// - `Ready`：实例在册且生命周期处于就绪阶段，可 invoke；
+    /// - `Failed`：最近一次装载失败（含分类码与原始信息，如缺工具链 / 缺预构建产物 / 握手失败）；
+    /// - `Absent`：未装载或装载已回滚。
+    pub fn readiness(&self, instance: &InstanceId) -> Readiness {
+        let slot = self
+            .inner
+            .instances
+            .read()
+            .expect("instances")
+            .get(instance)
+            .map(|s| s.phase);
+        let failure = self
+            .inner
+            .load_failures
+            .lock()
+            .expect("load_failures")
+            .get(instance.as_str())
+            .cloned();
+        match slot {
+            Some(Lifecycle::Ready) => Readiness::Ready,
+            Some(Lifecycle::Failed) => failure
+                .map(|f| Readiness::Failed {
+                    code: f.code,
+                    message: f.message,
+                })
+                .unwrap_or(Readiness::Failed {
+                    code: "failed",
+                    message: "实例生命周期失败".into(),
+                }),
+            _ => failure
+                .map(|f| Readiness::Failed {
+                    code: f.code,
+                    message: f.message,
+                })
+                .unwrap_or(Readiness::Absent),
+        }
+    }
+
+    /// 最近一次装载失败记录（按实例去重）。
+    pub fn load_failures(&self) -> Vec<LoadFailure> {
+        self.inner
+            .load_failures
+            .lock()
+            .expect("load_failures")
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// 清空装载失败记录。
+    pub fn clear_load_failures(&self) {
+        self.inner
+            .load_failures
+            .lock()
+            .expect("load_failures")
+            .clear();
     }
 
     pub fn catalog(&self) -> Vec<CatalogEntry> {
@@ -851,16 +1087,6 @@ impl AbilityHost {
     /// 已装实例摘要（含可注册事件声明）。
     pub fn instances_snapshot(&self) -> Vec<DiscoveryPayload> {
         self.inner.instances_snapshot()
-    }
-
-    /// 已装实例 manifest 的协议声明（名称形式）。
-    pub fn manifest_protocols(&self, instance: &str) -> Vec<String> {
-        self.inner.manifest_protocols(instance)
-    }
-
-    /// 已装实例 manifest 的依赖能力 id。
-    pub fn manifest_depends(&self, instance: &str) -> Vec<String> {
-        self.inner.manifest_depends(instance)
     }
 
     pub fn set_expose(&self, expose: AbilityExpose) {
@@ -910,6 +1136,17 @@ impl AbilityHost {
         mode: EventMode,
     ) -> Result<()> {
         self.inner.authorize_event(caller, filter, mode)
+    }
+
+    /// 读取某能力实例登记的协议集合（用于 surface 一致性校验）。
+    pub fn protocol_support(&self, instance: &str) -> Vec<AccessKind> {
+        self.inner
+            .protocol_support
+            .read()
+            .expect("protocol_support")
+            .get(instance)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn set_protocol_support(&self, instance: &str, kinds: Vec<AccessKind>) {
@@ -978,6 +1215,7 @@ impl Gateway for AbilityHost {
                 scope,
                 Uuid::new_v4().to_string(),
                 0,
+                None,
                 true,
                 request.invoke_mask,
             )

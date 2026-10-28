@@ -120,7 +120,7 @@ pub struct ContentCounts {
 #[serde(rename_all = "camelCase")]
 pub struct ContentPurgeReport {
     pub matched: u64,
-    pub tombstoned: u64,
+    pub deleted: u64,
     pub truncated: bool,
     pub dry_run: bool,
 }
@@ -599,61 +599,31 @@ impl Services {
         })
     }
 
-    /// 写入墓碑。`dry_run` 只统计不写，超过单批上限时 `truncated` 为真。
-    pub async fn content_tombstone(
+    /// 物理删除匹配到的内容。`dry_run` 只统计不删，超过单批上限时 `truncated` 为真。
+    pub async fn content_delete(
         &self,
         filter: &ContentFilter,
-        reason: &str,
         dry_run: bool,
     ) -> Result<ContentPurgeReport, Error> {
         let (rows, truncated) = self.content_rows(filter, CONTENT_BATCH).await?;
-        let pending: Vec<Rid> = rows
-            .iter()
-            .filter(|(_, tombstoned)| !*tombstoned)
-            .map(|(rid, _)| rid.clone())
-            .collect();
-        if !dry_run {
-            let ops = pending
-                .iter()
-                .map(|rid| Op::Tombstone {
-                    target: Target::Rid(rid.clone()),
-                    reason: reason.to_string(),
-                })
-                .collect();
-            self.content_commit(ops).await?;
-        }
+        let rids: Vec<Rid> = rows.iter().map(|(rid, _)| rid.clone()).collect();
+        let deleted = if dry_run {
+            rids.len() as u64
+        } else {
+            self.content_delete_rids(&rids).await?
+        };
         Ok(ContentPurgeReport {
             matched: rows.len() as u64,
-            tombstoned: pending.len() as u64,
+            deleted,
             truncated,
             dry_run,
         })
     }
 
-    /// 直接按 rid 写墓碑，用于选中行删除。
-    pub async fn content_tombstone_rids(&self, rids: &[Rid], reason: &str) -> Result<u64, Error> {
-        let ops = rids
-            .iter()
-            .map(|rid| Op::Tombstone {
-                target: Target::Rid(rid.clone()),
-                reason: reason.to_string(),
-            })
-            .collect();
-        self.content_commit(ops).await?;
-        Ok(rids.len() as u64)
-    }
-
-    /// 撤销墓碑，返回撤销条数。
-    pub async fn content_restore(&self, rids: &[Rid], reason: &str) -> Result<u64, Error> {
-        let ops = rids
-            .iter()
-            .map(|rid| Op::Restore {
-                target: Target::Rid(rid.clone()),
-                reason: reason.to_string(),
-            })
-            .collect();
-        self.content_commit(ops).await?;
-        Ok(rids.len() as u64)
+    /// 按 rid 物理删除内容，返回真正移除的资源数。
+    pub async fn content_delete_rids(&self, rids: &[Rid]) -> Result<u64, Error> {
+        let report = self.strata.purge_resources(rids).await?;
+        Ok(report.tables.get("g_resources").copied().unwrap_or(0))
     }
 
     /// 用户分类打标：对多条 rid 同时设置或撤销标签，返回打标条数。

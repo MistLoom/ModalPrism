@@ -1,0 +1,39 @@
+framework_version: "1"
+id: markdown
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends:
+  - store.persist
+stateful: false
+methods:
+  - id: read
+    description: 读取 Markdown（frontmatter + body + headings）
+    input:
+      type: object
+      required: [key]
+  - id: write
+    description: 写入 Markdown
+    input:
+      type: object
+      required: [key]
+  - id: patch_frontmatter
+    description: 合并 frontmatter
+    input:
+      type: object
+      required: [key, patch]
+  - id: append
+    description: 追加正文
+    input:
+      type: object
+      required: [key, text]
+  - id: headings
+    description: 列出标题
+    input:
+      type: object
+      required: [key]
+  - id: parse
+    description: 解析 Markdown 文本（不落盘）
+    input:
+      type: object
+      required: [text]

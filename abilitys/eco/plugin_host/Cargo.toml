@@ -1,0 +1,20 @@
+[package]
+name = "ability-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Claude Mod / DSH 共用 Node 桥（非 Ability，不进入 compose 扫描）"
+
+[lib]
+name = "ability_plugin_host"
+path = "src/lib.rs"
+
+[dependencies]
+ability-support.workspace = true
+ai-protocol = { workspace = true }
+async-trait = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "sync"] }
+tracing.workspace = true

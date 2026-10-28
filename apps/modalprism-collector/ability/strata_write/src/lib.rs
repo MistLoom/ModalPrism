@@ -4,12 +4,10 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("strata_write")
-        .stateful()
-        .protocols(&[ProtocolKind::Fun]);
+    let mut spec = AbilitySpec::must("strata_write").stateful();
     spec = spec.on(
         "apply",
         "提交一个变更集",

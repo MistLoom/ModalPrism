@@ -1,0 +1,27 @@
+[package]
+name = "ai-turn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ability turn：agent 回合循环"
+
+[dependencies]
+ai-protocol.workspace = true
+async-trait.workspace = true
+ability-support.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+uuid = { workspace = true }
+
+[build-dependencies]
+ability-sdk-codegen = { workspace = true }
+
+[dev-dependencies]
+frame-core.workspace = true
+ability-core.workspace = true
+ai-dispatch = { workspace = true }
+ai-chat = { workspace = true }
+ai-session = { workspace = true }
+tokio.workspace = true

@@ -17,6 +17,7 @@ config_inspect = { path = "../../abilitys/data/config_inspect" }
 frame-core.workspace = true
 frame-port-mcp.workspace = true
 health = { path = "../../abilitys/ops/health" }
+reqwest.workspace = true
 serde_json.workspace = true
 strata_read = { path = "../../abilitys/data/strata_read" }
 surface = { path = "../modalprism-domain/surface" }

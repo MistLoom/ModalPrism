@@ -8,7 +8,7 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 use serde_json::Value;
 
 /// 单条工作流/模型声明的定位键。
@@ -22,12 +22,7 @@ fn slug() -> Value {
 
 pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
     let engine = Arc::new(workflow::Engine::new(ctx));
-    let mut spec = AbilitySpec::must("workflow").protocols(&[
-        ProtocolKind::Fun,
-        ProtocolKind::Http,
-        ProtocolKind::Mcp,
-        ProtocolKind::Tools,
-    ]);
+    let mut spec = AbilitySpec::must("workflow");
     spec = spec.on(
         "catalog",
         "工作流、模型与新建模板",

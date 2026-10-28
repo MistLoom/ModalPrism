@@ -63,7 +63,7 @@ Firecrawl、Crawl4AI、RSSHub 等解决的是“抽一下”或“发个订阅�
 采集之后还有一段加工：模型声明（`api` / `local` / `cli` 三种调用方式）+ 工作流声明（触发条件、步骤序列、产出与通知）。步骤可以是 LLM、模板或 HTTP；产出以新 facet 写回文章并附带血缘，不改原文；每次运行留一条 `struct:workflow-run` 记录，成功与失败都留。通知支持 webhook 与飞书机器人，在控制台里可以直接试发。详细规格见 [`docs/specs/content-processing.md`](docs/specs/content-processing.md)。
 
 ### 面向 Agent 的只读表面
-已采集数据通过 MCP 暴露：类型化查询、健康状态、信源清单、工作流与运行记录、配置溯源，供任意支持 MCP 的客户端接入；抽象类型（`Article`、`HotList`）提供业务视图。写入方法不出现在工具列表里，只读进程连数据目录也只读打开。
+已采集数据通过 MCP 暴露：类型化查询、健康状态、信源清单、工作流与运行记录、配置溯源，供任意支持 MCP 的客户端接入；抽象类型（`Article`、`HotList`）提供业务视图。除一份可恢复写白名单（信源/访问器/适配器声明的新建、改写与启停）外，写入方法不出现在工具列表里；只读进程连数据目录也只读打开。
 
 ## 架构
 
@@ -93,8 +93,8 @@ Firecrawl、Crawl4AI、RSSHub 等解决的是“抽一下”或“发个订阅�
 
 | 进程 | 说明 | 对外表面 |
 |---|---|---|
-| `modalprism-collector` | 一条命令初始化存储并进入采集循环 | 环回运维 HTTP `:17880`（含公共 API `/api/v1`）、正向代理 `:17881`、推送 `:17882` |
-| `modalprism-console` | Rust BFF 同源聚合运维面并托管前端 SPA | HTTP，`127.0.0.1:17890` |
+| `modalprism-collector` | 一条命令初始化存储、暴露领域 API 并运行采集与加工循环 | 环回 `/api/v1`（`:17880`）、正向代理 `:17881`、推送 `:17882` |
+| `modalprism-console`（Node） | 构建并托管 SPA，把 `/api/v1` 逐字节透明代理 | HTTP，`127.0.0.1:17890` |
 | `modalprism-agent` | 只读表面（查询 / 健康 / 信源清单 / 工作流与运行 / 配置溯源 / 类型视图） | MCP stdio，工具名 `instance.method` |
 
 ## 快速开始
@@ -129,14 +129,14 @@ cargo run -p modalprism-collector
 
 ### 启动控制台
 
-前端为 Vite + React + TypeScript（pnpm 管理），先构建产物再启动 BFF：
+前端为 Vite + React + TypeScript（pnpm 管理），先构建产物再启动 Node 外壳：
 
 ```sh
-cd apps/modalprism-console/web && pnpm install && pnpm build
-cargo run -p modalprism-console -- --ops http://127.0.0.1:17880 --bind 127.0.0.1:17890
+cd apps/modalprism-console && pnpm install && pnpm build
+node apps/modalprism-console/index.mjs --backend http://127.0.0.1:17880 --bind 127.0.0.1:17890
 ```
 
-浏览器访问 `http://127.0.0.1:17890`，页面路由为哈希模式（`#/overview`、`#/sources`、`#/channels`、`#/library`、`#/workflows`、`#/config`）。
+浏览器访问 `http://127.0.0.1:17890`。一级页面固定八项，路由为哈希模式：`#/overview`、`#/sources`、`#/tasks`、`#/content`、`#/production`、`#/outbound`、`#/logs`、`#/settings`。Node 进程只托管 SPA、提供 SPA fallback、在 `/healthz` 报告 Node 与 collector 可达性，并原样代理 `/api/v1`。
 
 ## 信源声明
 
@@ -204,23 +204,23 @@ notify:
 
 ## 公共 API
 
-三个入口，一套能力。详细字段与示例见 [`docs/specs/public-api.md`](docs/specs/public-api.md)。
+collector 持有唯一的领域契约 `/api/v1`，Node 控制台原样代理。完整字段、状态机与 OpenAPI 见 [`docs/specs/public-api.md`](docs/specs/public-api.md) 与 [`public-api.openapi.yaml`](docs/specs/public-api.openapi.yaml)。
 
 ### HTTP
 
-采集进程的运维端口上直接提供固定地址，不经过控制台 BFF：
-
 ```sh
-curl -s http://127.0.0.1:17880/api/v1/health
-curl -s "http://127.0.0.1:17880/api/v1/articles?source=hugging-face&limit=5"
-curl -s "http://127.0.0.1:17880/api/v1/articles?q=agent%20memory"
-curl -s http://127.0.0.1:17880/api/v1/articles/r_01ARZ3NDEKTSV4RRFFQ69G5FAV
-curl -s http://127.0.0.1:17880/api/v1/sources
-curl -s http://127.0.0.1:17880/api/v1/workflows
-curl -s -X POST http://127.0.0.1:17880/api/v1/process
+curl -s http://127.0.0.1:17880/api/v1/system/status
+curl -s "http://127.0.0.1:17880/api/v1/catalog/sources?limit=20"
+curl -s "http://127.0.0.1:17880/api/v1/content/items?query=agent&limit=10"
+curl -s http://127.0.0.1:17880/api/v1/operations/op_01...
+curl -s -X POST http://127.0.0.1:17880/api/v1/collection/runs \
+  -H 'idempotency-key: manual-1' -H 'content-type: application/json' \
+  -d '{"sourceId":"openai-news","mode":"normal"}'
 ```
 
-写操作只有两个：跑一条工作流（`POST /api/v1/workflows/{slug}/run`）与推进一次加工（`POST /api/v1/process`）。改配置不开放给裸接口，只能在控制台或声明文件里做。
+异步动作返回 `202`、Operation 正文与 `Location`。同一表面覆盖 catalog、collection、content、production、publication、settings、operations、observability 与 maintenance；不提供通用 Ability invoke，也不提供原始配置文件 CRUD。
+
+项目与首启向导是一等资源：资源经 `/projects/{projectId}/resources` 归属项目，向导 `complete`/`skip` 受顺序门闩约束（前置未完成返回 412 `preconditionFailed`）；`POST /search` 可选携带 `projectId`——项目必须存在（否则 404），成功搜索会落一条绑定到该项目的 `search_record`。`POST /fetch` 与 `POST /parse` 把 URL 变为正文与结构化抽取；rawprism 解析钩子未接入时 parse 返回 412。
 
 ### MCP
 
@@ -230,7 +230,7 @@ curl -s -X POST http://127.0.0.1:17880/api/v1/process
 cargo run -p modalprism-agent -- --data var --config config
 ```
 
-工具名为 `实例.方法`，例如 `strata_read.query`、`type_article.project`、`catalog_admin.list`、`workflow.runs`。写入方法（`workflow.save`、`catalog_admin.create` 等）不出现在工具列表里，即使硬拼出来也会被网关拒绝。
+工具名为 `实例.方法`，例如 `strata_read.query`、`type_article.project`、`catalog_admin.list`、`workflow.runs`。写侧只开一个白名单里的可恢复写（`catalog_admin.create` / `update` / `toggle`，写声明文件并校验）；破坏性删除（`remove`）、系统设置（`proxy`）与采集驱动写（`workflow.save` 等）不在工具列表里，即使硬拼出来也会被网关拒绝。
 
 ### SKILL 包
 
@@ -248,10 +248,10 @@ node skills/modalprism/scripts/prism.mjs run daily-digest r_01ARZ3NDEKTSV4RRFFQ6
 frame/                     LEAF 框架运行时与协议端口（随仓库提供，上游钉死提交）
 SDK/                       LEAF 能力 SDK（Rust / Python / TypeScript）
 apps/ability-core/         LEAF 能力宿主
-apps/modalprism-domain/    strata-model · strata-sqlite-vec · strata-gateway · strata-client · config · types · surface
+apps/modalprism-domain/    strata-model · strata-sqlite-vec · strata-gateway · strata-client · config · types · surface · workflow · api
 apps/modalprism-collector/ 采集进程（ability/ 为进程内能力；subsystems/ 为访问器、适配器、出站治理等）
 apps/modalprism-agent/     只读 MCP 进程
-apps/modalprism-console/   控制台（Rust BFF + web/ 前端 SPA）
+apps/modalprism-console/   单包：Vite React SPA + Node SPA 托管 / /api/v1 透明代理
 abilitys/                  共享能力：strata_read · config_inspect · health · type_article · type_hotlist · catalog_admin · workflow
 config/                    系统配置、访问器、适配器、信源、策略预设与 schema（YAML / JSON）
 docs/                      设计文档与实现规格
@@ -270,7 +270,7 @@ cargo test --workspace --exclude 'frame-*' --exclude 'ability-support*' --exclud
 cargo clippy --workspace --all-targets --no-deps --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core -- -D warnings
 ```
 
-工作区禁止 `unsafe_code`；release 配置 `lto = true`、`codegen-units = 1`。前端在 `apps/modalprism-console/web` 下以 pnpm 构建。
+工作区禁止 `unsafe_code`；release 配置 `lto = true`、`codegen-units = 1`。前端在 `apps/modalprism-console` 下以 pnpm 构建（pnpm build 后 pnpm start）。
 
 ## 许可证
 

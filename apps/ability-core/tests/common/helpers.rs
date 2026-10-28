@@ -16,7 +16,6 @@ pub fn manifest_with_events(id: &str, methods: &[&str], events: &[EventDecl]) ->
         id: ability_support::AbilityId::new(id).expect("ability id"),
         depends: vec![],
         stateful: false,
-        protocols: vec![],
         config_schema: json!({}),
         methods: methods
             .iter()

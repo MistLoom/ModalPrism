@@ -36,7 +36,7 @@ pub use derive::DerivationTask;
 #[cfg(feature = "embedded-s3")]
 pub use embedded::EmbeddedBlobStore;
 pub use error::{Error, Result};
-pub use gateway::Gateway;
+pub use gateway::{Gateway, PurgeReport};
 pub use index::{IndexStore, Score, TextQuery, VectorQuery};
 pub use query::{Channel, Hit, Request, Response};
 #[cfg(feature = "rustfs-bin")]

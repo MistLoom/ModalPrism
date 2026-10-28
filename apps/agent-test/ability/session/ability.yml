@@ -1,0 +1,115 @@
+framework_version: "1"
+id: session
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends: []
+stateful: true
+factory: true
+config_schema:
+  type: object
+events:
+  - name: created
+    dir: emit
+    description: 会话创建完成
+    payload_schema:
+      type: object
+      properties:
+        id: { type: string }
+      required: [id]
+  - name: items_appended
+    dir: emit
+    description: 会话追加消息
+    payload_schema:
+      type: object
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [user, assistant, tool] }
+      required: [id, role]
+methods:
+  - id: create
+    description: 创建会话
+    input:
+      type: object
+  - id: get
+    description: 读取会话
+    input:
+      type: object
+  - id: append_user
+    description: 追加用户消息
+    input:
+      type: object
+  - id: append_assistant
+    description: 追加助手消息（可选 tool_calls）
+    input:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        tool_calls:
+          type: array
+      required: [id]
+  - id: append_tool_results
+    description: 批量追加 tool 角色消息
+    input:
+      type: object
+      properties:
+        id:
+          type: string
+        messages:
+          type: array
+      required: [id, messages]
+  - id: protocol_messages
+    description: 投影协议消息
+    input:
+      type: object
+  - id: list
+    description: 列举会话
+    input:
+      type: object
+      properties:
+        limit:
+          type: integer
+  - id: export
+    description: 导出会话快照
+    input:
+      type: object
+      properties:
+        id:
+          type: string
+      required: [id]
+  - id: import
+    description: 导入会话快照
+    input:
+      type: object
+      properties:
+        snapshot:
+          type: object
+        mode:
+          type: string
+          enum: [copy, restore]
+      required: [snapshot]
+  - id: compact
+    description: 压缩会话上下文
+    input:
+      type: object
+      properties:
+        id:
+          type: string
+        until_seq:
+          type: integer
+        marker_text:
+          type: string
+      required: [id, until_seq]
+  - id: fork
+    description: 分叉会话
+    input:
+      type: object
+      properties:
+        id:
+          type: string
+        until_seq:
+          type: integer
+      required: [id]

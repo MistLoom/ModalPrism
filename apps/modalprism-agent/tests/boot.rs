@@ -24,6 +24,17 @@ fn config_dir(dir: &Path) {
         "system.yaml",
         "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  gateway:\n    blob_backend: dir\n",
     );
+    // 写白名单冒烟用的最小引用物：rss 访问器与 feed 条目适配器。
+    write(
+        dir,
+        "accessors/rss.yaml",
+        "id: accessor/rss\nkind: accessor\nname: rss\nimplementation: builtin:rss\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\nspec:\n  pages: 1\n",
+    );
+    write(
+        dir,
+        "adapters/feed-items.yaml",
+        "id: adapter/feed-items\nkind: adapter\nname: Feed 条目\nimplementation: builtin:feed-items\nrole: search\nconsumes:\n  - {kind: raw, part_role: document}\nproduces: [discovery]\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: exponential\n    base: 1s\n    max: 30s\n",
+    );
 }
 
 #[test]
@@ -69,6 +80,7 @@ async fn boot_exposes_only_the_read_surface() {
             "strata_read",
             "type_article",
             "type_hotlist",
+            "web",
             "workflow",
         ]
     );
@@ -78,12 +90,14 @@ async fn boot_exposes_only_the_read_surface() {
             .iter()
             .all(|entry| ids.iter().any(|id| id == entry.instance.as_str()))
     );
-    // 安装了能力不等于整个能力都对外：写入方法不在 MCP 面上。
-    assert!(catalog.iter().all(|entry| surface::exposes(
-        surface::AGENT_MCP,
-        entry.instance.as_str(),
-        entry.method.as_str()
-    )));
+    // 安装了能力不等于整个能力都对外：MCP 面只开只读面 + 写白名单。
+    assert!(catalog.iter().all(|entry| {
+        surface::exposes(
+            surface::AGENT_MCP,
+            entry.instance.as_str(),
+            entry.method.as_str(),
+        ) || surface::mcp_write_allowed(entry.instance.as_str(), entry.method.as_str())
+    }));
     for blocked in [
         "strata_write",
         "strata_queue",
@@ -166,9 +180,10 @@ async fn mcp_catalog_names_are_instance_method() {
             .iter()
             .any(|entry| entry.instance.as_str() == "strata_read.kinds")
     );
+    // 目录能力均声明 stateful:false，readOnlyHint 统一为 true；写不写由面控制，不由该提示控制。
     assert!(
         catalog.iter().all(|entry| !entry.stateful),
-        "只读方法的目录项应为无状态，以便 readOnlyHint 为 true"
+        "目录项应为无状态，以便 readOnlyHint 为 true"
     );
     let kinds = tools
         .get_entry(
@@ -241,8 +256,8 @@ async fn mcp_face_opens_new_queries_and_refuses_writes() {
         "workflow.save",
         "workflow.run",
         "workflow.tick",
-        "catalog_admin.create",
         "catalog_admin.remove",
+        "catalog_admin.proxy",
         "catalog_admin.batch",
     ] {
         assert!(
@@ -271,5 +286,62 @@ async fn mcp_face_opens_new_queries_and_refuses_writes() {
         .await
     else {
         panic!("workflow.save 不在 MCP 面");
+    };
+}
+
+/// MCP 写白名单：可恢复写（声明文件草稿）可调用，破坏性/设置写有明确拒绝。
+#[tokio::test]
+async fn mcp_write_whitelist_allows_recoverable_and_refuses_destructive() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let running = boot(data.path(), config.path()).await.unwrap();
+    let tools = mcp_gateway(running.gateway());
+
+    let created = tools
+        .invoke(InvokeRequest::new(
+            InstanceId::new("catalog_admin.create").unwrap(),
+            MethodId::new("create").unwrap(),
+            json!({
+                "kind": "source",
+                "slug": "mcp_smoke",
+                "doc": {
+                    "id": "source/mcp_smoke",
+                    "kind": "source",
+                    "name": "MCP 冒烟",
+                    "access": {
+                        "accessor": "accessor/rss",
+                        "locator": { "url": "https://example.com/feed.xml" }
+                    },
+                    "pipeline": [{ "run": ["adapter/feed-items"] }],
+                    "schedule": { "interval": "1h" },
+                    "admission": { "initialBackfill": { "limit": 8, "maxAge": "365d" } }
+                }
+            }),
+        ))
+        .await
+        .expect("写白名单内的 catalog_admin.create 应当可调用");
+    assert!(created.data["id"].is_string());
+
+    let Err(_) = tools
+        .invoke(InvokeRequest::new(
+            InstanceId::new("catalog_admin.remove").unwrap(),
+            MethodId::new("remove").unwrap(),
+            json!({ "kind": "source", "slug": "mcp_smoke" }),
+        ))
+        .await
+    else {
+        panic!("catalog_admin.remove 是破坏性写，MCP 面必须拒绝");
+    };
+
+    let Err(_) = tools
+        .invoke(InvokeRequest::new(
+            InstanceId::new("catalog_admin.proxy").unwrap(),
+            MethodId::new("proxy").unwrap(),
+            json!({ "value": "http://127.0.0.1:9" }),
+        ))
+        .await
+    else {
+        panic!("catalog_admin.proxy 是设置类写，MCP 面必须拒绝");
     };
 }

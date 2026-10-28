@@ -1,0 +1,8 @@
+framework_version: "1"
+binary: write_file
+entry: run
+args:
+  - name: path
+    positional: true
+  - name: contents
+    flag: --contents

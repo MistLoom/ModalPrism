@@ -437,6 +437,60 @@ pub fn find_ascii_ci(hay: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 pub fn params_hash(spec: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(spec).unwrap_or_else(|_| b"null".to_vec());
+    let canonical = canonical_json(spec);
+    let bytes = serde_json::to_vec(&canonical).unwrap_or_else(|_| b"null".to_vec());
     strata_model::content_hash(&bytes)
+}
+
+/// 哈希前规范化字段序与形态（R11.2 / H2）。
+///
+/// 递归重建对象，键按字典序落入有序映射；数组按原序递归。这样「逻辑等值」的
+/// 参数（同键同值，无论书写顺序）必然产生同一份字节，从而同一哈希——避免 spec 从
+/// 信源内联迁到 binding 后因合并顺序抖动而误判「参数已改」触发批量重解析与血缘断裂。
+/// 只做顺序规范化，不改动数值/字符串取值，故对既有 facet 哈希保持字节等价（不重算历史）。
+fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::{Map, Value};
+    match value {
+        Value::Object(map) => {
+            let mut out = Map::new();
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for key in keys {
+                out.insert(key.clone(), canonical_json(&map[key]));
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json).collect()),
+        other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// R11.2：字段书写顺序不同但逻辑等值 ⇒ 哈希等值。
+    #[test]
+    fn params_hash_is_field_order_independent() {
+        let a = json!({"items": "/data", "url": "link", "title": "name"});
+        let b = json!({"title": "name", "url": "link", "items": "/data"});
+        assert_eq!(params_hash(&a), params_hash(&b));
+    }
+
+    /// 嵌套与数组内部对象的键序同样被规范化。
+    #[test]
+    fn params_hash_normalizes_nested_and_arrays() {
+        let a = json!({"detail": {"maxFetches": 30, "fields": ["a", "b"]}, "items": "/x"});
+        let b = json!({"items": "/x", "detail": {"fields": ["a", "b"], "maxFetches": 30}});
+        assert_eq!(params_hash(&a), params_hash(&b));
+    }
+
+    /// 逻辑不等值（取值不同）⇒ 哈希不同。
+    #[test]
+    fn params_hash_differs_on_value_change() {
+        let a = json!({"items": "/data"});
+        let b = json!({"items": "/other"});
+        assert_ne!(params_hash(&a), params_hash(&b));
+    }
 }

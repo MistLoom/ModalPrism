@@ -1,19 +1,17 @@
-//! 内容治理：按筛选统计、写入墓碑与恢复。
+//! 内容治理：按筛选统计、打标与物理删除。
 //!
-//! 删除是墓碑不是物理删除，查询默认过滤墓碑，撤销后立刻回到默认列表。
+//! 删除直接移除资源、派生数据与无引用对象，不写墓碑；
 //! 这一层只解析入参与映射错误，真实的数据面调用都在装配层。
 
 mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 use assembly::domain::Timestamp;
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("content_admin")
-        .stateful()
-        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
+    let mut spec = AbilitySpec::must("content_admin").stateful();
     spec = spec.on(
         "count",
         "统计匹配的内容条数与其中已删除的条数",
@@ -36,7 +34,7 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
     );
     spec = spec.on(
         "purge",
-        "按筛选或选中行写入墓碑",
+        "按筛选或选中行物理删除内容",
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -73,25 +71,6 @@ pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
             move |_ctx, args| {
                 let services = Arc::clone(&services);
                 ability_support::box_fut(logic::label::run(services, args))
-            }
-        },
-    );
-    spec = spec.on(
-        "restore",
-        "撤销墓碑，把内容放回默认列表",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "rids": { "type": "array", "items": { "type": "string" } },
-                "reason": { "type": "string" }
-            },
-            "required": ["rids"]
-        }),
-        {
-            let services = Arc::clone(&services);
-            move |_ctx, args| {
-                let services = Arc::clone(&services);
-                ability_support::box_fut(logic::restore::run(services, args))
             }
         },
     );

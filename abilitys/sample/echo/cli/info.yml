@@ -1,0 +1,6 @@
+framework_version: "1"
+binary: algo_echo
+entry: run
+args:
+  - name: text
+    positional: true

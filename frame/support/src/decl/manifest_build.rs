@@ -34,7 +34,6 @@ pub fn manifest_from_decl(decl: &AbilityDecl) -> Result<AbilityManifest, String>
         id,
         depends,
         stateful: decl.stateful,
-        protocols: decl.protocols.iter().copied().collect(),
         config_schema: decl.config_schema.clone(),
         methods,
         events,

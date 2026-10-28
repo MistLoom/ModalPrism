@@ -102,13 +102,18 @@ pub fn resolve_target(raw: &str, catalog: &[CatalogEntry]) -> Result<(InstanceId
         }
     }
 
-    if let Some((inst, meth)) = raw.rsplit_once('.') {
+    // 方法名本身可含点（如 `echo.say`），从最右分割点向左尝试全部分割。
+    let bytes = raw.as_bytes();
+    let mut search = bytes.len();
+    while let Some(pos) = raw[..search].rfind('.') {
+        let (inst, meth) = (&raw[..pos], &raw[pos + 1..]);
         if let Some(e) = catalog
             .iter()
             .find(|e| e.instance.as_str() == inst && e.method.as_str() == meth)
         {
             return Ok((e.instance.clone(), e.method.clone()));
         }
+        search = pos;
     }
 
     Err(Error::not_found(raw))

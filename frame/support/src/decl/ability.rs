@@ -98,6 +98,7 @@ pub enum RuntimeKind {
     Rust,
     Node,
     Python,
+    Cangjie,
 }
 
 /// 能力本体声明（`ability.yml`）。
@@ -126,6 +127,9 @@ pub struct AbilityDecl {
     pub factory: bool,
     /// 本能力支持的协议清单（须与协议目录声明一致）。
     pub protocols: Vec<ProtocolKind>,
+    /// 内置单标记：能力由框架随仓维护（随框架更新面整包走）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub leaf_builtin: bool,
 }
 
 impl AbilityDecl {

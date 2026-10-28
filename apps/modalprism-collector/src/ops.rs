@@ -4,7 +4,6 @@
 //! 继续，调用方轮询 `committer.handle`。客户端因此不需要为不同方法维护多套超时。
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -12,9 +11,7 @@ use ability_core::AbilityHost;
 use ability_support::{Error as InvokeError, InstanceId, MethodId};
 use async_trait::async_trait;
 use frame_core::{CatalogEntry, Gateway, InvokeRequest, InvokeResponse};
-use frame_port_http::HttpPort;
 use serde_json::{Value, json};
-use tokio::net::TcpListener;
 
 /// 需要异步句柄的长任务：它们在进程内同步执行到完成才返回。
 /// `workflow.run` 只处理单篇文章、很快，不在此列；`workflow.tick` 才扫一批。
@@ -57,57 +54,6 @@ pub fn gateway(host: Arc<AbilityHost>) -> Arc<dyn Gateway> {
         handles: Arc::new(Mutex::new(HashMap::new())),
         seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     })
-}
-
-pub async fn serve(addr: SocketAddr, host: Arc<AbilityHost>) {
-    let app = app(gateway(host));
-    let Ok(listener) = TcpListener::bind(addr).await else {
-        return;
-    };
-    let _ = axum::serve(listener, app).await;
-}
-
-/// 受治理的运维面与公共 API 合成的同一个 HTTP 应用。
-pub fn app(gateway: Arc<dyn Gateway>) -> axum::Router {
-    HttpPort::router(Arc::clone(&gateway))
-        .merge(crate::api::router(gateway))
-        .layer(axum::middleware::map_response(strip_cors))
-}
-
-async fn strip_cors(mut response: axum::response::Response) -> axum::response::Response {
-    let names: Vec<_> = response
-        .headers()
-        .keys()
-        .filter(|name| name.as_str().starts_with("access-control-"))
-        .cloned()
-        .collect();
-    for name in names {
-        response.headers_mut().remove(name);
-    }
-    let vary = response
-        .headers()
-        .get("vary")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    if let Some(vary) = vary {
-        let kept: Vec<_> = vary
-            .split(',')
-            .map(str::trim)
-            .filter(|token| !token.is_empty() && !cors_vary(token))
-            .collect();
-        if kept.is_empty() {
-            response.headers_mut().remove("vary");
-        } else if let Ok(value) = kept.join(", ").parse() {
-            response.headers_mut().insert("vary", value);
-        }
-    }
-    response
-}
-
-fn cors_vary(token: &str) -> bool {
-    token.eq_ignore_ascii_case("origin")
-        || token.eq_ignore_ascii_case("access-control-request-method")
-        || token.eq_ignore_ascii_case("access-control-request-headers")
 }
 
 struct OpsGateway {

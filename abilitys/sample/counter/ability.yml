@@ -1,0 +1,16 @@
+framework_version: "1"
+id: demo.counter
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends: []
+stateful: false
+methods:
+  - id: run
+    description: 会话内计数器
+    input:
+      type: object
+      properties:
+        delta:
+          type: integer
+          default: 1

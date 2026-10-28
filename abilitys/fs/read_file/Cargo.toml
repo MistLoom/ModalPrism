@@ -1,0 +1,25 @@
+[package]
+name = "ability-read-file"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ability read_file"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "read_file"
+path = "src/bin/read_file.rs"
+
+[dependencies]
+async-trait.workspace = true
+ability-support.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap = { workspace = true }
+tokio = { workspace = true }
+
+[build-dependencies]
+ability-sdk-codegen = { workspace = true }

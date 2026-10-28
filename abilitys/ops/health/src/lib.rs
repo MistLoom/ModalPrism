@@ -4,15 +4,10 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 
 pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("health").stateful().protocols(&[
-        ProtocolKind::Fun,
-        ProtocolKind::Http,
-        ProtocolKind::Mcp,
-        ProtocolKind::Tools,
-    ]);
+    let mut spec = AbilitySpec::must("health").stateful();
     spec = spec.on(
         "status",
         "读取信源健康",

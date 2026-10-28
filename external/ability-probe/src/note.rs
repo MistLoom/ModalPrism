@@ -22,7 +22,6 @@ fn note_manifest() -> AbilityManifest {
         id: AbilityId::new("probe.note").expect("id"),
         depends: vec![],
         stateful: true,
-        protocols: vec![],
         config_schema: json!({
             "type": "object",
             "properties": { "label": { "type": "string" } }

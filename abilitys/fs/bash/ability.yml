@@ -1,0 +1,20 @@
+framework_version: "1"
+id: bash
+leaf_builtin: true
+open: true
+protocols: [tools, mcp, cli, http, fun]
+depends: []
+stateful: false
+methods:
+  - id: run
+    description: Run a shell command.
+    input:
+      type: object
+      properties:
+        command:
+          type: string
+        working_directory:
+          type: string
+        block_until_ms:
+          type: integer
+      required: [command]

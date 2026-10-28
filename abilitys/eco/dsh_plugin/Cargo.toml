@@ -1,0 +1,18 @@
+[package]
+name = "ability-dsh-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ability dsh_plugin：DSH 插件兼容（可选）"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ability-support.workspace = true
+ability-plugin-host = { workspace = true }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

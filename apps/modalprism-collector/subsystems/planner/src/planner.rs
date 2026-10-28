@@ -23,6 +23,9 @@ pub struct SourcePlan {
     pub spec: Value,
     pub generation: u64,
     pub config_hash: String,
+    /// 迁移代标记（R11.3 / H1）。为真时本轮跳过「config_hash 变化 → 丢弃回填游标」的
+    /// 重置，避免拆文件那一代把全体游标清空；成功后游标会以新哈希重新落戳，后续代一致。
+    pub migration_generation: bool,
     pub timeout: Duration,
     pub paid: bool,
     pub budget_requests: Option<u64>,

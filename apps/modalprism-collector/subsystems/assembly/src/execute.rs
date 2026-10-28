@@ -322,6 +322,70 @@ fn raw_ops(envelopes: &[RawEnvelope]) -> Result<Vec<Op>, Classified> {
     Ok(ops)
 }
 
+/// R1–R3：把 pipeline 里的 `binding: "binding/x"` 引用在运行期展开为内联步骤。
+///
+/// 信源只声明「用哪个绑定」，不再内嵌可执行 spec；绑定的适配器与装配参数（`params`，
+/// 回退 `spec`）在此从快照取出。条件（`when`）、`for`、`after` 仍留在引用侧，绑定只承载
+/// 装配。展开不改动信源字节——`config_hash` 已在 R11.1 排除 pipeline/binding，故迁移不抖动。
+/// 绑定缺失 / 无 adapter 视为配置错误（`check` 已在落盘期挡住悬空引用，这里是运行期兜底）。
+fn expand_pipeline_bindings(pipeline: &Value, snapshot: &Snapshot) -> Result<Value, Classified> {
+    let Some(steps) = pipeline.as_array() else {
+        return Ok(pipeline.clone());
+    };
+    // 没有绑定引用时原样返回，保证旧内联 pipeline 行为逐字节不变。
+    if !steps
+        .iter()
+        .any(|step| step.get("binding").and_then(Value::as_str).is_some())
+    {
+        return Ok(pipeline.clone());
+    }
+    let mut out = Vec::with_capacity(steps.len());
+    for step in steps {
+        let Some(obj) = step.as_object() else {
+            out.push(step.clone());
+            continue;
+        };
+        let Some(binding_id) = obj.get("binding").and_then(Value::as_str) else {
+            out.push(step.clone());
+            continue;
+        };
+        let binding = snapshot
+            .modules
+            .get(binding_id)
+            .ok_or_else(|| classified(ErrorClass::Config, format!("绑定不存在: {binding_id}")))?;
+        let adapter_id = binding
+            .get("adapter")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                classified(
+                    ErrorClass::Config,
+                    format!("绑定缺少 adapter: {binding_id}"),
+                )
+            })?;
+        let params = binding
+            .get("params")
+            .filter(|value| value.is_object())
+            .or_else(|| binding.get("spec").filter(|value| value.is_object()))
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        let mut expanded = Map::new();
+        for key in ["when", "for", "after"] {
+            if let Some(value) = obj.get(key) {
+                expanded.insert(key.to_string(), value.clone());
+            }
+        }
+        expanded.insert(
+            "run".into(),
+            Value::Array(vec![Value::String(adapter_id.to_string())]),
+        );
+        let mut spec = Map::new();
+        spec.insert(adapter_id.to_string(), params);
+        expanded.insert("spec".into(), Value::Object(spec));
+        out.push(Value::Object(expanded));
+    }
+    Ok(Value::Array(out))
+}
+
 async fn adapted_ops(
     state: &FetchState,
     task: &strata_model::AccessTask,
@@ -331,8 +395,9 @@ async fn adapted_ops(
     initial: bool,
     resource: Option<&Rid>,
 ) -> Result<(Vec<Op>, Vec<FollowRequest>), Classified> {
+    let pipeline = expand_pipeline_bindings(pipeline, &state.snapshot)?;
     let rules =
-        parse_pipeline(pipeline).map_err(|error| classified(error.class(), error.to_string()))?;
+        parse_pipeline(&pipeline).map_err(|error| classified(error.class(), error.to_string()))?;
     let mut parts = Vec::new();
     for envelope in envelopes {
         for part in &envelope.parts {
@@ -487,5 +552,61 @@ fn classified(class: ErrorClass, message: impl Into<String>) -> Classified {
         message: message.into(),
         retry_after: None,
         retry_at: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn snapshot_with(modules: Vec<(String, Value)>) -> Snapshot {
+        Snapshot {
+            generation: 1,
+            system: json!({}),
+            modules: modules.into_iter().collect(),
+            origins: Default::default(),
+        }
+    }
+
+    /// R1–R3：绑定引用被展开为对适配器的内联步骤，params 成为 spec overlay。
+    #[test]
+    fn expands_binding_reference() {
+        let snapshot = snapshot_with(vec![(
+            "binding/feed".into(),
+            json!({
+                "kind": "binding",
+                "adapter": "adapter/json-list",
+                "params": {"items": "/data", "url": "link"}
+            }),
+        )]);
+        let pipeline = json!([{ "binding": "binding/feed", "for": "follow" }]);
+        let expanded = expand_pipeline_bindings(&pipeline, &snapshot).unwrap();
+        let step = &expanded[0];
+        assert_eq!(
+            step["run"].as_array().unwrap()[0],
+            json!("adapter/json-list")
+        );
+        assert_eq!(step["spec"]["adapter/json-list"]["items"], json!("/data"));
+        assert_eq!(step["for"], json!("follow"));
+        assert!(step.get("binding").is_none(), "展开后不应残留 binding 引用");
+    }
+
+    /// 无绑定引用时原样返回，保证旧内联 pipeline 逐字节不变。
+    #[test]
+    fn leaves_inline_pipeline_untouched() {
+        let snapshot = snapshot_with(Vec::new());
+        let pipeline =
+            json!([{"run": ["adapter/html-list"], "spec": {"adapter/html-list": {"item": "a"}}}]);
+        let expanded = expand_pipeline_bindings(&pipeline, &snapshot).unwrap();
+        assert_eq!(expanded, pipeline);
+    }
+
+    /// 悬空绑定引用是配置错误（落盘期 check 已拦截，这里是运行期兜底）。
+    #[test]
+    fn missing_binding_is_config_error() {
+        let snapshot = snapshot_with(Vec::new());
+        let pipeline = json!([{ "binding": "binding/ghost" }]);
+        assert!(expand_pipeline_bindings(&pipeline, &snapshot).is_err());
     }
 }

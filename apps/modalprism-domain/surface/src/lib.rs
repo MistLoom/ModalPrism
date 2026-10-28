@@ -74,7 +74,7 @@ pub const COLLECTOR: &[Ability] = &[
     },
     Ability {
         id: "content_admin",
-        methods: &["count", "label", "purge", "restore"],
+        methods: &["count", "label", "purge"],
         read_only: &["count"],
     },
     Ability {
@@ -200,7 +200,7 @@ pub const COLLECTOR_OPS: &[Exposure] = &[
     },
     Exposure {
         id: "content_admin",
-        methods: &["count", "label", "purge", "restore"],
+        methods: &["count", "label", "purge"],
     },
     Exposure {
         id: "egress",
@@ -321,6 +321,13 @@ pub const AGENT: &[Ability] = &[
         ],
         read_only: &["catalog", "get", "runs"],
     },
+    // 对外表面的 HTTP 工具投影：search / fetch / parse 全部只读，
+    // 由只读进程代理到本机回环领域 API；破坏性与设置类操作不在此面。
+    Ability {
+        id: "web",
+        methods: &["fetch", "parse", "search"],
+        read_only: &["fetch", "parse", "search"],
+    },
 ];
 
 /// 控制台的界面面。只保留可恢复、无副作用的写方法。
@@ -352,7 +359,7 @@ pub const CONSOLE: &[Exposure] = &[
     },
     Exposure {
         id: "content_admin",
-        methods: &["count", "label", "purge", "restore"],
+        methods: &["count", "label", "purge"],
     },
     Exposure {
         id: "egress",
@@ -445,7 +452,23 @@ pub const AGENT_MCP: &[Exposure] = &[
         id: "workflow",
         methods: &["catalog", "get", "runs"],
     },
+    Exposure {
+        id: "web",
+        methods: &["search", "fetch", "parse"],
+    },
 ];
+
+/// MCP 面的白名单写方法。只收可恢复写（声明文件草稿：新建 / 改写 / 启停，落盘前校验），
+/// 破坏性删除（remove）、系统设置类写（proxy）与采集驱动类写一律不在此面。
+pub const AGENT_MCP_WRITES: &[Exposure] = &[Exposure {
+    id: "catalog_admin",
+    methods: &["create", "toggle", "update"],
+}];
+
+/// MCP 面写白名单是否放开这个方法。未声明的方法一律不放行。
+pub fn mcp_write_allowed(id: &str, method: &str) -> bool {
+    exposes(AGENT_MCP_WRITES, id, method)
+}
 
 /// 按 id 取应用声明的能力。
 pub fn ability<'a>(app: &'a [Ability], id: &str) -> Option<&'a Ability> {
@@ -490,6 +513,32 @@ mod tests {
                     item.id
                 );
             }
+        }
+        for item in AGENT_MCP_WRITES {
+            let ability = ability(AGENT, item.id).expect("MCP 写白名单只能引用只读进程已装能力");
+            for method in item.methods {
+                assert!(ability.has(method), "{} 未声明 {method}", item.id);
+                assert!(
+                    !ability.is_read_only(method),
+                    "MCP 写白名单 {} {method} 不该是只读方法",
+                    item.id
+                );
+            }
+        }
+        // 破坏性删除与系统设置类写永远不进 MCP 面（含写白名单）。
+        for (id, method) in [
+            ("catalog_admin", "remove"),
+            ("catalog_admin", "proxy"),
+            ("workflow", "save"),
+            ("workflow", "remove"),
+            ("workflow", "remove_model"),
+            ("workflow", "save_model"),
+            ("workflow", "tick"),
+        ] {
+            assert!(
+                !mcp_write_allowed(id, method),
+                "破坏性/设置写 {id}.{method} 不得进入 MCP 写白名单"
+            );
         }
         for item in CONSOLE {
             let ability = ability(COLLECTOR, item.id).expect("界面面只能引用采集进程能力");

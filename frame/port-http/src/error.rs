@@ -22,7 +22,11 @@ impl IntoResponse for ApiError {
             ErrorKind::Failed
             | ErrorKind::Dependency
             | ErrorKind::Unavailable
-            | ErrorKind::Upstream => StatusCode::UNPROCESSABLE_ENTITY,
+            | ErrorKind::Upstream
+            | ErrorKind::ToolchainMissing
+            | ErrorKind::ArtifactMissing
+            | ErrorKind::HandshakeFailed => StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorKind::Io => StatusCode::INTERNAL_SERVER_ERROR,
         };
 

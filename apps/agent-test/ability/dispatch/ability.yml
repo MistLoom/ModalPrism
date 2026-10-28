@@ -1,0 +1,22 @@
+framework_version: "1"
+id: dispatch
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends: []
+stateful: false
+methods:
+  - id: defs
+    description: catalog 生成 LLM tool 定义
+    input:
+      type: object
+  - id: run
+    description: 执行模型 tool_calls
+    input:
+      type: object
+      properties:
+        calls:
+          type: array
+        continue_on_error:
+          type: boolean
+      required: [calls]

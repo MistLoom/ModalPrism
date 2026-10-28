@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::error::Diagnostic;
 use crate::scope::{DocKind, Scope, accepts_target, is_known_lock, scope_of};
+use crate::security::security_issues;
 
 const RESERVED_SPEC: &[&str] = &[
     "id",
@@ -78,6 +79,7 @@ pub fn check_modules(
             }
             "accessor" => check_accessor(id, module, &mut diags),
             "adapter" => check_adapter(id, module, &mut diags),
+            "binding" => check_binding(id, module, modules, &mut diags),
             "preset" | "profile" | "type" => {}
             _ => diags.push(bare(format!("未知 kind: {kind}"))),
         }
@@ -110,10 +112,21 @@ fn check_source(
     }
     if let Some(steps) = module.get("pipeline").and_then(Value::as_array) {
         for step in steps {
+            // R3：步骤可改为引用独立 binding，而非内嵌可执行 spec。source→binding 存在性。
+            if let Some(binding) = step.get("binding").and_then(Value::as_str) {
+                match modules.get(binding) {
+                    Some(target)
+                        if target.get("kind").and_then(Value::as_str) == Some("binding") => {}
+                    Some(_) => {
+                        diags.push(of(id, format!("引用的模块不是绑定: {binding}")));
+                    }
+                    None => diags.push(of(id, format!("引用不存在: {binding}"))),
+                }
+            }
             let run = string_array(step.get("run"));
             let probe = string_array(step.get("run_if_accepts"));
-            if run.is_empty() && probe.is_empty() {
-                diags.push(of(id, "管道步骤缺少适配器"));
+            if run.is_empty() && probe.is_empty() && step.get("binding").is_none() {
+                diags.push(of(id, "管道步骤缺少适配器或绑定"));
             }
             for adapter in run.into_iter().chain(probe) {
                 match modules.get(&adapter) {
@@ -122,6 +135,16 @@ fn check_source(
                     Some(_) => diags.push(of(id, format!("引用的模块不是适配器: {adapter}"))),
                     None => diags.push(of(id, format!("引用不存在: {adapter}"))),
                 }
+            }
+        }
+    }
+    // 顶层 `bindings` 便捷清单同样要存在（R10.3 双向存在性）。
+    if let Some(bindings) = module.get("bindings").and_then(Value::as_array) {
+        for binding in bindings.iter().filter_map(Value::as_str) {
+            match modules.get(binding) {
+                Some(target) if target.get("kind").and_then(Value::as_str) == Some("binding") => {}
+                Some(_) => diags.push(of(id, format!("引用的模块不是绑定: {binding}"))),
+                None => diags.push(of(id, format!("引用不存在: {binding}"))),
             }
         }
     }
@@ -276,6 +299,46 @@ fn check_adapter(id: &str, module: &Value, diags: &mut Vec<Diagnostic>) {
     if module.get("consumes").and_then(Value::as_array).is_none() {
         diags.push(of(id, "适配器缺少 consumes"));
     }
+    // R10.2 / H4：适配器落盘前走公共安全校验器。
+    for issue in security_issues(module) {
+        diags.push(of(id, format!("安全检查失败: {issue}")));
+    }
+}
+
+/// 校验 AdapterBinding（R5/R10.2/R10.3）。
+///
+/// - binding→adapter：`adapter` 必填且指向存在的适配器（悬空即失败）。
+/// - 承载参数：至少给出 `params` 或 `spec` 之一，否则等价于空壳。
+/// - R10.2：与适配器同一套公共安全检查（禁用串 / 回环 / SSRF / `javascript:` / 环境变量泄露）。
+fn check_binding(
+    id: &str,
+    module: &Value,
+    modules: &BTreeMap<String, Value>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let Some(adapter) = module.get("adapter").and_then(Value::as_str) else {
+        diags.push(of(id, "绑定缺少 adapter 引用"));
+        return;
+    };
+    match modules.get(adapter) {
+        Some(target) if target.get("kind").and_then(Value::as_str) == Some("adapter") => {}
+        Some(_) => diags.push(of(id, format!("引用的模块不是适配器: {adapter}"))),
+        None => diags.push(of(id, format!("引用不存在: {adapter}"))),
+    }
+    let has_params = module
+        .get("params")
+        .and_then(Value::as_object)
+        .is_some_and(|map| !map.is_empty())
+        || module
+            .get("spec")
+            .and_then(Value::as_object)
+            .is_some_and(|map| !map.is_empty());
+    if !has_params {
+        diags.push(of(id, "绑定未提供任何装配参数（params 或 spec）"));
+    }
+    for issue in security_issues(module) {
+        diags.push(of(id, format!("安全检查失败: {issue}")));
+    }
 }
 
 fn check_spec(id: &str, module: &Value, diags: &mut Vec<Diagnostic>) {
@@ -344,6 +407,7 @@ fn check_locks(
                 Some("source") => DocKind::Source,
                 Some("accessor") => DocKind::Accessor,
                 Some("adapter") => DocKind::Adapter,
+                Some("binding") => DocKind::AdapterBinding,
                 _ => continue,
             };
             if !accepts_target(kind, scope) {

@@ -15,3 +15,7 @@ thiserror.workspace = true
 uuid.workspace = true
 serde_yaml.workspace = true
 encoding_rs = { workspace = true }
+
+[features]
+# 监测埋点开关。由 apps/monitor 的依赖声明自动启用，开发者不必单独记。
+monitor = []

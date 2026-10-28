@@ -4,7 +4,7 @@ open: false
 protocols: [fun, http]
 depends: [strata_read, strata_write]
 stateful: true
-description: 按筛选统计、删除与恢复已采集内容
+description: 按筛选统计、打标与物理删除已采集内容
 methods:
   - id: count
     description: 统计匹配的内容条数与其中已删除的条数
@@ -16,7 +16,7 @@ methods:
         after: { type: string }
         includeTombstoned: { type: boolean }
   - id: purge
-    description: 按筛选或选中行写入墓碑
+    description: 按筛选或选中行物理删除内容
     input:
       type: object
       properties:
@@ -40,14 +40,4 @@ methods:
         unset:
           type: array
           items: { type: string }
-      required: [rids]
-  - id: restore
-    description: 撤销墓碑，把内容放回默认列表
-    input:
-      type: object
-      properties:
-        rids:
-          type: array
-          items: { type: string }
-        reason: { type: string }
       required: [rids]

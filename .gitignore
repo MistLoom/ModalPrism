@@ -1,5 +1,6 @@
-# Rust 构建产物
-/target
+# Rust / Cangjie 构建产物（`target/` 无锚定，覆盖任意层级；`/target-*` 只锚根）
+target/
+/target-*
 .probe/
 
 # 前端依赖与构建产物
@@ -20,3 +21,6 @@ __pycache__/
 /manual
 .reference/
 /AGENT.md
+
+# 本地 IDE/Agent 会话产物（审计、日志、prompt 快照）
+/.atomcode

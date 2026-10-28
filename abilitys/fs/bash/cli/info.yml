@@ -1,0 +1,11 @@
+framework_version: "1"
+binary: bash
+entry: run
+args:
+  - name: command
+    positional: true
+  - name: working_directory
+    flag: --working-directory
+  - name: block_until_ms
+    flag: --block-until-ms
+    type: integer

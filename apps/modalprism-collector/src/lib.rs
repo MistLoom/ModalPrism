@@ -1,6 +1,5 @@
 //! 采集进程。组合根直接链接 Ability，并持有调度、发布和健康循环。
 
-pub mod api;
 pub mod ops;
 
 use std::net::SocketAddr;
@@ -10,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ability_core::AbilityHost;
-use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
+use ability_support::{
+    InstanceId, LoadSpec, MethodId, SourceId, discover_ability_roots, load_ability_decl,
+};
 use assembly::{Binds, Services, policy_of};
 use frame_core::{AccessKind, Gateway, InvokeRequest};
 use serde_json::{Value, json};
@@ -68,6 +69,22 @@ pub async fn boot(
     config_dir: &Path,
     binds: Binds,
 ) -> Result<Running, assembly::Error> {
+    boot_opts(data, config_dir, binds, BootOpts::default()).await
+}
+
+/// boot 可选项（测试接缝）。
+#[derive(Clone, Debug, Default)]
+pub struct BootOpts {
+    /// 强制不安装 rawprism Guest：/parse 落回 412 前置失败（负向场景用）。
+    pub disable_parse_guest: bool,
+}
+
+pub async fn boot_opts(
+    data: &Path,
+    config_dir: &Path,
+    binds: Binds,
+    opts: BootOpts,
+) -> Result<Running, assembly::Error> {
     let http_addr = binds.http;
     let proxy_addr = binds.proxy;
     let push_addr = binds.push;
@@ -85,9 +102,40 @@ pub async fn boot(
     let push = push_listener
         .local_addr()
         .map_err(|source| assembly::Error::with_source("监听", source))?;
-    let http = reserved_http(http_addr).await?;
-    let host = link(Arc::clone(&services)).await?;
+    let http_listener = TcpListener::bind(http_addr)
+        .await
+        .map_err(|source| assembly::Error::with_source("监听", source))?;
+    let http = http_listener
+        .local_addr()
+        .map_err(|source| assembly::Error::with_source("监听", source))?;
+    let (host, parse_ready) = link(Arc::clone(&services), &opts).await?;
     let gateway = ops::gateway(Arc::clone(&host));
+    let mut api = domain_api::AppState::open(Arc::clone(&services), config_dir, data, http)
+        .await
+        .map_err(|error| assembly::Error::new(error.to_string()))?;
+    // 接线结构化解析：rawprism 经仓颉 Guest 由 host 提供（Guest 未就绪时 /parse 返回 412）。
+    {
+        let gateway = Arc::clone(&gateway);
+        let hook: domain_api::ParseHook = Arc::new(move |args: &serde_json::Value| {
+            let gateway = Arc::clone(&gateway);
+            let args = args.clone();
+            Box::pin(async move {
+                let response = gateway
+                    .invoke(frame_core::InvokeRequest::new(
+                        InstanceId::new("rawprism").map_err(|e| e.to_string())?,
+                        MethodId::new("scan").map_err(|e| e.to_string())?,
+                        args,
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(response.data)
+            }) as domain_api::ParseHookFuture
+        });
+        // AppState 此刻尚未被共享，可以安全写一次。
+        if let (Some(state), true) = (Arc::get_mut(&mut api), parse_ready) {
+            state.parse_hook = Some(hook);
+        }
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let mut tasks = Vec::new();
     let proxy_gateway = services.egress_gateway();
@@ -102,9 +150,11 @@ pub async fn boot(
     tasks.push(tokio::spawn(async move {
         assembly::serve_push(push_services, push_listener).await;
     }));
-    let http_gateway = Arc::clone(&host);
+    let maintenance = Arc::clone(&api.maintenance);
     tasks.push(tokio::spawn(async move {
-        ops::serve(http, http_gateway).await;
+        if let Err(error) = axum::serve(http_listener, domain_api::router(api)).await {
+            tracing::error!(%error, "领域 API 退出");
+        }
     }));
     wait_http(http).await?;
     let (metadata, blobs) = services.strata().backend_names();
@@ -113,7 +163,7 @@ pub async fn boot(
         .map(|route| route.display())
         .unwrap_or_else(|| "direct".into());
     println!(
-        "modalprism: data={} metadata={metadata} blobs={blobs} vectors={} http=http://{http} proxy=http://{proxy} push=http://{push} upstream={upstream} mode={}",
+        "modalprism: data={} metadata={metadata} blobs={blobs} vectors={} http=http://{http} proxy=http://{proxy} push=http://{push} upstream={upstream} parse={} mode={}",
         services.data_dir().display(),
         if services.strata().vector_accelerated() {
             "sqlite-vec"
@@ -121,11 +171,13 @@ pub async fn boot(
             "scan"
         },
         services.proxy_setting().label(),
+        if parse_ready { "ready" } else { "absent" },
     );
     tasks.extend(spawn_loops(
         Arc::clone(&host),
         Arc::clone(&services),
         Arc::clone(&stop),
+        maintenance,
     ));
     let watch = config::watch(services.config(), Duration::from_secs(2))?;
     Ok(Running {
@@ -141,20 +193,6 @@ pub async fn boot(
     })
 }
 
-async fn reserved_http(addr: SocketAddr) -> Result<SocketAddr, assembly::Error> {
-    if addr.port() != 0 {
-        return Ok(addr);
-    }
-    let probe = TcpListener::bind(addr)
-        .await
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
-    let local = probe
-        .local_addr()
-        .map_err(|source| assembly::Error::with_source("监听", source))?;
-    drop(probe);
-    Ok(local)
-}
-
 async fn wait_http(addr: SocketAddr) -> Result<(), assembly::Error> {
     for _ in 0..50 {
         if tokio::net::TcpStream::connect(addr).await.is_ok() {
@@ -168,7 +206,25 @@ async fn wait_http(addr: SocketAddr) -> Result<(), assembly::Error> {
     ))
 }
 
-async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Error> {
+fn protocol_kinds_for(workspace: &Path, id: &str) -> Vec<AccessKind> {
+    for root in discover_ability_roots(workspace) {
+        let yml = root.join("ability.yml");
+        if let Ok(decl) = load_ability_decl(&yml) {
+            if decl.id == id {
+                return decl
+                    .protocols
+                    .iter()
+                    .filter_map(|kind| AccessKind::from_protocol(*kind))
+                    .collect();
+            }
+        }
+    }
+    Vec::new()
+}
+async fn link(
+    services: Arc<Services>,
+    opts: &BootOpts,
+) -> Result<(Arc<AbilityHost>, bool), assembly::Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
     let read: Arc<dyn types::ReadCtx> = Arc::clone(&services) as Arc<dyn types::ReadCtx>;
@@ -215,15 +271,10 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
         ("workflow", ability_workflow::provider(Arc::clone(&read))),
         ("type_article", type_article::provider(Arc::clone(&read))),
     ];
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (id, provider) in providers {
-        // 协议投影的唯一来源是能力自己的 manifest（与 ability.yml 由契约测试对齐），
-        // 组合根不再平行维护一份 bool 名单。
-        let kinds: Vec<AccessKind> = provider
-            .manifest()
-            .protocols
-            .iter()
-            .filter_map(|kind| AccessKind::from_protocol(*kind))
-            .collect();
+        // 协议投影改从 ability.yml 读取（AbilityManifest 不再承载 protocols）。
+        let kinds = protocol_kinds_for(&workspace, id);
         host.install_str(id, provider)
             .await
             .map_err(|error| assembly::Error::new(error.to_string()))?;
@@ -235,22 +286,64 @@ async fn link(services: Arc<Services>) -> Result<Arc<AbilityHost>, assembly::Err
             .await
             .map_err(|error| assembly::Error::new(error.to_string()))?;
     }
-    Ok(host)
+    let parse_ready = install_parse_guest(&host, &workspace, opts).await;
+    Ok((host, parse_ready))
+}
+
+/// 安装并加载 rawprism 仓颉 Guest（结构化解析）。失败不炸启动：
+/// `/parse` 落回 412 前置失败，由 `parse=absent` 启动日志点明。
+async fn install_parse_guest(host: &Arc<AbilityHost>, workspace: &Path, opts: &BootOpts) -> bool {
+    if opts.disable_parse_guest {
+        return false;
+    }
+    let provider =
+        ability_core::GuestSourceProvider::from_workspace_rel(workspace, "abilitys/data/rawprism")
+            .into_provider();
+    let kinds = protocol_kinds_for(workspace, "rawprism");
+    let source = match SourceId::new("rawprism") {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::warn!(%error, "rawprism Guest 源标识无效");
+            return false;
+        }
+    };
+    let instance = match InstanceId::new("rawprism") {
+        Ok(instance) => instance,
+        Err(error) => {
+            tracing::warn!(%error, "rawprism Guest 实例标识无效");
+            return false;
+        }
+    };
+    if let Err(error) = host.install_str("rawprism", provider).await {
+        tracing::warn!(%error, "rawprism Guest 安装失败（需 cjpm 工具链或预构建产物）");
+        return false;
+    }
+    host.set_protocol_support("rawprism", kinds);
+    if let Err(error) = host.load(LoadSpec::new(source, instance)).await {
+        tracing::warn!(%error, "rawprism Guest 加载失败");
+        return false;
+    }
+    true
 }
 
 fn spawn_loops(
     host: Arc<AbilityHost>,
     services: Arc<Services>,
     stop: Arc<AtomicBool>,
+    maintenance: Arc<AtomicBool>,
 ) -> Vec<JoinHandle<()>> {
     let host_tick = Arc::clone(&host);
     let stop_tick = Arc::clone(&stop);
+    let maintenance_tick = Arc::clone(&maintenance);
     let tick = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
             if stop_tick.load(Ordering::Relaxed) {
                 break;
+            }
+            if maintenance_tick.load(Ordering::Relaxed) {
+                continue;
             }
             let value = match invoke(&host_tick, "planner", "round", json!({})).await {
                 Ok(value) => value,
@@ -275,11 +368,15 @@ fn spawn_loops(
     });
     let host_sweep = Arc::clone(&host);
     let stop_sweep = Arc::clone(&stop);
+    let maintenance_sweep = Arc::clone(&maintenance);
     let sweep = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
             if stop_sweep.load(Ordering::Relaxed) {
                 break;
+            }
+            if maintenance_sweep.load(Ordering::Relaxed) {
+                continue;
             }
             match invoke(&host_sweep, "committer", "sweep", json!({"dryRun": false})).await {
                 Ok(value) => {
@@ -295,12 +392,16 @@ fn spawn_loops(
     let host_flush = Arc::clone(&host);
     let services_flush = Arc::clone(&services);
     let stop_flush = Arc::clone(&stop);
+    let maintenance_flush = Arc::clone(&maintenance);
     let flush = tokio::spawn(async move {
         loop {
             let wait = assembly::flush_interval(&services_flush.config().applied());
             tokio::time::sleep(wait).await;
             if stop_flush.load(Ordering::Relaxed) {
                 break;
+            }
+            if maintenance_flush.load(Ordering::Relaxed) {
+                continue;
             }
             let value = match invoke(&host_flush, "committer", "flush", json!({})).await {
                 Ok(value) => value,
@@ -317,11 +418,15 @@ fn spawn_loops(
     let stop_health = stop;
     let host_flow = Arc::clone(&host);
     let stop_flow = Arc::clone(&stop_health);
+    let maintenance_flow = Arc::clone(&maintenance);
     let flow = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(20)).await;
             if stop_flow.load(Ordering::Relaxed) {
                 break;
+            }
+            if maintenance_flow.load(Ordering::Relaxed) {
+                continue;
             }
             let value = match invoke(&host_flow, "workflow", "tick", json!({})).await {
                 Ok(value) => value,
@@ -339,11 +444,15 @@ fn spawn_loops(
     });
     let services_derive = Arc::clone(&services);
     let stop_derive = Arc::clone(&stop_health);
+    let maintenance_derive = Arc::clone(&maintenance);
     let derive = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
             if stop_derive.load(Ordering::Relaxed) {
                 break;
+            }
+            if maintenance_derive.load(Ordering::Relaxed) {
+                continue;
             }
             // 声明式派生的执行端：没有声明时是空操作。
             let run = match services_derive.run_derivations().await {
@@ -364,12 +473,16 @@ fn spawn_loops(
             }
         }
     });
+    let maintenance_health = Arc::clone(&maintenance);
     let health = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
             if stop_health.load(Ordering::Relaxed) {
                 break;
+            }
+            if maintenance_health.load(Ordering::Relaxed) {
+                continue;
             }
             if let Err(error) = invoke(&host, "health_record", "evaluate", json!({})).await {
                 tracing::warn!(error = %error, "健康评估失败");

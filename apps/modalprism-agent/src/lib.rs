@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ability_core::AbilityHost;
-use ability_support::{InstanceId, LoadSpec, MethodId, SourceId};
+use ability_support::{
+    InstanceId, LoadSpec, MethodId, SourceId, discover_ability_roots, load_ability_decl,
+};
 use async_trait::async_trait;
 use frame_core::{AccessKind, CatalogEntry, Gateway, InvokeRequest, InvokeResponse, Port};
 use frame_port_mcp::McpPort;
@@ -91,6 +93,16 @@ impl Gateway for MethodTools {
         let (instance, method) = split_tool(request.instance.as_str())?;
         request.instance = instance;
         request.method = method;
+        // web.search / web.fetch / web.parse：代理到本机回环领域 API（只读）。
+        if request.instance.as_str() == "web" {
+            let data = web_proxy(request.method.as_str(), request.args.clone())
+                .await
+                .map_err(ability_support::Error::failed)?;
+            return Ok(InvokeResponse {
+                data,
+                locals_scope: None,
+            });
+        }
         self.inner.invoke(request).await
     }
 
@@ -129,6 +141,66 @@ fn mark_read_only(entry: &mut CatalogEntry) {
     }
 }
 
+/// web 工具 → 本机回环领域 API。只读投影：search / fetch / parse。
+fn web_provider() -> Arc<dyn ability_support::AbilityProvider> {
+    use ability_support::{AbilityId, CtxFnAbility, MethodMeta, StaticProvider};
+    use serde_json::json;
+
+    let manifest = ability_support::AbilityManifest {
+        id: AbilityId::new("web").unwrap(),
+        depends: vec![],
+        stateful: false,
+        config_schema: json!({}),
+        methods: ["search", "fetch", "parse"]
+            .iter()
+            .map(|method| MethodMeta::new(method, "", json!({ "type": "object" })))
+            .collect(),
+        events: vec![],
+    };
+    Arc::new(StaticProvider::new(Arc::new(CtxFnAbility::new(
+        manifest,
+        |ctx, args| {
+            let method = ctx
+                .method()
+                .map(|method| method.as_str().to_string())
+                .unwrap_or_default();
+            Box::pin(async move {
+                let data = web_proxy(&method, args)
+                    .await
+                    .map_err(ability_support::Error::failed)?;
+                Ok(data)
+            })
+        },
+    ))))
+}
+
+/// web 工具 → 本机回环领域 API 的 HTTP 代理。
+async fn web_proxy(method: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    let base = std::env::var("MODALPRISM_HTTP").unwrap_or_else(|_| "http://127.0.0.1:17880".into());
+    let path = match method {
+        "search" => "/api/v1/search",
+        "fetch" => "/api/v1/fetch",
+        "parse" => "/api/v1/parse",
+        other => return Err(format!("web 能力无方法 {other}")),
+    };
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{base}{path}"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("领域 API 不可达: {error}"))?;
+    let status = response.status();
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("领域 API 响应解析失败: {error}"))?;
+    if !status.is_success() {
+        return Err(format!("领域 API 返回 {status}: {value}"));
+    }
+    Ok(value)
+}
+
 fn split_tool(name: &str) -> ability_support::Result<(InstanceId, MethodId)> {
     let Some((instance, method)) = name.rsplit_once('.') else {
         return Err(ability_support::Error::not_found(name));
@@ -142,6 +214,21 @@ fn split_tool(name: &str) -> ability_support::Result<(InstanceId, MethodId)> {
     Ok((instance, method))
 }
 
+fn protocol_kinds_for(workspace: &Path, id: &str) -> Vec<AccessKind> {
+    for root in discover_ability_roots(workspace) {
+        let yml = root.join("ability.yml");
+        if let Ok(decl) = load_ability_decl(&yml) {
+            if decl.id == id {
+                return decl
+                    .protocols
+                    .iter()
+                    .filter_map(|kind| AccessKind::from_protocol(*kind))
+                    .collect();
+            }
+        }
+    }
+    Vec::new()
+}
 async fn link(root: Arc<ReadRoot>) -> Result<Arc<AbilityHost>, types::Error> {
     let host = Arc::new(AbilityHost::new());
     host.set_entry_app("modalprism");
@@ -154,15 +241,12 @@ async fn link(root: Arc<ReadRoot>) -> Result<Arc<AbilityHost>, types::Error> {
         ("type_article", type_article::provider(Arc::clone(&ctx))),
         ("type_hotlist", type_hotlist::provider(Arc::clone(&ctx))),
         ("workflow", ability_workflow::provider(Arc::clone(&ctx))),
+        ("web", web_provider()),
     ];
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (id, provider) in providers {
-        // 协议投影的唯一来源是能力自己的 manifest（与 ability.yml 由契约测试对齐）。
-        let kinds: Vec<AccessKind> = provider
-            .manifest()
-            .protocols
-            .iter()
-            .filter_map(|kind| AccessKind::from_protocol(*kind))
-            .collect();
+        // 协议投影改从 ability.yml 读取（AbilityManifest 不再承载 protocols）。
+        let kinds = protocol_kinds_for(&workspace, id);
         host.install_str(id, provider)
             .await
             .map_err(|error| types::Error::new(error.to_string()))?;
@@ -212,8 +296,10 @@ impl Gateway for ReadGateway {
     }
 }
 
-/// MCP 面按方法放行。装了能力不等于整个能力都对外：加工与目录管理在这里只开查询。
+/// MCP 面按方法放行：只读面 + 写白名单（可恢复的声明文件草稿）。
+/// 装了能力不等于整个能力都对外：删除、设置与采集驱动写一律不出去。
 fn open(instance: &str, method: &str) -> bool {
     surface::installed(surface::AGENT, instance)
-        && surface::exposes(surface::AGENT_MCP, instance, method)
+        && (surface::exposes(surface::AGENT_MCP, instance, method)
+            || surface::mcp_write_allowed(instance, method))
 }

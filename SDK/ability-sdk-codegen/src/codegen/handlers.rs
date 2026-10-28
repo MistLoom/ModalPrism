@@ -64,11 +64,7 @@ fn args_struct_fields(input: &Value) -> Result<String, String> {
     let required: Vec<&str> = input
         .get("required")
         .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str())
-                .collect::<Vec<_>>()
-        })
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
         .unwrap_or_default();
 
     let mut lines = Vec::new();
@@ -88,7 +84,10 @@ fn args_struct_fields(input: &Value) -> Result<String, String> {
 }
 
 fn schema_to_rust_type(schema: &Value) -> Result<String, String> {
-    let ty = schema.get("type").and_then(|v| v.as_str()).unwrap_or("string");
+    let ty = schema
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("string");
     match ty {
         "string" => Ok("String".into()),
         "integer" => Ok("i64".into()),

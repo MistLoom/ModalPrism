@@ -106,6 +106,11 @@ async fn agent_surface_matches_providers_manifests_and_logic() {
     );
 
     for ability in AGENT {
+        // web 是进程内合成投影（代理回环领域 API），无 ability.yml 与 logic 目录。
+        let candidate = root().join("abilitys").join(ability.id);
+        if !candidate.join("ability.yml").is_file() {
+            continue;
+        }
         let dir = ability_dir(ability.id);
         let expected = declared_methods(ability);
         assert_eq!(

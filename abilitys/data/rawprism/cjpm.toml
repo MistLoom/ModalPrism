@@ -1,0 +1,19 @@
+[package]
+  cjc-version = "1.2.0"
+  name = "rawprism_guest"
+  description = "Leaf Guest Ability wrapping the RawPrism text scan library (Cangjie)"
+  output-type = "executable"
+  compiler-option = ""
+  code-root = "."
+  src-dir = "src"
+  target-dir = "target"
+  version = "0.1.0"
+
+[dependencies]
+  rawprism = { path = "../../../../RawPrism", output-type = "static" }
+  leaf_ability_sdk = { path = "../../../SDK/ability-sdk-cj", output-type = "static" }
+  # 仅供内部测试使用 @Detector 属性宏；公开入口不依赖宏。
+  rawprism_macros = { path = "../../../../RawPrism/macros", output-type = "static" }
+
+[target.x86_64-w64-mingw32.bin-dependencies]
+  path-option = [ "${CANGJIE_STDX_PATH}/windows_x86_64_llvm/static/stdx" ]

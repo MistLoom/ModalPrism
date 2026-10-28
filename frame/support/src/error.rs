@@ -15,6 +15,14 @@ pub enum ErrorKind {
     Io,
     Upstream,
     Unavailable,
+    /// 缺少 Guest 运行时工具链（如构建器不在 PATH）。
+    ToolchainMissing,
+    /// 缺少 Guest 预构建产物。
+    ArtifactMissing,
+    /// Guest 握手 / 线协议协商失败。
+    HandshakeFailed,
+    /// 触发限流：请求被准入判定拒绝，可稍后重试。
+    RateLimited,
 }
 
 impl ErrorKind {
@@ -30,6 +38,10 @@ impl ErrorKind {
             Self::Io => "io",
             Self::Upstream => "upstream",
             Self::Unavailable => "unavailable",
+            Self::ToolchainMissing => "toolchain_missing",
+            Self::ArtifactMissing => "artifact_missing",
+            Self::HandshakeFailed => "handshake_failed",
+            Self::RateLimited => "rate_limited",
         }
     }
 
@@ -45,6 +57,10 @@ impl ErrorKind {
             "io" => Some(Self::Io),
             "upstream" => Some(Self::Upstream),
             "unavailable" => Some(Self::Unavailable),
+            "toolchain_missing" => Some(Self::ToolchainMissing),
+            "artifact_missing" => Some(Self::ArtifactMissing),
+            "handshake_failed" => Some(Self::HandshakeFailed),
+            "rate_limited" => Some(Self::RateLimited),
             _ => None,
         }
     }
@@ -158,6 +174,26 @@ impl Error {
 
     pub fn unavailable(message: impl AsRef<str>) -> Self {
         Self::new(ErrorKind::Unavailable, message)
+    }
+
+    /// 缺少 Guest 运行时工具链（如构建器不在 PATH）。
+    pub fn toolchain_missing(message: impl AsRef<str>) -> Self {
+        Self::new(ErrorKind::ToolchainMissing, message)
+    }
+
+    /// 缺少 Guest 预构建产物。
+    pub fn artifact_missing(message: impl AsRef<str>) -> Self {
+        Self::new(ErrorKind::ArtifactMissing, message)
+    }
+
+    /// Guest 握手 / 线协议协商失败。
+    pub fn handshake_failed(message: impl AsRef<str>) -> Self {
+        Self::new(ErrorKind::HandshakeFailed, message)
+    }
+
+    /// 触发限流。
+    pub fn rate_limited(message: impl AsRef<str>) -> Self {
+        Self::new(ErrorKind::RateLimited, message)
     }
 
     pub fn from_ext(kind: ErrorKind, err: impl fmt::Display) -> Self {

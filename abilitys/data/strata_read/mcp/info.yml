@@ -1,0 +1,35 @@
+framework_version: "1"
+tools:
+  - method: kinds
+    name: strata_read_kinds
+    description: strata_read kinds
+  - method: has
+    name: strata_read_has
+    description: strata_read has
+  - method: get
+    name: strata_read_get
+    description: strata_read get
+  - method: slice
+    name: strata_read_slice
+    description: strata_read slice
+  - method: resolve
+    name: strata_read_resolve
+    description: strata_read resolve
+  - method: history
+    name: strata_read_history
+    description: strata_read history
+  - method: lineage
+    name: strata_read_lineage
+    description: strata_read lineage
+  - method: related
+    name: strata_read_related
+    description: strata_read related
+  - method: query
+    name: strata_read_query
+    description: strata_read query
+  - method: changes
+    name: strata_read_changes
+    description: strata_read changes
+  - method: summary
+    name: strata_read_summary
+    description: strata_read summary

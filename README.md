@@ -63,7 +63,7 @@ Adding a site needs no commit: start from a template (RSS/Atom, web list, search
 Collection is followed by a processing stage: model declarations (`api` / `local` / `cli`) plus workflow declarations (trigger, step sequence, outputs, notifications). A step is an LLM call, a template, or an HTTP request; outputs are written back as new facets with lineage and never touch the original; every run leaves a `struct:workflow-run` record, successful or not. Notifications support webhooks and Feishu bots, testable from the console. See [`docs/specs/content-processing.md`](docs/specs/content-processing.md).
 
 ### Read-only surface for agents
-Collected data is exposed over MCP: typed queries, health status, source inventory, workflows and runs, and config provenance for any MCP-capable client; scenario-agnostic abstract types (`Article`, `HotList`) provide business views. Write methods never appear in the tool list, and the read-only process opens the data directory read-only.
+Collected data is exposed over MCP: typed queries, health status, source inventory, workflows and runs, and config provenance for any MCP-capable client; scenario-agnostic abstract types (`Article`, `HotList`) provide business views. Except for a recoverable write whitelist (creating, rewriting, and toggling source/accessor/adapter declarations), write methods never appear in the tool list, and the read-only process opens the data directory read-only.
 
 ## Architecture
 
@@ -93,8 +93,8 @@ Boundaries: only Strata touches storage; accessors reach the network solely thro
 
 | Process | Description | Surface |
 |---|---|---|
-| `modalprism-collector` | One command: initialize storage, enter the collection loop | Loopback ops HTTP `:17880` (incl. public `/api/v1`), forward proxy `:17881`, push `:17882` |
-| `modalprism-console` | Rust BFF aggregating the ops plane, hosting the SPA | HTTP, `127.0.0.1:17890` |
+| `modalprism-collector` | One command: initialize storage, expose the domain API, run the collection and processing loops | Loopback `/api/v1` on `:17880`, forward proxy `:17881`, push `:17882` |
+| `modalprism-console` (Node) | Builds and serves the SPA and proxies `/api/v1` byte-for-byte | HTTP, `127.0.0.1:17890` |
 | `modalprism-agent` | Read-only surface (query / health / source inventory / workflows & runs / provenance / type views) | MCP stdio, tools named `instance.method` |
 
 ## Quick start
@@ -129,14 +129,14 @@ Listen addresses are individually configurable: `--http 127.0.0.1:17880 --proxy 
 
 ### Start the console
 
-The frontend is Vite + React + TypeScript (pnpm). Build the web assets first, then start the BFF:
+The frontend is Vite + React + TypeScript (pnpm). Build the web assets first, then start the Node shell:
 
 ```sh
-cd apps/modalprism-console/web && pnpm install && pnpm build
-cargo run -p modalprism-console -- --ops http://127.0.0.1:17880 --bind 127.0.0.1:17890
+cd apps/modalprism-console && pnpm install && pnpm build
+node apps/modalprism-console/index.mjs --backend http://127.0.0.1:17880 --bind 127.0.0.1:17890
 ```
 
-Open `http://127.0.0.1:17890`. Front-end routes are hash-based (`#/overview`, `#/sources`, `#/channels`, `#/library`, `#/workflows`, `#/config`).
+Open `http://127.0.0.1:17890`. Navigation has eight pages and is hash-based: `#/overview`, `#/sources`, `#/tasks`, `#/content`, `#/production`, `#/outbound`, `#/logs`, `#/settings`. The Node process only hosts the SPA, serves the SPA fallback, reports Node/collector reachability at `/healthz`, and proxies `/api/v1` without transforming requests or responses.
 
 ## Declaring a source
 
@@ -204,23 +204,23 @@ Feishu setup: group bot → custom bot → copy the webhook; pick keyword verifi
 
 ## Public API
 
-Three entry points, one capability set. Full fields and examples in [`docs/specs/public-api.md`](docs/specs/public-api.md).
+Collector owns the single domain contract at `/api/v1`; the Node console proxies it unchanged. Full fields, state machines and OpenAPI are in [`docs/specs/public-api.md`](docs/specs/public-api.md) and [`public-api.openapi.yaml`](docs/specs/public-api.openapi.yaml).
 
 ### HTTP
 
-Fixed routes on the collector's ops port, without going through the console BFF:
-
 ```sh
-curl -s http://127.0.0.1:17880/api/v1/health
-curl -s "http://127.0.0.1:17880/api/v1/articles?source=hugging-face&limit=5"
-curl -s "http://127.0.0.1:17880/api/v1/articles?q=agent%20memory"
-curl -s http://127.0.0.1:17880/api/v1/articles/r_01ARZ3NDEKTSV4RRFFQ69G5FAV
-curl -s http://127.0.0.1:17880/api/v1/sources
-curl -s http://127.0.0.1:17880/api/v1/workflows
-curl -s -X POST http://127.0.0.1:17880/api/v1/process
+curl -s http://127.0.0.1:17880/api/v1/system/status
+curl -s "http://127.0.0.1:17880/api/v1/catalog/sources?limit=20"
+curl -s "http://127.0.0.1:17880/api/v1/content/items?query=agent&limit=10"
+curl -s http://127.0.0.1:17880/api/v1/operations/op_01...
+curl -s -X POST http://127.0.0.1:17880/api/v1/collection/runs \
+  -H 'idempotency-key: manual-1' -H 'content-type: application/json' \
+  -d '{"sourceId":"openai-news","mode":"normal"}'
 ```
 
-Only two write routes: run a workflow (`POST /api/v1/workflows/{slug}/run`) and advance processing once (`POST /api/v1/process`). Configuration changes are not exposed to a bare endpoint — use the console or the declaration files.
+Async actions return `202`, an Operation body and `Location`. The same surface covers catalog, collection, content, production, publication, settings, operations, observability and maintenance; there is no generic ability invoke and no raw config-file CRUD.
+
+Projects and the first-run wizard are first-class: resources bind to projects under `/projects/{projectId}/resources`, the wizard's `complete`/`skip` are order-gated (412 `preconditionFailed` when an earlier step is still pending), and `POST /search` accepts an optional `projectId` — the project must exist (404 otherwise) and a successful search is recorded as a `search_record` bound to that project. `POST /fetch` and `POST /parse` round-trip a URL to text and structured extraction; parse returns 412 until the rawprism hook is wired.
 
 ### MCP
 
@@ -230,7 +230,7 @@ For any MCP-capable client to query collected data:
 cargo run -p modalprism-agent -- --data var --config config
 ```
 
-Tools are named `instance.method`, e.g. `strata_read.query`, `type_article.project`, `catalog_admin.list`, `workflow.runs`. Write methods (`workflow.save`, `catalog_admin.create`, …) never appear in the tool list; forcing one is rejected by the gateway.
+Tools are named `instance.method`, e.g. `strata_read.query`, `type_article.project`, `catalog_admin.list`, `workflow.runs`. Writes are limited to a recoverable whitelist (`catalog_admin.create` / `update` / `toggle`, which write validated declaration files); destructive deletes (`remove`), system settings (`proxy`) and collection-driving writes (`workflow.save`, …) never appear in the tool list, and forcing one is rejected by the gateway.
 
 ### SKILL package
 
@@ -248,10 +248,10 @@ node skills/modalprism/scripts/prism.mjs run daily-digest r_01ARZ3NDEKTSV4RRFFQ6
 frame/                     LEAF framework runtime & protocol ports (vendored, pinned upstream)
 SDK/                       LEAF ability SDKs (Rust / Python / TypeScript)
 apps/ability-core/         LEAF ability host
-apps/modalprism-domain/    strata-model · strata-sqlite-vec · strata-gateway · strata-client · config · types · surface
+apps/modalprism-domain/    strata-model · strata-sqlite-vec · strata-gateway · strata-client · config · types · surface · workflow · api
 apps/modalprism-collector/ Collection process (ability/ = in-proc abilities; subsystems/ = accessors, adapters, egress, …)
 apps/modalprism-agent/     Read-only MCP process
-apps/modalprism-console/   Console (Rust BFF + web/ SPA)
+apps/modalprism-console/   Single package: Vite React SPA + Node SPA host / transparent `/api/v1` proxy
 abilitys/                  Shared abilities: strata_read · config_inspect · health · type_article · type_hotlist · catalog_admin · workflow
 config/                    System config, accessors, adapters, sources, presets, schemas (YAML / JSON)
 docs/                      Design document & implementation specs
@@ -270,7 +270,7 @@ cargo test --workspace --exclude 'frame-*' --exclude 'ability-support*' --exclud
 cargo clippy --workspace --all-targets --no-deps --exclude 'frame-*' --exclude 'ability-support*' --exclude ai-protocol --exclude ability-core -- -D warnings
 ```
 
-The workspace forbids `unsafe_code`; releases build with `lto = true`, `codegen-units = 1`. The frontend is built with pnpm under `apps/modalprism-console/web`.
+The workspace forbids `unsafe_code`; releases build with `lto = true`, `codegen-units = 1`. The frontend is built with pnpm under `apps/modalprism-console` (`pnpm build` then `pnpm start`).
 
 ## License
 

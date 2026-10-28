@@ -12,11 +12,13 @@ members = [
     "frame/port-fun",
     "frame/port-grpc",
     "apps/ability-core",
+    "apps/monitor",
     "apps/modalprism-domain/strata-model",
     "apps/modalprism-domain/strata-sqlite-vec",
     "apps/modalprism-domain/strata-gateway",
     "apps/modalprism-domain/strata-client",
     "apps/modalprism-domain/config",
+    "apps/modalprism-domain/api",
     "apps/modalprism-domain/types",
     "apps/modalprism-domain/surface",
     "apps/modalprism-domain/workflow",
@@ -27,6 +29,28 @@ members = [
     "apps/modalprism-collector/subsystems/paid",
     "apps/modalprism-collector/subsystems/planner",
     "apps/modalprism-collector/subsystems/assembly",
+    "abilitys/config/config",
+    "abilitys/storage/store",
+    "abilitys/storage/store_persist",
+    "abilitys/storage/store_temp",
+    "abilitys/content/markdown",
+    "abilitys/fs/read_file",
+    "abilitys/fs/write_file",
+    "abilitys/fs/bash",
+    "abilitys/workflow/todo_write",
+    "abilitys/workflow/task",
+    "abilitys/sample/echo",
+    "abilitys/sample/counter",
+    "abilitys/sample/shout",
+    "abilitys/eco/plugin_host",
+    "abilitys/eco/claude_mod",
+    "abilitys/eco/dsh_plugin",
+    "apps/agent-test/ability/skill",
+    "apps/agent-test/ability/prompt",
+    "apps/agent-test/ability/dispatch",
+    "apps/agent-test/ability/chat",
+    "apps/agent-test/ability/turn",
+    "apps/agent-test/ability/session",
     "abilitys/types/type_article",
     "abilitys/types/type_hotlist",
     "abilitys/data/strata_read",
@@ -47,7 +71,6 @@ members = [
     "apps/modalprism-collector/ability/strata_write",
     "apps/modalprism-collector",
     "apps/modalprism-agent",
-    "apps/modalprism-console",
 ]
 default-members = ["apps/modalprism-collector", "apps/modalprism-agent"]
 
@@ -70,7 +93,30 @@ frame-port-http = { path = "frame/port-http" }
 frame-port-mcp = { path = "frame/port-mcp" }
 frame-port-fun = { path = "frame/port-fun" }
 frame-port-grpc = { path = "frame/port-grpc" }
+ability-sdk-codegen = { path = "SDK/ability-sdk-codegen" }
+ability-config = { path = "abilitys/config/config" }
+ability-store = { path = "abilitys/storage/store" }
+ability-store-persist = { path = "abilitys/storage/store_persist" }
+ability-store-temp = { path = "abilitys/storage/store_temp" }
+ability-markdown = { path = "abilitys/content/markdown" }
+ability-read-file = { path = "abilitys/fs/read_file" }
+ability-write-file = { path = "abilitys/fs/write_file" }
+ability-bash = { path = "abilitys/fs/bash" }
+ability-todo-write = { path = "abilitys/workflow/todo_write" }
+ability-echo = { path = "abilitys/sample/echo" }
+ability-counter = { path = "abilitys/sample/counter" }
+ability-shout = { path = "abilitys/sample/shout" }
+ability-task = { path = "abilitys/workflow/task" }
 ai-protocol = { path = "frame/protocol" }
+ai-skill = { path = "apps/agent-test/ability/skill" }
+ai-prompt = { path = "apps/agent-test/ability/prompt" }
+ai-dispatch = { path = "apps/agent-test/ability/dispatch" }
+ai-chat = { path = "apps/agent-test/ability/chat" }
+ai-turn = { path = "apps/agent-test/ability/turn" }
+ai-session = { path = "apps/agent-test/ability/session" }
+ability-plugin-host = { path = "abilitys/eco/plugin_host" }
+ability-claude-mod = { path = "abilitys/eco/claude_mod" }
+ability-dsh-plugin = { path = "abilitys/eco/dsh_plugin" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
@@ -89,6 +135,7 @@ tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net",
 jsonschema = "0.59"
 notify = "8.2"
 saphyr = "0.2.2"
+ordered-float = "5"
 signal-hook = { version = "0.3", features = ["iterator"] }
 async-trait = "0.1"
 axum = "0.8"

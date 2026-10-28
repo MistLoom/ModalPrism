@@ -1,0 +1,5 @@
+framework_version: "1"
+tools:
+  - method: run
+    name: read_file
+    description: Read a file from the local filesystem.

@@ -1,0 +1,24 @@
+[package]
+name = "ai-prompt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "提示词构建器：消息装配、段落与 Skill 注入"
+
+[dependencies]
+ai-protocol = { workspace = true }
+ai-skill = { workspace = true }
+async-trait.workspace = true
+ability-support.workspace = true
+serde.workspace = true
+serde_json = { workspace = true }
+
+[build-dependencies]
+ability-sdk-codegen = { workspace = true }
+
+[dev-dependencies]
+frame-core.workspace = true
+ability-core.workspace = true
+tokio.workspace = true
+tempfile = "3"

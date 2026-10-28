@@ -436,17 +436,29 @@ async fn finish_handshake(
     config: Value,
     child: Option<std::process::Child>,
 ) -> Result<Arc<dyn Ability>> {
-    let hello = bridge.request_frame(Body::Hello).await?;
+    let hello = match bridge.request_frame(Body::Hello).await {
+        Ok(f) => f,
+        // 进程早退 / 管道断开 / 超时：握手未完成，归握手失败类。
+        Err(e) => return Err(Error::handshake_failed(format!("Guest 握手失败: {e}"))),
+    };
     let manifest = match hello.body {
         Body::Manifest { manifest } => manifest,
-        Body::Err { error } => return Err(error.into_error()),
+        // Guest 主动拒绝，或进程退出时 pump 兜底的 Err（kind=failed）：都是握手未完成。
+        Body::Err { error } => {
+            let e = error.into_error();
+            return Err(Error::handshake_failed(format!("Guest 握手失败: {e}")));
+        }
         other => {
-            return Err(Error::failed(format!(
-                "远程 Hello 应答不是 Manifest: {other:?}"
+            return Err(Error::handshake_failed(format!(
+                "Guest Hello 应答不是 Manifest: {other:?}"
             )));
         }
     };
-    bridge.request(Body::Create { config }).await?;
+    if let Err(e) = bridge.request(Body::Create { config }).await {
+        return Err(Error::handshake_failed(format!(
+            "Guest Create 应答失败: {e}"
+        )));
+    }
     if let Some(ref c) = child {
         ProcSupervisor::register(c.id());
     }
@@ -551,7 +563,6 @@ pub(crate) fn unbound_guest_manifest() -> AbilityManifest {
         id: AbilityId::new("remote.unbound").expect("id"),
         depends: vec![],
         stateful: false,
-        protocols: vec![],
         config_schema: Value::Null,
         methods: vec![MethodMeta {
             id: MethodId::new("unbound").expect("m"),
@@ -587,7 +598,16 @@ impl AbilityProvider for ProcProvider {
         if let Some(cwd) = &self.cwd {
             cmd.current_dir(cwd);
         }
-        let mut child = cmd.spawn().map_err(|e| Error::io(e.to_string()))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::toolchain_missing(format!(
+                    "Guest 运行程序不可用 {}: {e}",
+                    self.program.display()
+                ))
+            } else {
+                Error::io(e.to_string())
+            }
+        })?;
         let mut stdin = child
             .stdin
             .take()

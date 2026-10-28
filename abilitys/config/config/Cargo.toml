@@ -1,0 +1,18 @@
+[package]
+name = "ability-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ability config：load / env"
+
+[dependencies]
+async-trait.workspace = true
+ability-support.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+rust-ini = "0.21"
+
+[build-dependencies]
+ability-sdk-codegen = { workspace = true }

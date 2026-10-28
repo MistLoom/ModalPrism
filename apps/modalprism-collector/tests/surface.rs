@@ -1,10 +1,7 @@
-//! 治理清单契约（采集进程侧）。
+//! 治理清单契约：surface 声明、ability.yml、provider manifest 与 logic 文件集一致。
 //!
-//! 同一份方法集必须在四处一致：`surface` 声明、`ability.yml`、
-//! 已装载 provider 的 manifest、`src/logic/*.rs` 文件集。
-//! 任何一处漂移都让这条测试失败，避免能力面悄悄长出没人声明的方法。
-//! 另有一条守住前端调用面：`api.ts` 里出现的每一个运维调用都必须被界面面放行，
-//! 否则按钮在运行时必然被自家白名单拦死。
+//! 公共 HTTP 已由 `domain-api` 承担，前端不再直接调用 Ability；这里只守住
+//! collector 的安装面、运维面与只读 Agent 面。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -12,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use assembly::Binds;
 use config::builtin_presets;
-use surface::{Ability, COLLECTOR, COLLECTOR_OPS, CONSOLE};
+use surface::{AGENT, AGENT_MCP, Ability, COLLECTOR, COLLECTOR_OPS};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -43,7 +40,6 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// 能力目录：应用自有能力在 `ability/` 下，共享能力在 `abilitys/<科目>/` 下。
 fn ability_dir(id: &str) -> PathBuf {
     let root = root();
     let local = root.join("apps/modalprism-collector/ability").join(id);
@@ -61,7 +57,6 @@ fn ability_dir(id: &str) -> PathBuf {
 
 #[derive(serde::Deserialize)]
 struct Decl {
-    #[serde(default)]
     protocols: Vec<String>,
     methods: Vec<Declared>,
 }
@@ -114,7 +109,6 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
         .await
         .unwrap();
 
-    // manifest：已装载 provider 声明的方法集。
     let mut manifest: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in running.host().catalog() {
         manifest
@@ -122,12 +116,10 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
             .or_default()
             .insert(entry.method.as_str().to_string());
     }
-
     let mut declared: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for ability in COLLECTOR {
         declared.insert(ability.id.to_string(), declared_methods(ability));
     }
-
     assert_eq!(
         declared, manifest,
         "surface::COLLECTOR 与已装载 provider 的 manifest 不一致"
@@ -148,13 +140,14 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
             "{} 的 logic 文件漂移",
             ability.id
         );
-        // 协议声明：yml 与 provider manifest 必须一致（协议投影的唯一来源）。
         let decl = yml_decl(&dir);
-        let declared_protocols: BTreeSet<String> = decl.protocols.iter().cloned().collect();
+        let declared_protocols: BTreeSet<String> = decl.protocols.into_iter().collect();
+        // 协议不再进 manifest：以 host 实际登记的 protocol_support 为准。
         let manifest_protocols: BTreeSet<String> = running
             .host()
-            .manifest_protocols(ability.id)
+            .protocol_support(ability.id)
             .into_iter()
+            .map(|kind| kind.as_str().to_string())
             .collect();
         assert_eq!(
             declared_protocols, manifest_protocols,
@@ -163,7 +156,6 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
         );
     }
 
-    // 运维面走 HTTP，被开放的方法必须声明 http 协议；协议声明不再与运行现实脱钩。
     for exposure in COLLECTOR_OPS {
         let protocols: BTreeSet<String> = yml_decl(&ability_dir(exposure.id))
             .protocols
@@ -171,13 +163,9 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
             .collect();
         assert!(
             protocols.contains("http"),
-            "运维面引用的 {} 没有在 ability.yml 声明 http 协议",
+            "运维面引用的 {} 没有声明 http 协议",
             exposure.id
         );
-    }
-
-    // 开放面只能收窄，不能凭空多出方法。
-    for exposure in COLLECTOR_OPS {
         let ability = surface::ability(COLLECTOR, exposure.id).expect("运维面引用了未安装的能力");
         for method in exposure.methods {
             assert!(
@@ -187,82 +175,39 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
             );
         }
     }
-    for exposure in CONSOLE {
-        let ability =
-            surface::ability(COLLECTOR, exposure.id).expect("界面面引用了采集进程未安装的能力");
+
+    for exposure in AGENT_MCP {
+        let ability = surface::ability(AGENT, exposure.id).expect("MCP 面引用了未安装的能力");
         for method in exposure.methods {
             assert!(
                 ability.has(method),
-                "界面面 {} 未声明 {method}",
+                "MCP 面 {} 未声明 {method}",
                 exposure.id
             );
             assert!(
-                surface::exposes(COLLECTOR_OPS, exposure.id, method),
-                "界面面 {} {method} 超出运维面",
+                ability.is_read_only(method) || surface::mcp_write_allowed(exposure.id, method),
+                "MCP 面 {} {method} 既不是只读方法，也不在写白名单",
                 exposure.id
             );
         }
     }
 
-    running.shutdown().await.unwrap();
-}
-
-/// 从源码里抽取 `call("<instance>", "<method>"` 形态的运维调用；
-/// 只认字符串字面量，变量拼接的调用不在守护范围内。
-fn frontend_calls(source: &str) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    let bytes = source.as_bytes();
-    let mut offset = 0;
-    while let Some(at) = source[offset..].find("call") {
-        let start = offset + at;
-        offset = start + 4;
-        // `app.call(...)` 之类的方法调用不是运维入口。
-        if start > 0 && bytes[start - 1] == b'.' {
-            continue;
-        }
-        let mut rest = source[start + 4..].trim_start();
-        if rest.starts_with('<') {
-            let Some(end) = rest.find('>') else { continue };
-            rest = rest[end + 1..].trim_start();
-        }
-        let Some(rest) = rest.strip_prefix('(') else {
-            continue;
-        };
-        let Some(pair) = two_strings(rest) else {
-            continue;
-        };
-        found.push(pair);
-    }
-    found
-}
-
-fn two_strings(text: &str) -> Option<(String, String)> {
-    let (first, rest) = quoted(text)?;
-    let rest = rest.trim_start().strip_prefix(',')?;
-    let (second, _) = quoted(rest.trim_start())?;
-    Some((first, second))
-}
-
-fn quoted(text: &str) -> Option<(String, &str)> {
-    let rest = text.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some((rest[..end].to_string(), &rest[end + 1..]))
-}
-
-#[test]
-fn frontend_only_calls_whitelisted_methods() {
-    let api =
-        fs::read_to_string(root().join("apps/modalprism-console/web/src/lib/api.ts")).unwrap();
-    let mut checked = 0;
-    for (instance, method) in frontend_calls(&api) {
+    // 写白名单之外：破坏性删除、系统设置与采集驱动写永远不得出现在任何 MCP 面。
+    for (id, method) in [
+        ("catalog_admin", "remove"),
+        ("catalog_admin", "proxy"),
+        ("workflow", "save"),
+        ("workflow", "save_model"),
+        ("workflow", "remove"),
+        ("workflow", "remove_model"),
+        ("workflow", "tick"),
+        ("workflow", "toggle"),
+    ] {
         assert!(
-            surface::exposes(CONSOLE, &instance, &method),
-            "前端调用 {instance}.{method} 没有登记到界面面，运行时会被拦拒"
+            !surface::exposes(AGENT_MCP, id, method) && !surface::mcp_write_allowed(id, method),
+            "MCP 面/写白名单不得放开 {id}.{method}"
         );
-        checked += 1;
     }
-    assert!(
-        checked >= 20,
-        "扫描到的运维调用过少，解析可能失效：{checked}"
-    );
+
+    running.shutdown().await.unwrap();
 }

@@ -16,10 +16,12 @@ mod inspect;
 mod interpolate;
 mod load;
 mod merge;
+mod migration;
 mod node;
 mod presets;
 mod schema;
 mod scope;
+mod security;
 mod snapshot;
 mod store;
 mod yaml;
@@ -34,8 +36,12 @@ pub use error::{Diagnostic, Diagnostics, Error};
 pub use explain::{FieldOrigin, explain};
 pub use inspect::{domain_of_module, domain_of_path, modules};
 pub use load::{EnvSource, LoadOptions, validate};
+pub use migration::{
+    AtomicWrite, MigrationPlan, SourceMigration, apply_atomic, apply_migration, plan_migration,
+};
 pub use presets::{BuiltinPreset, builtin_presets};
 pub use scope::overlay_system_policy;
+pub use security::security_issues;
 pub use snapshot::Snapshot;
 pub use store::{ConfigStore, DEFAULT_DEBOUNCE, RestartChange, WatchHandle, watch, watch_hangup};
 pub use yaml::parse_value as parse_yaml;

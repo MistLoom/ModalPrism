@@ -4,12 +4,10 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 
 pub fn provider(services: Arc<assembly::Services>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("strata_queue")
-        .stateful()
-        .protocols(&[ProtocolKind::Fun, ProtocolKind::Http]);
+    let mut spec = AbilitySpec::must("strata_queue").stateful();
     spec = spec.on(
         "transition",
         "对选中的任务执行取消、重排或删除，单条与批量走同一状态机约束",

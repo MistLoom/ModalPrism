@@ -74,13 +74,16 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
 
     let mut stream = TcpStream::connect(running.http()).await.unwrap();
     stream
-        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .write_all(
+            b"GET /api/v1/system/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
         .await
         .unwrap();
     let mut body = Vec::new();
     stream.read_to_end(&mut body).await.unwrap();
     let text = String::from_utf8_lossy(&body);
-    assert!(text.contains("ok"), "{text}");
+    assert!(text.contains("online"), "{text}");
+    assert!(text.to_ascii_lowercase().contains("x-request-id"), "{text}");
     assert!(
         !text.to_ascii_lowercase().contains("access-control-"),
         "{text}"
@@ -89,7 +92,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
     let mut options = TcpStream::connect(running.http()).await.unwrap();
     options
         .write_all(
-            b"OPTIONS /health HTTP/1.1\r\nHost: localhost\r\nOrigin: https://evil.example\r\nAccess-Control-Request-Method: GET\r\nConnection: close\r\n\r\n",
+            b"OPTIONS /api/v1/system/status HTTP/1.1\r\nHost: localhost\r\nOrigin: https://evil.example\r\nAccess-Control-Request-Method: GET\r\nConnection: close\r\n\r\n",
         )
         .await
         .unwrap();

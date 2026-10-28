@@ -8,7 +8,7 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 use serde_json::Value;
 
 /// 新建与改写共用同一份草稿形状：`{kind, slug, doc}`。
@@ -25,12 +25,7 @@ fn draft() -> Value {
 }
 
 pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("catalog_admin").protocols(&[
-        ProtocolKind::Fun,
-        ProtocolKind::Http,
-        ProtocolKind::Mcp,
-        ProtocolKind::Tools,
-    ]);
+    let mut spec = AbilitySpec::must("catalog_admin");
     spec = spec.on(
         "templates",
         "列出新建模板",

@@ -4,7 +4,7 @@ mod logic;
 
 use std::sync::Arc;
 
-use ability_support::{AbilityProvider, AbilitySpec, ProtocolKind};
+use ability_support::{AbilityProvider, AbilitySpec};
 use serde_json::Value;
 
 /// facet 引用（`rid@kind:variant#version` 文本）。
@@ -17,12 +17,7 @@ fn facet() -> Value {
 }
 
 pub fn provider(ctx: Arc<dyn types::ReadCtx>) -> Arc<dyn AbilityProvider> {
-    let mut spec = AbilitySpec::must("strata_read").stateful().protocols(&[
-        ProtocolKind::Fun,
-        ProtocolKind::Http,
-        ProtocolKind::Mcp,
-        ProtocolKind::Tools,
-    ]);
+    let mut spec = AbilitySpec::must("strata_read").stateful();
     spec = spec.on(
         "kinds",
         "列出资源上的 facet 种类",

@@ -1,0 +1,5 @@
+framework_version: "1"
+tools:
+  - method: run
+    name: write_file
+    description: Write contents to a file.

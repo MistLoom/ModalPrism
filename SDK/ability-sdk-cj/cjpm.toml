@@ -1,0 +1,12 @@
+[package]
+  cjc-version = "1.2.0"
+  name = "leaf_ability_sdk"
+  description = "Leaf Ability Guest SDK for Cangjie (guest-protocol-1)"
+  output-type = "static"
+  compiler-option = ""
+  code-root = "."
+  src-dir = "src"
+  target-dir = "target"
+  version = "0.1.0"
+
+[dependencies]

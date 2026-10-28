@@ -32,6 +32,7 @@ fn plan() -> SourcePlan {
         spec: json!({}),
         generation: 1,
         config_hash: "hash-a".into(),
+        migration_generation: false,
         timeout: Duration::from_secs(30),
         paid: false,
         budget_requests: None,

@@ -1,0 +1,26 @@
+framework_version: "1"
+tools:
+  - method: batch
+    name: catalog_admin_batch
+    description: catalog_admin batch
+  - method: create
+    name: catalog_admin_create
+    description: catalog_admin create
+  - method: list
+    name: catalog_admin_list
+    description: catalog_admin list
+  - method: proxy
+    name: catalog_admin_proxy
+    description: catalog_admin proxy
+  - method: remove
+    name: catalog_admin_remove
+    description: catalog_admin remove
+  - method: templates
+    name: catalog_admin_templates
+    description: catalog_admin templates
+  - method: toggle
+    name: catalog_admin_toggle
+    description: catalog_admin toggle
+  - method: update
+    name: catalog_admin_update
+    description: catalog_admin update

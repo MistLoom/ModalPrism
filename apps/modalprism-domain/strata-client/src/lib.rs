@@ -773,6 +773,33 @@ impl Strata {
         Ok(self.gateway.prune(plan, dry_run).await?)
     }
 
+    /// 物理清空内容、索引、快照与对象。
+    pub async fn purge_content(&self) -> Result<strata_gateway::PurgeReport, Error> {
+        Ok(self.gateway.purge_content().await?)
+    }
+
+    /// 只清派生 facet、全文与向量索引。
+    pub async fn purge_derived(&self) -> Result<strata_gateway::PurgeReport, Error> {
+        Ok(self.gateway.purge_derived().await?)
+    }
+
+    /// 物理删除一批内容资源、派生数据与无引用对象。
+    pub async fn purge_resources(
+        &self,
+        rids: &[Rid],
+    ) -> Result<strata_gateway::PurgeReport, Error> {
+        let ids: Vec<String> = rids.iter().map(|rid| rid.as_str().to_string()).collect();
+        Ok(self.gateway.purge_resources(&ids).await?)
+    }
+
+    /// 清无引用的 blob 行与外部对象；`dry_run` 只统计。
+    pub async fn purge_unreferenced_blobs(
+        &self,
+        dry_run: bool,
+    ) -> Result<strata_gateway::PurgeReport, Error> {
+        Ok(self.gateway.purge_unreferenced_blobs(dry_run).await?)
+    }
+
     /// 各表行数。
     pub async fn store_counts(&self) -> Result<strata_gateway::maintenance::StoreCounts, Error> {
         Ok(self.gateway.store_counts().await?)

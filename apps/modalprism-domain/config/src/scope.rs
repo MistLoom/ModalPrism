@@ -9,6 +9,8 @@ pub enum DocKind {
     Profile,
     Accessor,
     Adapter,
+    /// 信源↔适配器之间的绑定装配（参数、端点模板、选择器、环境变量引用）。R3/R5/R10.3。
+    AdapterBinding,
     Source,
     Type,
     Defaults,
@@ -152,6 +154,7 @@ pub fn allows_write(kind: DocKind, scope: Scope, defaults_for: Option<DocKind>) 
         DocKind::Source => matches!(scope, Scope::Source | Scope::Shared),
         DocKind::Accessor => scope == Scope::Accessor,
         DocKind::Adapter => scope == Scope::Shared,
+        DocKind::AdapterBinding => scope == Scope::Shared,
         DocKind::Type => false,
     }
 }
@@ -163,6 +166,7 @@ pub fn accepts_target(kind: DocKind, scope: Scope) -> bool {
         DocKind::Source => matches!(scope, Scope::Source | Scope::Shared),
         DocKind::Accessor => scope == Scope::Accessor,
         DocKind::Adapter => scope == Scope::Shared,
+        DocKind::AdapterBinding => scope == Scope::Shared,
         _ => false,
     }
 }
@@ -215,6 +219,23 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "consumes",
             "produces",
         ],
+        DocKind::AdapterBinding => &[
+            "id",
+            "kind",
+            "name",
+            "description",
+            "enabled",
+            "labels",
+            "extends",
+            "policy",
+            "spec",
+            "adapter",
+            "params",
+            "endpoint",
+            "urlTemplate",
+            "selector",
+            "envRefs",
+        ],
         DocKind::Source => &[
             "id",
             "kind",
@@ -229,6 +250,7 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "paid",
             "access",
             "pipeline",
+            "bindings",
             "schedule",
             "admission",
         ],

@@ -1,0 +1,29 @@
+framework_version: "1"
+id: todo_write
+leaf_builtin: true
+open: true
+protocols: [tools, mcp, cli, http, fun]
+depends: []
+stateful: false
+methods:
+  - id: run
+    description: Update the structured todo list for the current session.
+    input:
+      type: object
+      properties:
+        todos:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              content:
+                type: string
+              status:
+                type: string
+                enum: [pending, in_progress, completed, cancelled]
+            required: [id, content, status]
+        merge:
+          type: boolean
+      required: [todos]

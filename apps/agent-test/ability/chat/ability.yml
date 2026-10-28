@@ -1,0 +1,35 @@
+framework_version: "1"
+id: chat
+leaf_builtin: true
+open: true
+protocols: [http, fun]
+depends: []
+stateful: false
+factory: true
+config_schema:
+  type: object
+  properties:
+    base_url:
+      type: string
+    api_key:
+      type: string
+    model:
+      type: string
+    timeout_ms:
+      type: integer
+  required: [base_url, model]
+methods:
+  - id: completion
+    description: 非流式聊天补全（OpenAI 兼容）
+    input:
+      type: object
+      properties:
+        messages:
+          type: array
+        tools:
+          type: array
+        tool_choice:
+          type: string
+        temperature:
+          type: number
+      required: [messages]

@@ -1,0 +1,7 @@
+framework_version: "1"
+binary: todo_write
+entry: run
+args:
+  - name: merge
+    flag: --merge
+    type: boolean

@@ -31,7 +31,9 @@ pub use api::{
 };
 pub use error::{Error, invalid_input};
 pub use listen::{serve_proxy, serve_push};
-pub use plans::{capacities, flush_interval, snapshot_interval};
+pub use plans::{
+    GateReport, capacities, dry_run_migration_gate, flush_interval, snapshot_interval,
+};
 pub use transport::{EgressGw, policy_of};
 
 use execute::{FetchState, FollowWork, NoSession};
@@ -141,6 +143,11 @@ impl Services {
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// 配置目录：声明文件的唯一位置，由组合根交给领域 API。
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
     }
 
     pub fn set_proxy(&self, url: impl Into<String>) {

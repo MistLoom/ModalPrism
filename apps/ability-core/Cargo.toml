@@ -20,6 +20,11 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+[features]
+# 监测埋点编译开关。由 apps/monitor 的依赖声明自动启用：
+# apps/monitor 依赖 ability-core 并开 monitor，feature 统一后全工作区生效。
+monitor = ["ability-support/monitor"]
+
 [dev-dependencies]
 ability-probe = { path = "../../external/ability-probe" }
 ability-sdk = { path = "../../SDK/ability-sdk" }

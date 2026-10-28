@@ -357,7 +357,11 @@ fn merge_module(
     if acc.get("enabled").is_none()
         && matches!(
             kind,
-            DocKind::Source | DocKind::Accessor | DocKind::Adapter | DocKind::Type
+            DocKind::Source
+                | DocKind::Accessor
+                | DocKind::Adapter
+                | DocKind::AdapterBinding
+                | DocKind::Type
         )
     {
         set_key(
@@ -854,6 +858,8 @@ fn kind_of(logical: &str) -> Result<DocKind, String> {
         Ok(DocKind::Accessor)
     } else if logical.starts_with("adapters/") {
         Ok(DocKind::Adapter)
+    } else if logical.starts_with("bindings/") {
+        Ok(DocKind::AdapterBinding)
     } else if logical.starts_with("sources/") {
         Ok(DocKind::Source)
     } else if logical.starts_with("types/") {
@@ -870,6 +876,7 @@ fn kind_name(kind: DocKind) -> &'static str {
         DocKind::Profile => "profile",
         DocKind::Accessor => "accessor",
         DocKind::Adapter => "adapter",
+        DocKind::AdapterBinding => "binding",
         DocKind::Source => "source",
         DocKind::Type => "type",
         DocKind::Defaults => "defaults",
@@ -880,6 +887,7 @@ fn kind_from_id(id: &str) -> Option<DocKind> {
     match id.split_once('/')?.0 {
         "accessor" => Some(DocKind::Accessor),
         "adapter" => Some(DocKind::Adapter),
+        "binding" => Some(DocKind::AdapterBinding),
         "source" => Some(DocKind::Source),
         "type" => Some(DocKind::Type),
         "profile" => Some(DocKind::Profile),

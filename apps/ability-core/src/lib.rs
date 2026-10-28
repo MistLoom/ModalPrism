@@ -10,6 +10,6 @@ mod proc;
 mod scope;
 
 pub use event_bus::{ChannelListener, EventBus};
-pub use guest_source::GuestSourceProvider;
-pub use host::{AbilityGrant, AbilityHost};
+pub use guest_source::{GuestSourceProvider, cangjie_binary_path, cangjie_package_name};
+pub use host::{AbilityGrant, AbilityHost, LoadFailure, Readiness};
 pub use proc::{ProcProvider, ProcSupervisor, connect};

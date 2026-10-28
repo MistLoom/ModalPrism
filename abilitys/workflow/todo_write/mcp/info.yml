@@ -1,0 +1,5 @@
+framework_version: "1"
+tools:
+  - method: run
+    name: todo_write
+    description: Update the structured todo list for the current session.

@@ -1,6 +1,6 @@
 //! 装配运算：依赖图、拓扑序、启用建议、卸载影响。
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use ability_support::load_ability_package;
 use frame_core::AbilityExpose;
@@ -249,7 +249,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "示例能力 algo.echo 与 app.shout 不在本仓库，目录发现结果为空"]
     fn shout_needs_echo() {
         let catalog = WorkspaceCatalog::discover();
         let graph = build_dep_graph(&catalog);

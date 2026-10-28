@@ -259,7 +259,7 @@ fn module_schema() -> Value {
         "required": ["id", "kind", "name"],
         "properties": {
             "id": {"type": "string", "minLength": 1},
-            "kind": {"enum": ["preset", "profile", "accessor", "adapter", "source", "type"]},
+            "kind": {"enum": ["preset", "profile", "accessor", "adapter", "binding", "source", "type"]},
             "name": {"type": "string", "minLength": 1},
             "description": {"type": "string"},
             "enabled": {"type": "boolean"},
@@ -365,6 +365,7 @@ fn module_schema() -> Value {
                         },
                         "run": {"type": "array", "items": {"type": "string"}},
                         "run_if_accepts": {"type": "array", "items": {"type": "string"}},
+                        "binding": {"type": "string", "pattern": "^binding/"},
                         "for": {"type": "string"},
                         "after": {"type": "string"},
                         "spec": {"type": "object"}
@@ -413,6 +414,16 @@ fn module_schema() -> Value {
                     }
                 }
             },
+            "adapter": {"type": "string", "pattern": "^adapter/"},
+            "params": {"type": "object"},
+            "endpoint": {"type": "string", "minLength": 1},
+            "urlTemplate": {"type": "string", "minLength": 1},
+            "selector": {"type": "object"},
+            "envRefs": {
+                "type": "object",
+                "additionalProperties": {"type": "string", "pattern": "^env:.+$"}
+            },
+            "bindings": {"type": "array", "items": {"type": "string", "pattern": "^binding/"}},
             "schema": {"type": "string", "minLength": 1}
         }
     })

@@ -1,0 +1,28 @@
+[package]
+name = "leaf-monitor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Leaf 底层监测 app：全局配置、异步日志、查询 CLI、TUI、可选 HTTP、开放 fun。唯一可删的监测产品组件"
+
+[lib]
+name = "leaf_monitor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "monitor"
+path = "src/main.rs"
+
+[dependencies]
+ability-core = { workspace = true, features = ["monitor"] }
+ability-support = { workspace = true, features = ["monitor"] }
+frame-core = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+ratatui = "0.29"
+crossterm = "0.28"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }

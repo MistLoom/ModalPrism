@@ -1,0 +1,43 @@
+framework_version: "cangjie@1"
+id: rawprism
+open: false
+protocols: [fun]
+depends: []
+stateful: false
+methods:
+  - id: scan
+    description: 参数输入扫描：识别输入中的结构化 / 非结构化内容与实体，返回类型计数与区域列表
+    input:
+      type: object
+  - id: scan_file
+    description: 大文件输入扫描：按路径分段读取并扫描（不做网络获取）
+    input:
+      type: object
+  - id: scan_chunks
+    description: 分段输入扫描：按调用方给定的文本分段顺序扫描
+    input:
+      type: object
+  - id: materialize
+    description: 惰性物化：按类型选择器取区域原文或对象值
+    input:
+      type: object
+  - id: query_object
+    description: 统一 Object 视图与 JSONPath（RFC 9535）查询
+    input:
+      type: object
+  - id: custom_detect
+    description: 有限自定义检测器：按起止标记声明自定义 TypeId 并扫描
+    input:
+      type: object
+  - id: scan_async
+    description: 异步扫描入口（scanAsync）：返回结果与串行一致
+    input:
+      type: object
+  - id: scan_concurrent
+    description: 并行扫描（scanConcurrent）：不同并行度下区域树一致
+    input:
+      type: object
+  - id: scan_with_cancel
+    description: 取消扫描（cancelScan）：启动后立即请求取消，返回已产生的部分结果
+    input:
+      type: object

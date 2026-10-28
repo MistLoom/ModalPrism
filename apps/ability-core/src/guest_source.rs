@@ -1,11 +1,12 @@
-//! 从能力包目录启动子进程 Guest（固定 `src/serve.mjs` / `src/serve.py`）。
+//! 从能力包目录启动子进程 Guest（固定 `src/serve.mjs` / `src/serve.py` / 仓颉可执行产物）。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use ability_support::load_ability_package;
 use ability_support::{
-    Ability, AbilityManifest, AbilityProvider, Error, Result, RuntimeKind, guest_entry_path,
+    Ability, AbilityManifest, AbilityProvider, Error, GUEST_CJPM_TOML, Result, RuntimeKind,
+    guest_entry_path,
 };
 use async_trait::async_trait;
 
@@ -14,19 +15,39 @@ use crate::proc::ProcProvider;
 /// 按能力根目录解析并拉起 Guest 子进程。
 pub struct GuestSourceProvider {
     root: PathBuf,
+    /// 仅认预构建产物：仓颉 Guest 不现场构建，缺产物直接报 `artifact_missing`。
+    prebuilt_only: bool,
+    /// 仓颉构建器程序名（默认 `cjpm`；测试可注入以模拟缺工具链）。
+    cangjie_build_program: OsStringBox,
     cached: StdMutex<Option<AbilityManifest>>,
 }
+
+type OsStringBox = std::ffi::OsString;
 
 impl GuestSourceProvider {
     pub fn from_root(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
+            prebuilt_only: false,
+            cangjie_build_program: OsStringBox::from("cjpm"),
             cached: StdMutex::new(None),
         }
     }
 
     pub fn from_workspace_rel(workspace: &Path, rel: impl AsRef<Path>) -> Self {
         Self::from_root(workspace.join(rel.as_ref()))
+    }
+
+    /// 仅用预构建产物：不现场编译；缺产物归 `artifact_missing` 错误类。
+    pub fn prebuilt_only(mut self, on: bool) -> Self {
+        self.prebuilt_only = on;
+        self
+    }
+
+    /// 覆盖仓颉构建器程序（默认 `cjpm`）。
+    pub fn cangjie_build_program(mut self, program: impl Into<OsStringBox>) -> Self {
+        self.cangjie_build_program = program.into();
+        self
     }
 
     pub fn into_provider(self) -> Arc<dyn AbilityProvider> {
@@ -81,8 +102,100 @@ impl GuestSourceProvider {
                     .env("PYTHONPATH", path)
                     .current_dir(&self.root))
             }
+            RuntimeKind::Cangjie => {
+                let binary = self.cangjie_binary()?;
+                Ok(ProcProvider::new(binary).current_dir(&self.root))
+            }
         }
     }
+
+    /// 定位仓颉 Guest 可执行产物；缺产物时按模式构建或报 `artifact_missing`。
+    fn cangjie_binary(&self) -> Result<PathBuf> {
+        let name = cangjie_package_name(&self.root)
+            .ok_or_else(|| Error::failed(format!("无法从 {GUEST_CJPM_TOML} 解析包名")))?;
+        let binary = cangjie_binary_path(&self.root, &name);
+        if binary.is_file() {
+            return Ok(binary);
+        }
+        if self.prebuilt_only {
+            return Err(Error::artifact_missing(format!(
+                "仅用预构建模式：缺少仓颉产物 {}（请先构建后再装载）",
+                binary.display()
+            )));
+        }
+        self.cangjie_build(&binary)?;
+        if binary.is_file() {
+            return Ok(binary);
+        }
+        Err(Error::artifact_missing(format!(
+            "构建后仍未找到仓颉产物 {}（请检查 {GUEST_CJPM_TOML} output-type 与包名）",
+            binary.display()
+        )))
+    }
+
+    fn cangjie_build(&self, binary: &Path) -> Result<()> {
+        use std::process::Command;
+        let output = Command::new(&self.cangjie_build_program)
+            .arg("build")
+            .current_dir(&self.root)
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Error::toolchain_missing(format!(
+                        "仓颉构建器 {} 不可用（未安装或不在 PATH）：{e}",
+                        self.cangjie_build_program.to_string_lossy()
+                    ))
+                } else {
+                    Error::io(e.to_string())
+                }
+            })?;
+        if !output.status.success() {
+            let tail = String::from_utf8_lossy(&output.stderr);
+            let tail = tail.lines().rev().take(10).collect::<Vec<_>>();
+            let tail: Vec<&str> = tail.into_iter().rev().collect();
+            return Err(Error::failed(format!(
+                "仓颉构建失败（期望产物 {}）：{}",
+                binary.display(),
+                tail.join("\n")
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// 从 `cjpm.toml` 的 `[package] name = "..."` 解析包名。
+pub fn cangjie_package_name(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join(GUEST_CJPM_TOML)).ok()?;
+    let mut in_package = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("name") {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let v = rest.trim().trim_matches('"');
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 仓颉 Guest 可执行产物约定路径：`target/release/<包名>[.exe]`。
+pub fn cangjie_binary_path(root: &Path, package_name: &str) -> PathBuf {
+    let mut p = root.join("target").join("release").join(package_name);
+    if cfg!(windows) {
+        p.set_extension("exe");
+    }
+    p
 }
 
 #[async_trait]
