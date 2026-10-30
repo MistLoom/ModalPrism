@@ -9,7 +9,7 @@ for _anc in Path(__file__).resolve().parents:
         sys.path.insert(0, str(_sdk))
         break
 
-from leaf_ability_sdk import serve_ability
+from leaf_ability_sdk import pending, serve_ability
 
 
 def ping(ctx, _args):
@@ -17,5 +17,21 @@ def ping(ctx, _args):
     return {"ok": True, "from": "external-py"}
 
 
+def slow(_ctx, args):
+    args = args or {}
+    ms = int(args.get("ms", 150))
+    fail = bool(args.get("fail"))
+
+    def work():
+        import time
+
+        time.sleep(ms / 1000.0)
+        if fail:
+            raise RuntimeError("boom")
+        return {"slept": ms}
+
+    return pending(work)
+
+
 if __name__ == "__main__":
-    serve_ability({"ping": ping})
+    serve_ability({"ping": ping, "slow": slow})

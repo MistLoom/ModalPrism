@@ -46,6 +46,9 @@ impl QueueName {
 pub struct AccessTask {
     pub task_id: TaskId,
     pub source_id: SourceId,
+    /// 所属采集计划。去重键带上计划维度，使「一信源多计划/多策略」互不吞并。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
     pub accessor: String,
     pub locator: Locator,
     pub spec: Value,
@@ -59,7 +62,21 @@ pub struct AccessTask {
     pub generation: u64,
 }
 
+/// 计划维度 + 定位符合成为队列去重键。计划为空时退化为纯定位符 JSON（历史兼容）。
+pub fn compose_locator_key(plan_id: Option<&str>, locator: &Locator) -> String {
+    let body = serde_json::to_string(locator).unwrap_or_default();
+    match plan_id {
+        Some(plan) if !plan.is_empty() => format!("{plan}\u{1}{body}"),
+        _ => body,
+    }
+}
+
 impl AccessTask {
+    /// 队列去重键：同信源、同计划、同定位符视为同一活跃任务。
+    pub fn locator_key(&self) -> String {
+        compose_locator_key(self.plan_id.as_deref(), &self.locator)
+    }
+
     pub fn validate(&self) -> Result<(), ModelError> {
         self.locator.validate()?;
         if self.accessor.is_empty() || self.batch_key.as_ref().is_some_and(|key| key.is_empty()) {

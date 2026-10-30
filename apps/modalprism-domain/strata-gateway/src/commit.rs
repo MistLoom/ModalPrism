@@ -190,9 +190,14 @@ async fn resolve(
                     None => Namespace::Data.to_string(),
                 };
                 let key = IdentityKey::parse(identity)?;
+                // 内容按 url/ext 身份去重，来源不属于身份本身：采集侧用 `source` 标签记录
+                // 首个采集它的信源，这里把它落成 `resources.source_id`，供项目可见性过滤。
                 let source_id = match &key {
                     IdentityKey::Source { source_id, .. } => Some(source_id.clone()),
-                    _ => None,
+                    _ => labels
+                        .get("source")
+                        .filter(|value| !value.is_empty())
+                        .cloned(),
                 };
                 if let Some(existing) = heads.identities.get(identity) {
                     aliases.insert(r#as.clone(), existing.clone());

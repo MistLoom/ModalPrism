@@ -15,7 +15,10 @@ use ability_support::AbilityPackageMeta;
 pub fn write_all(meta: &AbilityPackageMeta, out_dir: &Path) -> Result<(), String> {
     let root = &meta.root;
 
-    write::write_generated(&out_dir.join("manifest.rs"), &manifest::generate(meta)?)?;
+    write::write_generated(
+        &out_dir.join("manifest.rs"),
+        &manifest::generate(meta)?,
+    )?;
 
     if meta.decl.uses_handlers() {
         write::write_generated(
@@ -23,7 +26,10 @@ pub fn write_all(meta: &AbilityPackageMeta, out_dir: &Path) -> Result<(), String
             &handlers::generate(meta)?,
         )?;
         write::write_generated(&out_dir.join("bridge.rs"), &bridge::generate(meta)?)?;
-        write::write_generated(&out_dir.join("provider.rs"), &provider::generate(meta)?)?;
+        write::write_generated(
+            &out_dir.join("provider.rs"),
+            &provider::generate(meta)?,
+        )?;
 
         let mod_rs = r#"// 自动生成，勿手改
 pub mod manifest;

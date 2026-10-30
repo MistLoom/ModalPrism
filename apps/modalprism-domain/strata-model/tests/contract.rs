@@ -285,6 +285,7 @@ fn access_task_roundtrip() {
     let task = AccessTask {
         task_id: "task-1".parse_id(),
         source_id: "source/example-blog".parse_id(),
+        plan_id: None,
         accessor: "accessor/http".into(),
         locator: Locator::Url {
             url: "https://example.com/blog/".into(),

@@ -29,20 +29,25 @@ fn init_log() {
 }
 
 async fn run() -> Result<(), assembly::Error> {
-    let mut args = env::args().skip(1);
+    let mut args: Vec<String> = env::args().skip(1).collect();
     // 一等公民动词：面向既有运行实例（默认 http://127.0.0.1:17880）。
-    if let Some(verb) = args.next() {
+    // 其余参数一律是服务端开关（--data/--config/--http/--proxy/--push）；
+    // 只有既非动词也非开关的裸参数才报错，避免把 `--data` 当成未知动词。
+    if let Some(first) = args.first() {
         if matches!(
-            verb.as_str(),
+            first.as_str(),
             "search" | "fetch" | "parse" | "project" | "preconditions"
         ) {
-            return cli_verb(&verb, args.collect()).await;
+            let verb = args.remove(0);
+            return cli_verb(&verb, args).await;
         }
-        return Err(assembly::Error::new(format!(
-            "未知参数或动词: {verb}（可用动词: search / fetch / parse / project / preconditions）"
-        )));
+        if !first.starts_with("--") {
+            return Err(assembly::Error::new(format!(
+                "未知参数或动词: {first}（可用动词: search / fetch / parse / project / preconditions；服务端开关以 -- 开头）"
+            )));
+        }
     }
-    let running = serve_from(args.collect()).await?;
+    let running = serve_from(args).await?;
     tokio::select! {
         result = tokio::signal::ctrl_c() => {
             result.map_err(|source| assembly::Error::with_source("信号", source))?;

@@ -30,12 +30,17 @@ fn guest_sdk_covers_ctx_api_spec() {
         serde_json::from_str(&std::fs::read_to_string(&spec_path).expect("read spec"))
             .expect("parse");
 
-    let ts_guest = std::fs::read_to_string(repo_root().join("SDK/ability-sdk-ts/lib/guest.js"))
-        .expect("read guest.js");
+    let ts_guest =
+        std::fs::read_to_string(repo_root().join("SDK/ability-sdk-ts/lib/guest.js"))
+            .expect("read guest.js");
     let py_guest = std::fs::read_to_string(
         repo_root().join("SDK/ability-sdk-py/src/leaf_ability_sdk/guest.py"),
     )
     .expect("read guest.py");
+    let cj_guest = std::fs::read_to_string(
+        repo_root().join("SDK/ability-sdk-cj/src/guest.cj"),
+    )
+    .expect("read guest.cj");
 
     for entry in &spec.methods {
         if entry.internal == Some(true) {
@@ -51,6 +56,13 @@ fn guest_sdk_covers_ctx_api_spec() {
         assert!(
             py_guest.contains(&format!("def {py_name}(")),
             "Python guest 缺少方法 {py_name}"
+        );
+        // 仓颉公开方法为 camelCase，与 TS 同名（如 localGet / pushEffect）。
+        assert!(
+            cj_guest.contains(&format!("func {}(", entry.method))
+                || cj_guest.contains(&format!("public func {}(", entry.method)),
+            "Cangjie guest 缺少方法 {}",
+            entry.method
         );
     }
 

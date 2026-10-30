@@ -13,15 +13,22 @@ use serde_json::{Value, json};
 use strata_client::{TaskFilter, TaskRow};
 
 use crate::error::ApiError;
-use crate::util::{self, cursor, cursor_offset, page};
+use crate::util::{self, cursor, cursor_offset, page, page_total};
 use crate::{AppState, Shared, new_id, now};
+
+/// 任务列表的一次性扫描上限：页码分页的 total 以此为封顶口径。
+const QUEUE_SCAN: usize = 1_000;
 
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/operations/tasks", get(list_tasks))
         .route("/operations/tasks/batch", post(batch_tasks))
         .route("/operations/tasks/purge", post(purge_tasks))
+        .route("/operations/tasks/{taskId}/run", post(run_task))
         .route("/operations/queues", get(list_queues))
+        .route("/operations/queues/{queueId}/pause", post(pause_queue))
+        .route("/operations/queues/{queueId}/resume", post(resume_queue))
+        .route("/operations/derivations/run", post(run_derivations))
         .route("/operations/health", get(current_health))
         .route("/operations/healthHistory", get(list_health_history))
         .route("/operations/healthRecomputations", post(recompute_health))
@@ -40,11 +47,16 @@ pub(crate) struct ListQuery {
     #[serde(default)]
     cursor: Option<String>,
     #[serde(default)]
+    offset: Option<String>,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     kind: Option<String>,
     #[serde(default)]
     source_id: Option<String>,
+    /// `all` 取消项目隔离过滤（管理与迁移用）。
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 /// 异步动作的统一入口：先落 Operation，再交给后台 worker。
@@ -117,22 +129,16 @@ async fn run(state: Shared, id: String, action: Value) {
         "collection.run" => crate::collection::execute_run(&state, &id, &action).await,
         "content.batch" => crate::content::execute_batch(&state, &id, &action).await,
         "content.replay" => crate::content::execute_replay(&state, &id, &action).await,
-        "production.run" => crate::production::execute_run(&state, &id, &action).await,
-        "production.retry" => crate::production::execute_retry(&state, &id, &action).await,
-        "publication.publish" => crate::publication::execute_publish(&state, &id, &action).await,
-        "publication.schedule" => {
-            crate::publication::execute_scheduled_publish(&state, &id, &action).await
-        }
-        "delivery.retry" => crate::publication::execute_delivery_retry(&state, &id, &action).await,
-        "notification.test" => {
-            crate::publication::execute_notification_test(&state, &id, &action).await
-        }
-        "egressHost.reset" => crate::publication::execute_egress_reset(&state, &id, &action).await,
+        "delivery.manual" => crate::delivery::execute_manual(&state, &id, &action).await,
+        "channel.test" => crate::channels::execute_channel_test(&state, &id, &action).await,
+        "egressHost.reset" => crate::channels::execute_egress_reset(&state, &id, &action).await,
         "settings.apply" => crate::settings::execute_apply(&state, &id, &action).await,
         "settings.rollback" => crate::settings::execute_rollback(&state, &id, &action).await,
         "health.recompute" => execute_health(&state, &id, &action).await,
         "logs.export" => crate::observe::execute_export(&state, &id, &action).await,
         "tasks.batch" => execute_task_batch(&state, &id, &action).await,
+        "task.run" => execute_task_run(&state, &id, &action).await,
+        "derivation.run" => execute_derivation_run(&state, &id, &action).await,
         "maintenance.reset" => crate::maintenance::execute_reset(&state, &id, &action).await,
         "maintenance.factoryReset" => {
             crate::maintenance::execute_factory_reset(&state, &id, &action).await
@@ -155,13 +161,50 @@ async fn run(state: Shared, id: String, action: Value) {
                 "succeeded"
             };
             finish(&state, &id, status, 1.0, Some(result), None, partial).await;
+            notify_finished(&state, &kind, status, None).await;
         }
         Err(error) => {
             let retryable = error.retryable;
             let summary = error.body()["error"].clone();
-            finish(&state, &id, "failed", 1.0, None, Some(summary), retryable).await;
+            let message = error.message.clone();
+            finish(
+                &state,
+                &id,
+                "failed",
+                1.0,
+                None,
+                Some(summary),
+                retryable,
+            )
+            .await;
+            notify_finished(&state, &kind, "failed", Some(message)).await;
         }
     }
+}
+
+/// 终态操作 → 通知事件：只映射用户关心的几类，其余仅留日志。
+async fn notify_finished(state: &AppState, kind: &str, status: &str, error: Option<String>) {
+    let Some((category, label)) = (match kind {
+        "collection.run" => Some(("source", "采集任务")),
+        "delivery.manual" => Some(("delivery", "内容投递")),
+        "channel.test" => Some(("delivery", "渠道连通检测")),
+        _ => None,
+    }) else {
+        return;
+    };
+    let level = if status == "failed" { "warn" } else { "info" };
+    let status_text = match status {
+        "succeeded" => "已完成",
+        "partiallySucceeded" => "部分完成",
+        "failed" => "失败",
+        "cancelled" => "已取消",
+        other => other,
+    };
+    let message = match error {
+        Some(error) if !error.is_empty() => format!("{status_text}（{error}）"),
+        _ => status_text.to_string(),
+    };
+    crate::notifications::emit(state, category, level, format!("{label}结束"), message).await;
 }
 
 async fn update(state: &AppState, id: &str, status: &str, progress: f64) {
@@ -269,23 +312,6 @@ pub async fn recover_interrupted(state: std::sync::Arc<AppState>) {
             });
             continue;
         }
-        if kind == "publication.schedule" {
-            let publication_id = stored.action["publicationId"].as_str().unwrap_or_default();
-            if let Ok(Some(doc)) = state
-                .store
-                .get_document("publication", publication_id)
-                .await
-                && doc.body["status"] == "scheduled"
-            {
-                let task_state = std::sync::Arc::clone(&state);
-                tokio::spawn(async move {
-                    run(task_state, id, stored.action).await;
-                });
-                continue;
-            }
-        }
-        crate::publication::recover_interrupted(&state, &stored.action).await;
-        crate::production::recover_interrupted(&state, &stored.action).await;
         let failed = status != "cancelling";
         let error = failed.then(|| {
             json!({
@@ -543,6 +569,8 @@ struct HistoryQuery {
     #[serde(default)]
     cursor: Option<String>,
     #[serde(default)]
+    offset: Option<String>,
+    #[serde(default)]
     source_id: Option<String>,
 }
 
@@ -552,7 +580,7 @@ async fn list_health_history(
 ) -> Result<Response, ApiError> {
     let limit = util::limit(query.limit.as_deref())?;
     let filter = format!("health:{}", query.source_id.clone().unwrap_or_default());
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     let docs = state.store.list_documents("health_history").await?;
     let retention = crate::settings::value(&state, "retention.healthHistoryLimit")
         .await?
@@ -588,7 +616,7 @@ async fn list_health_history(
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 async fn recompute_health(
@@ -610,6 +638,7 @@ async fn recompute_health(
 
 async fn list_tasks(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let limit = util::limit(query.limit.as_deref())?;
@@ -629,7 +658,28 @@ async fn list_tasks(
         query.source_id.clone().unwrap_or_default(),
         kind.unwrap_or("")
     );
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
+    // 项目隔离：任务归属由自有信源的 sourceId 派生；共享信源不把他项目的任务带过来，
+    // 无来源的系统任务只在 scope=all 下展示。
+    let active = project.id().to_string();
+    let allowed = if query.scope.as_deref() == Some("all") {
+        None
+    } else {
+        Some(crate::catalog::owned_source_ids(&state, &active).await?)
+    };
+    let visible = |source_id: Option<&str>, owner: Option<&str>| -> bool {
+        if allowed.is_none() {
+            return true;
+        }
+        if let Some(owner) = owner.filter(|value| !value.is_empty()) {
+            return owner == active;
+        }
+        match source_id.filter(|value| !value.is_empty()) {
+            Some(id) => allowed.as_ref().is_some_and(|set| set.contains(id)),
+            // 无来源的维护任务不归属任何项目，避免跨项目泄露：只在 scope=all 可见。
+            None => false,
+        }
+    };
     let mut items = Vec::new();
     if kind.is_none() || kind == Some("collection") || kind == Some("derived") {
         let task_filter = TaskFilter {
@@ -638,21 +688,20 @@ async fn list_tasks(
         };
         let result = state
             .services
-            .queue_list(&task_filter, None, 200)
+            .queue_list(&task_filter, None, QUEUE_SCAN)
             .await
             .map_err(ApiError::from)?;
         for row in result.rows {
             let view = task_view(&row);
+            if !visible(view["sourceId"].as_str(), view["project"].as_str()) {
+                continue;
+            }
             if status.is_none_or(|expected| view["status"] == expected) {
                 items.push(view);
             }
         }
     }
-    if kind.is_none()
-        || kind == Some("production")
-        || kind == Some("publication")
-        || kind == Some("maintenance")
-    {
+    if kind.is_none() || kind == Some("maintenance") {
         for doc in state.store.list_documents("task").await? {
             if let Some(status) = status
                 && doc.body["status"] != status
@@ -662,6 +711,12 @@ async fn list_tasks(
             if let Some(want) = kind
                 && doc.body["kind"] != want
             {
+                continue;
+            }
+            if !visible(
+                doc.body["sourceId"].as_str(),
+                doc.body["project"].as_str(),
+            ) {
                 continue;
             }
             items.push(doc.body);
@@ -682,7 +737,7 @@ async fn list_tasks(
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 fn task_view(row: &TaskRow) -> Value {
@@ -706,6 +761,7 @@ fn task_view(row: &TaskRow) -> Value {
         "status": status,
         "title": row.source_id,
         "sourceId": row.source_id,
+        "planId": row.plan_id,
         "queue": row.queue,
         "reason": row.reason,
         "attempt": row.attempt,
@@ -719,6 +775,7 @@ fn task_view(row: &TaskRow) -> Value {
 
 async fn batch_tasks(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let map = util::object(&body)?;
@@ -730,6 +787,34 @@ async fn batch_tasks(
             "outOfRange",
             "数量需要在 1 到 1000 之间",
         ));
+    }
+    // 项目隔离：批量动作只能落到当前项目自有信源的任务上，否则按不存在处理。
+    let allowed = crate::catalog::owned_source_ids(&state, project.id()).await?;
+    let queued = state
+        .services
+        .queue_list(&TaskFilter::default(), None, QUEUE_SCAN)
+        .await
+        .map_err(ApiError::from)?
+        .rows
+        .into_iter()
+        .map(|row| (row.task_id.clone(), row.source_id.clone()))
+        .collect::<std::collections::HashMap<String, String>>();
+    for id in &ids {
+        let (owner, source) = match state.store.get_document("task", id).await? {
+            Some(doc) => (
+                doc.body["project"].as_str().map(str::to_string),
+                doc.body["sourceId"].as_str().map(str::to_string),
+            ),
+            None => (None, queued.get(id).cloned()),
+        };
+        let visible = match (owner.as_deref(), source.as_deref()) {
+            (Some(owner), _) => owner == project.id(),
+            (None, Some(source)) => allowed.contains(source),
+            (None, None) => false,
+        };
+        if !visible {
+            return Err(ApiError::not_found(format!("任务 {id}")));
+        }
     }
     let action = util::text(map, "action")?;
     if !matches!(action.as_str(), "cancel" | "retry" | "requeue" | "delete") {
@@ -825,6 +910,41 @@ async fn execute_task_batch(
         "partial": !failed.is_empty() && !succeeded.is_empty(),
         "succeeded": succeeded,
         "failed": failed,
+    }))
+}
+
+/// 立即执行单条任务：控制台传入任务号，不碰 spec、不拼任务体。
+async fn run_task(
+    State(state): State<Shared>,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    if strata_model::TaskId::new(&task_id).is_err() {
+        return Err(ApiError::not_found(format!("任务 {task_id}")));
+    }
+    let operation = start(
+        &state,
+        "task.run",
+        vec![json!({"kind": "task", "id": task_id.clone()})],
+        json!({"kind": "task.run", "taskId": task_id}),
+    )
+    .await?;
+    Ok(accepted(&operation))
+}
+
+async fn execute_task_run(
+    state: &AppState,
+    _operation_id: &str,
+    action: &Value,
+) -> Result<Value, ApiError> {
+    let id = action["taskId"].as_str().unwrap_or_default();
+    let task_id =
+        strata_model::TaskId::new(id).map_err(|_| ApiError::not_found(format!("任务 {id}")))?;
+    let row = state.services.task_run(&task_id).await?;
+    Ok(json!({
+        "partial": false,
+        "taskId": row.task_id,
+        "status": row.status,
+        "error": row.last_error,
     }))
 }
 
@@ -1007,6 +1127,16 @@ async fn list_queues(State(state): State<Shared>) -> Result<Response, ApiError> 
     let items: Vec<Value> = states
         .into_iter()
         .map(|queue| {
+            // 排队却派发不动的可解释原因：暂停优先，其次并发上限已被占满。
+            let stalled =
+                queue.queued > 0 && (queue.paused || (queue.leased as usize) >= queue.capacity);
+            let reason = if queue.paused && queue.queued > 0 {
+                "队列已暂停"
+            } else if stalled {
+                "并发已满"
+            } else {
+                ""
+            };
             json!({
                 "id": queue.queue,
                 "queued": queue.queued,
@@ -1015,31 +1145,82 @@ async fn list_queues(State(state): State<Shared>) -> Result<Response, ApiError> 
                 "cancelled": queue.cancelled,
                 "capacity": queue.capacity,
                 "paused": queue.paused,
+                "stalled": stalled,
+                "reason": reason,
             })
         })
         .collect();
     Ok(util::ok(&page(items, None)))
 }
 
-/// 把控制面任务写入统一任务流。
-pub async fn record_task(state: &AppState, task: Value) -> Result<(), ApiError> {
-    let id = task["id"].as_str().unwrap_or_default().to_string();
-    if id.is_empty() {
-        return Ok(());
-    }
-    if let Some(current) = state.store.get_document("task", &id).await? {
-        let mut body = current.body;
-        if let (Value::Object(target), Value::Object(source)) = (&mut body, &task) {
-            for (key, value) in source {
-                target.insert(key.clone(), value.clone());
-            }
+async fn pause_queue(
+    State(state): State<Shared>,
+    Path(queue_id): Path<String>,
+) -> Result<Response, ApiError> {
+    set_queue_paused(&state, &queue_id, true).await
+}
+
+async fn resume_queue(
+    State(state): State<Shared>,
+    Path(queue_id): Path<String>,
+) -> Result<Response, ApiError> {
+    set_queue_paused(&state, &queue_id, false).await
+}
+
+/// 队列级暂停/恢复：能力早已存在（`Services::queue_pause`），这里补上控制台入口。
+async fn set_queue_paused(
+    state: &Shared,
+    queue_id: &str,
+    paused: bool,
+) -> Result<Response, ApiError> {
+    let queue = match queue_id {
+        "free" => strata_model::QueueName::Free,
+        "paid" => strata_model::QueueName::Paid,
+        "render" => strata_model::QueueName::Render,
+        "push" => strata_model::QueueName::Push,
+        other => {
+            return Err(ApiError::validation(
+                "queueId",
+                "enum",
+                format!("未知队列: {other}"),
+            ));
         }
-        state
-            .store
-            .update_document("task", &id, &body, Some(current.version))
-            .await?;
-    } else {
-        state.store.insert_document("task", &id, &task).await?;
-    }
-    Ok(())
+    };
+    state
+        .services
+        .queue_pause(queue, paused)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(util::ok(&json!({ "id": queue_id, "paused": paused })))
+}
+
+/// 立即执行一轮声明式派生：把 30s 自动循环的能力补上手动入口（与采集同构）。
+async fn run_derivations(State(state): State<Shared>) -> Result<Response, ApiError> {
+    let operation = start(
+        &state,
+        "derivation.run",
+        vec![json!({"kind": "derivationRun", "id": new_id("drun")})],
+        json!({"kind": "derivation.run"}),
+    )
+    .await?;
+    Ok(accepted(&operation))
+}
+
+async fn execute_derivation_run(
+    state: &AppState,
+    _operation_id: &str,
+    _action: &Value,
+) -> Result<Value, ApiError> {
+    let run = state
+        .services
+        .run_derivations()
+        .await
+        .map_err(ApiError::from)?;
+    Ok(json!({
+        "partial": false,
+        "leased": run.leased,
+        "produced": run.produced,
+        "skipped": run.skipped,
+        "failed": run.failed,
+    }))
 }

@@ -6,7 +6,9 @@
 > - 来源：自 `D:\Project\Leaf\external\rawprism` 复制（不含 `target/`）
 > - `cjpm.toml` 依赖已改为相对本仓：`SDK/ability-sdk-cj`；RawPrism 库指向仓库外同级 `D:\Project\RawPrism`（`../../../../RawPrism`）
 > - **Host**：`RuntimeKind` 已含 `Cangjie`；`cangjie@1` / `cj@1` 可解析，compose 与 Guest 装载路径可用。
-> - **装载前提**：需仓颉工具链（`cjpm`）或预构建产物。Host 约定产物为 `target/release/<包名>`（本包 `rawprism_guest[.exe]`）。若构建实际落到 `bin/main.exe` 等非约定路径，或缺少工具链，装载会失败——这是产物/工具链问题，不是 RuntimeKind 缺失。
+> - **装载前提**：需仓颉工具链（`cjpm`）或预构建产物。Host 约定产物为 `target/release/<包名>`（本包 `rawprism_guest[.exe]`）。`cjpm build` 实际把可执行文件落在 `target/release/bin/main.exe`，构建后需复制到位：
+>   `Copy-Item target\release\bin\main.exe target\release\rawprism_guest.exe`
+>   未复制或缺工具链时装载会失败——这是产物/工具链问题，不是 RuntimeKind 缺失。
 > - collector 已在 boot 路径接线 `install_parse_guest`；本包不加入 Cargo workspace members（仓颉包不走 Cargo member）。
 
 # rawprism（仓颉 Guest Ability）

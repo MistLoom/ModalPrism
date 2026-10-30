@@ -1,85 +1,117 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { IconPlus, IconRefresh } from "../components/icons";
-import { Badge, Card, Empty, Field, Loading, Problem, useUi } from "../components/ui";
+import { IconChevronRight, IconHistory, IconPlus, IconRefresh } from "../components/icons";
+import { RunsDrawer } from "../components/RunsDrawer";
+import { Badge, Card, Empty, Field, Loading, Modal, Problem, useUi } from "../components/ui";
 import {
-  bindProjectResource,
-  checkWizardStep,
-  completeWizardStep,
   createProject,
-  createWizard,
-  dismissWizard,
-  fetchUrl,
-  getPreconditions,
   getWizard,
-  listProjectResources,
-  listProjects,
-  listSearchEngines,
-  parseInput,
-  runSearch,
-  skipWizardStep,
+  listCollectionRuns,
+  listPlans,
+  listSources,
+  systemOverview,
 } from "../lib/api";
-import { stamp } from "../lib/format";
+import { relative, stamp } from "../lib/format";
 import { useCurrentProject } from "../lib/project";
-import type {
-  FetchResult,
-  PreconditionReport,
-  Project,
-  ProjectResource,
-  SearchEngine,
-  SearchResult,
-  WizardCheck,
-  WizardDoc,
-} from "../lib/types";
+import { navigate, type PageId } from "../lib/router";
+import type { CollectionRun, Plan, Project, Source, WizardDoc } from "../lib/types";
 
-const STEP_TITLES: Record<string, string> = {
-  create_project: "建项目",
-  scenario_template: "选择场景模板",
-  configure_sources: "配置信源",
-  verify_collection: "校验采集",
-  model_gate: "模型与依赖门闩",
-  processing_output: "加工与产出",
-  api_surface: "对外调用说明",
+/** 起步清单环节跳转目标：只作导航提示，不阻塞任何操作。 */
+const STEP_LINKS: Record<string, { page: PageId; label: string }> = {
+  create_project: { page: "projects", label: "本项目" },
+  scenario_template: { page: "sources", label: "去信源" },
+  configure_sources: { page: "sources", label: "去信源" },
+  verify_collection: { page: "tasks", label: "看运行" },
+  model_gate: { page: "settings", label: "去模型设置" },
+  processing_output: { page: "content", label: "去内容" },
+  api_surface: { page: "tools", label: "去调试工具" },
 };
 
-export function ProjectsPage() {
-  const { notify, run } = useUi();
-  const { setCurrentProjectId } = useCurrentProject();
-  const [projects, setProjects] = useState<Project[] | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [loading, setLoading] = useState(true);
-  const [name, setName] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+interface ProjectStats {
+  /** 自有信源（归属本项目的信源；共享引进的另计）。 */
+  owned: number;
+  sources: number;
+  content: number;
+  plans: number;
+  running: number;
+  queued: number;
+  lastRunAt?: string;
+}
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const page = await listProjects();
-      setProjects(page.items);
-      setSelected((current) => current ?? page.items.find((item) => item.isDefault)?.id ?? page.items[0]?.id ?? null);
-      setError(null);
-    } catch (problem) {
-      setError(problem);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+/**
+ * 项目页：项目是数据归属的根，所以这里展示的是「一个项目带出多少信源、
+ * 多少计划、多少内容与最近一次采集」，而不是资源绑定清单。
+ * 每张卡片按项目上下文只读取数，点开即可看该项目的信源、计划与采集记录。
+ */
+export function ProjectsPage() {
+  const { notify } = useUi();
+  const { projects, currentProjectId, setCurrentProjectId, reload, loading } = useCurrentProject();
+  const [selected, setSelected] = useState<string | null>(currentProjectId);
+  const [stats, setStats] = useState<Record<string, ProjectStats>>({});
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [heroRecord, setHeroRecord] = useState<{ sourceId?: string; planId?: string; title: string } | null>(null);
+
+  // 每个项目各自取一次概览、计划总数与最近一次采集：卡片上的数字必须属于它自己。
+  useEffect(() => {
+    if (!projects.length) return;
+    let alive = true;
+    void (async () => {
+      const entries = await Promise.all(
+        projects.map(async (project) => {
+          const [overview, plans, runs, sourcePage] = await Promise.all([
+            systemOverview(project.id).catch(() => null),
+            listPlans({ limit: 200, projectId: project.id }).catch(() => null),
+            listCollectionRuns({ limit: 1, projectId: project.id }).catch(() => null),
+            listSources({ limit: 200, projectId: project.id }).catch(() => null),
+          ]);
+          const counts = overview?.counts;
+          const owned = (sourcePage?.items ?? []).filter((item) => !item.project || item.project === project.id).length;
+          return [
+            project.id,
+            {
+              owned,
+              sources: counts?.sources ?? owned,
+              content: counts?.content ?? 0,
+              plans: plans?.total ?? plans?.items.length ?? 0,
+              running: counts?.tasksRunning ?? 0,
+              queued: counts?.tasksQueued ?? 0,
+              lastRunAt: runs?.items[0]?.createdAt,
+            } satisfies ProjectStats,
+          ] as const;
+        }),
+      );
+      if (alive) setStats(Object.fromEntries(entries));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [projects]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!selected || !projects.some((project) => project.id === selected)) {
+      setSelected(currentProjectId ?? projects[0]?.id ?? null);
+    }
+  }, [projects, currentProjectId, selected]);
+
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === selected) ?? null,
+    [projects, selected],
+  );
 
   async function submit() {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed || busy) return;
     setBusy(true);
     try {
       const project = await createProject({ name: trimmed });
       setName("");
-      notify("ok", "项目已创建", project.id);
-      await load();
-      setSelected(project.id);
+      setCreating(false);
+      await reload();
+      // 建完即切入新项目：此后新建的信源、计划与采集记录都归它，页面随项目切换重挂载。
+      setCurrentProjectId(project.id);
+      notify("ok", "项目已创建并切换", `${project.name} · 新建的信源与采集记录自动归入本项目`);
     } catch (problem) {
       notify("bad", "创建项目失败", problem instanceof Error ? problem.message : undefined);
     } finally {
@@ -92,458 +124,405 @@ export function ProjectsPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">projects · 项目</div>
-          <h1 className="page-title">按项目归属资源，向导带你走完首条主线</h1>
+          <h1 className="page-title">项目</h1>
           <p className="page-lede">
-            旧全局数据由默认项目承接：未归属的信源在默认项目视角下软接展示，归属后即从软接清单消失。
+            项目是数据归属的根：信源归属项目，内容、任务与采集记录由信源派生，所以切换项目就切换了整套数据。
+            共享只放开信源的跨项目只读，不会把它的内容与运行带过来。
           </p>
         </div>
         <div className="page-actions">
-          <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
+          <button type="button" className="btn btn-sm" onClick={() => void reload()} disabled={loading}>
             <IconRefresh size={14} /> 刷新
+          </button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
+            <IconPlus size={14} /> 新建项目
           </button>
         </div>
       </header>
 
-      {error ? <Problem error={error} onRetry={() => void load()} /> : null}
+      {!projects.length && loading ? <Loading lines={4} /> : null}
 
-      <div className="grid cols-2">
-        <Card title="新建项目" sub="项目名必填；描述可选。">
-          <form
-            className="stack"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <Field label="项目名" htmlFor="project-name">
-              <input
-                id="project-name"
-                className="input"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="例如：科技快讯"
-                disabled={busy}
-              />
-            </Field>
-            <div>
-              <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>
-                <IconPlus size={14} /> 创建
+      {projects.length ? (
+        <div className="project-grid">
+          {projects.map((project) => {
+            const item = stats[project.id];
+            const isCurrent = project.id === currentProjectId;
+            return (
+              <button
+                key={project.id}
+                type="button"
+                className={`project-card${project.id === selected ? " is-selected" : ""}`}
+                onClick={() => setSelected(project.id)}
+              >
+                <span className="project-card-head">
+                  <span className="project-card-name">{project.name}</span>
+                  {project.isDefault ? <Badge tone="neutral">默认</Badge> : null}
+                  {isCurrent ? <Badge tone="ok">当前</Badge> : null}
+                  <span className="fill" />
+                  <IconChevronRight size={14} />
+                </span>
+                <span className="project-nums">
+                  <span>自有信源 <strong>{item ? item.owned : "…"}</strong></span>
+                  <span>计划 <strong>{item ? item.plans : "…"}</strong></span>
+                  <span>内容 <strong>{item ? item.content : "…"}</strong></span>
+                  <span>在途 <strong>{item ? item.running + item.queued : "…"}</strong></span>
+                </span>
+                <span className="small muted">
+                  {item ? `共享引入 ${item.sources - item.owned} 个 · ` : ""}
+                  {item?.lastRunAt ? `最近采集 ${relative(item.lastRunAt)}` : "还没有采集记录"} · 建 {stamp(project.createdAt)}
+                </span>
               </button>
-            </div>
-          </form>
-        </Card>
+            );
+          })}
+        </div>
+      ) : null}
 
-        <Card title="项目" sub={projects ? `${projects.length} 个` : undefined} flush>
-          {loading && !projects ? (
-            <Loading lines={3} />
-          ) : !projects?.length ? (
-            <Empty title="还没有项目" text="默认项目会在服务启动时自动创建。" />
-          ) : (
-            <div className="list">
-              {projects.map((project) => (
-                <button
-                  type="button"
-                  key={project.id}
-                  className={`list-row${selected === project.id ? " is-active" : ""}`}
-                  onClick={() => {
-                    setSelected(project.id);
-                    setCurrentProjectId(project.id);
-                  }}
-                >
-                  <div className="stack" style={{ gap: 2 }}>
-                    <strong>
-                      {project.name}
-                      {project.isDefault ? (
-                        <>
-                          {" "}
-                          <Badge tone="neutral">默认</Badge>
-                        </>
-                      ) : null}
-                    </strong>
-                    <span className="small muted">
-                      {project.id} · 创建于 {stamp(project.createdAt)}
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
+      {heroRecord ? (
+        <RunsDrawer
+          title={heroRecord.title}
+          sourceId={heroRecord.sourceId}
+          planId={heroRecord.planId}
+          projectId={selectedProject?.id}
+          onClose={() => setHeroRecord(null)}
+        />
+      ) : null}
 
-      {selected ? (
-        <>
-          <WizardPanel projectId={selected} onNotify={notify} onRun={run} />
-          <TryPanel projectId={selected} onNotify={notify} />
-        </>
+      {selectedProject ? (
+        <ProjectWorkbench
+          key={selectedProject.id}
+          project={selectedProject}
+          stats={stats[selectedProject.id]}
+          isCurrent={selectedProject.id === currentProjectId}
+          onSwitch={() => {
+            setCurrentProjectId(selectedProject.id);
+            notify("ok", "已切换项目", selectedProject.name);
+          }}
+          onOpenRuns={() => setHeroRecord({ title: `采集记录 · ${selectedProject.name}` })}
+        />
+      ) : null}
+
+      {creating ? (
+        <Modal
+          title="新建项目"
+          sub="只填项目名即可；之后新建的信源、计划与采集记录自动归入本项目。"
+          onClose={() => setCreating(false)}
+          footer={
+            <>
+              <button type="button" className="btn" onClick={() => setCreating(false)}>取消</button>
+              <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={busy || !name.trim()}>
+                {busy ? "创建中…" : "创建并切换"}
+              </button>
+            </>
+          }
+        >
+          <Field label="项目名" htmlFor="project-name">
+            <input
+              id="project-name"
+              className="input"
+              value={name}
+              placeholder="例如：科技快讯"
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submit();
+              }}
+            />
+          </Field>
+        </Modal>
       ) : null}
     </div>
   );
 }
 
-function WizardPanel({
-  projectId,
-  onNotify,
-  onRun,
+/** 选中项目的工作面：数字 + 信源 + 计划 + 采集记录 + 起步清单，全部在本页内看完再决定动作。 */
+function ProjectWorkbench({
+  project,
+  stats,
+  isCurrent,
+  onSwitch,
+  onOpenRuns,
 }: {
-  projectId: string;
-  onNotify: UiNotify;
-  onRun: UiRun;
+  project: Project;
+  stats?: ProjectStats;
+  isCurrent: boolean;
+  onSwitch: () => void;
+  onOpenRuns: () => void;
 }) {
+  const [sources, setSources] = useState<Source[] | null>(null);
+  const [plans, setPlans] = useState<Plan[] | null>(null);
+  const [runs, setRuns] = useState<CollectionRun[] | null>(null);
   const [wizard, setWizard] = useState<WizardDoc | null>(null);
-  const [resources, setResources] = useState<ProjectResource[]>([]);
-  const [check, setCheck] = useState<WizardCheck | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
-  const [bindKind, setBindKind] = useState("source");
-  const [bindId, setBindId] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [record, setRecord] = useState<{ sourceId?: string; planId?: string; runId?: string; title: string } | null>(null);
+  const [showAllSteps, setShowAllSteps] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [doc, res] = await Promise.all([
-        getWizard(projectId),
-        listProjectResources(projectId).catch(() => ({ items: [] }) as unknown as { items: ProjectResource[] }),
+      const [sourcePage, planPage, runPage, doc] = await Promise.all([
+        listSources({ limit: 200, projectId: project.id }).catch(() => null),
+        listPlans({ limit: 200, projectId: project.id }).catch(() => null),
+        listCollectionRuns({ limit: 8, projectId: project.id }).catch(() => null),
+        getWizard(project.id).catch(() => null),
       ]);
-      setWizard(doc);
-      setResources(res.items);
-      setCheck(null);
+      // 任一请求失败时保留原值，不把「没取到」伪装成 0，避免误读为“这个项目是空的”。
+      if (sourcePage) setSources(sourcePage.items);
+      if (planPage) setPlans(planPage.items);
+      if (runPage) setRuns(runPage.items);
+      if (doc) setWizard(doc);
+      setFailed(!sourcePage || !planPage || !runPage);
       setError(null);
     } catch (problem) {
       setError(problem);
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [project.id]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function act(label: string, action: () => Promise<unknown>) {
-    try {
-      const operation = await action();
-      await onRun(operation as never, label);
-      await load();
-    } catch (problem) {
-      onNotify("bad", `${label}失败`, problem instanceof Error ? problem.message : undefined);
-    }
-  }
-
-  async function checkStep(stepId: string) {
-    try {
-      const result = await checkWizardStep(projectId, stepId);
-      setCheck(result);
-      setWizard(result.wizard);
-      if (result.met) onNotify("ok", "环节条件满足", `${STEP_TITLES[stepId] ?? stepId} 已置为完成`);
-      else onNotify("bad", "环节条件未满足", result.detail?.where ?? result.detail?.reason);
-    } catch (problem) {
-      onNotify("bad", "校验失败", problem instanceof Error ? problem.message : undefined);
-    }
-  }
-
-  const closed = wizard?.status === "completed" || wizard?.status === "dismissed";
+  const owned = useMemo(
+    () => (sources ?? []).filter((item) => !item.project || item.project === project.id),
+    [sources, project.id],
+  );
+  const shared = useMemo(
+    () => (sources ?? []).filter((item) => Boolean(item.project) && item.project !== project.id),
+    [sources, project.id],
+  );
+  const pendingSteps = useMemo(() => (wizard?.steps ?? []).filter((step) => !step.met), [wizard]);
+  const visibleSteps = showAllSteps ? wizard?.steps ?? [] : pendingSteps;
 
   return (
     <Card
-      title={`向导 · ${STEP_TITLES[wizard?.steps[0]?.id ?? ""] ?? "标准主线"}`}
-      sub={
-        wizard
-          ? wizard.status === "dismissed"
-            ? "已跳过：向导不再打扰，可重新建档。"
-            : wizard.status === "completed"
-              ? "全部环节完成，向导已收口。"
-              : "完成或跳过全部环节后向导收口。"
-          : undefined
-      }
+      title={project.name}
+      sub={`${project.description || "项目上下文下的信源、计划与采集记录"} · 建 ${stamp(project.createdAt)}`}
       action={
-        <div className="row" style={{ gap: 8 }}>
-          {!wizard ? (
-            <button type="button" className="btn btn-primary" onClick={() => void act("开始向导", () => createWizard(projectId))}>
-              开始向导
-            </button>
+        <div className="row wrap" style={{ gap: 6 }}>
+          {isCurrent ? (
+            <Badge tone="ok">当前项目</Badge>
           ) : (
-            <button type="button" className="btn" onClick={() => void act("跳过向导", () => dismissWizard(projectId))} disabled={closed}>
-              跳过向导
-            </button>
+            <button type="button" className="btn btn-sm" onClick={onSwitch}>设为当前项目</button>
           )}
-          <button type="button" className="btn" onClick={() => void load()}>
-            <IconRefresh size={14} /> 刷新
+          <button type="button" className="btn btn-sm" onClick={() => navigate("sources")}>信源</button>
+          <button type="button" className="btn btn-sm" onClick={() => navigate("plans")}>计划</button>
+          <button type="button" className="btn btn-sm" onClick={() => navigate("content")}>内容</button>
+          <button type="button" className="btn btn-sm" onClick={onOpenRuns}>
+            <IconHistory size={12} /> 采集记录
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => void load()} disabled={loading}>
+            <IconRefresh size={12} />
           </button>
         </div>
       }
     >
       {error ? <Problem error={error} onRetry={() => void load()} /> : null}
-      {loading && !wizard ? (
-        <Loading lines={3} />
-      ) : !wizard ? (
-        <Empty title="尚未建档" text="建档后按环节推进：配置信源 → 校验采集 → 模型门闩 → 加工产出。" />
-      ) : (
-        <div className="stack">
-          <div className="list">
-            {wizard.steps.map((step) => (
-              <div className="list-row" key={step.id}>
-                <div className="stack" style={{ gap: 2 }}>
-                  <strong>{STEP_TITLES[step.id] ?? step.id}</strong>
-                  {check?.stepId === step.id && !check.met ? (
-                    <span className="small muted">
-                      校验未通过：{check.detail?.where ?? check.detail?.reason ?? "手动完成"}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="row" style={{ gap: 6 }}>
-                  <Badge tone={step.status === "done" ? "ok" : step.status === "skipped" ? "warn" : "neutral"}>
-                    {step.status === "done" ? "完成" : step.status === "skipped" ? "跳过" : "待办"}
-                  </Badge>
-                  {!closed && step.status === "pending" ? (
-                    <>
-                      <button type="button" className="btn btn-sm" onClick={() => void checkStep(step.id)}>
-                        校验
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={() => void act(`完成 ${STEP_TITLES[step.id] ?? step.id}`, () => completeWizardStep(projectId, step.id))}
-                      >
-                        完成
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={() => void act(`跳过 ${STEP_TITLES[step.id] ?? step.id}`, () => skipWizardStep(projectId, step.id))}
-                      >
-                        跳过
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </div>
+      {failed && !sources ? <div className="alert warn">项目数据没有取全，下方可能不完整；可点右上角刷新重试。</div> : null}
+      {loading && !sources ? <Loading lines={4} /> : null}
 
-          <div className="stack">
-            <div className="card-title">资源归属（{resources.length}）</div>
-            {resources.length ? (
-              <div className="mono small">
-                {resources.map((resource) => `${resource.kind}:${resource.id}${resource.legacy ? "（软接）" : ""}`).join("、")}
-              </div>
-            ) : (
-              <span className="small muted">尚无归属资源。信源可在信源页创建后在此归属。</span>
-            )}
-            {!closed ? (
-              <div className="row" style={{ gap: 8 }}>
-                <select className="input" style={{ width: 160 }} value={bindKind} onChange={(event) => setBindKind(event.target.value)}>
-                  {["source", "task", "content", "workflow_version", "publication"].map((kind) => (
-                    <option key={kind} value={kind}>
-                      {kind}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className="input"
-                  style={{ width: 260 }}
-                  value={bindId}
-                  onChange={(event) => setBindId(event.target.value)}
-                  placeholder="资源 ID"
-                />
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={!bindId.trim()}
-                  onClick={() =>
-                    void act("归属资源", () => bindProjectResource(projectId, bindKind, bindId.trim()))
-                  }
-                >
-                  归属
-                </button>
-              </div>
-            ) : null}
+      <div className="stack" style={{ gap: 16 }}>
+        <div className="stat-grid">
+          <div className="stat">
+            <span className="stat-label">自有信源</span>
+            <span className="stat-value">{sources === null ? "…" : owned.length}</span>
+            <span className="stat-note">{shared.length} 个共享引入 · {owned.filter((item) => item.enabled).length} 个启用</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">采集计划</span>
+            <span className="stat-value">{plans === null ? "…" : plans.length}</span>
+            <span className="stat-note">{(plans ?? []).filter((plan) => plan.enabled).length} 个启用</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">已入库内容</span>
+            <span className="stat-value">{stats ? stats.content : "…"}</span>
+            <span className="stat-note">由本项目信源派生</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">在途任务</span>
+            <span className="stat-value">{stats ? stats.running + stats.queued : "…"}</span>
+            <span className="stat-note">{stats?.lastRunAt ? `最近采集 ${relative(stats.lastRunAt)}` : "还没有采集"}</span>
           </div>
         </div>
-      )}
+
+        <div className="split-2">
+          <Card
+            title="信源"
+            sub={`${owned.length} 个自有 · ${shared.length} 个共享`}
+            flush
+            action={<button type="button" className="btn btn-sm" onClick={() => navigate("sources")}>管理</button>}
+          >
+            {(sources ?? []).length === 0 ? (
+              <Empty title="还没有信源" text="新建信源会自动归属本项目；共享信源只读可见。" />
+            ) : (
+              <div className="list">
+                {[...owned, ...shared].slice(0, 8).map((source) => (
+                  <button
+                    key={source.id}
+                    type="button"
+                    className="list-row clickable"
+                    onClick={() => setRecord({ sourceId: source.id, title: `采集记录 · ${source.name}` })}
+                  >
+                    <span className={`dot ${source.health === "healthy" ? "ok" : source.health === "failed" ? "bad" : "warn"}`} />
+                    <span className="list-main">
+                      <span className="list-title">
+                        {source.name}
+                        {source.project && source.project !== project.id ? <span className="badge neutral" style={{ marginLeft: 6 }}>共享</span> : null}
+                        {source.enabled ? null : <span className="badge neutral" style={{ marginLeft: 6 }}>停用</span>}
+                      </span>
+                      <span className="list-meta">
+                        <span className="mono">{source.id}</span>
+                        <span>今日 {source.todayYield ?? 0} 条</span>
+                        <span>下次 {relative(source.nextRunAt)}</span>
+                      </span>
+                    </span>
+                    <IconHistory size={14} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          <Card
+            title="采集计划"
+            sub={`${plans?.length ?? 0} 个`}
+            flush
+            action={<button type="button" className="btn btn-sm" onClick={() => navigate("plans")}>管理</button>}
+          >
+            {(plans === null ? <Loading lines={2} /> : plans.length === 0 ? (
+              <Empty title="还没有计划" text="计划按节律派发采集；也可以先手动采一次看看产出。" />
+            ) : (
+              <div className="list">
+                {(plans ?? []).slice(0, 8).map((plan) => (
+                  <button
+                    key={plan.id}
+                    type="button"
+                    className="list-row clickable"
+                    onClick={() => setRecord({ planId: plan.id, title: `采集记录 · ${plan.name}` })}
+                  >
+                    <span className="list-main">
+                      <span className="list-title">
+                        {plan.name}
+                        <span className={`badge ${plan.enabled ? "ok" : "neutral"}`} style={{ marginLeft: 6 }}>
+                          {plan.enabled ? "启用" : "暂停"}
+                        </span>
+                      </span>
+                      <span className="list-meta">
+                        <span>{plan.trigger?.interval ?? "手动"}</span>
+                        <span>{(plan.targets ?? []).length} 个信源</span>
+                        <span>下次 {relative(plan.nextRunAt)}</span>
+                      </span>
+                    </span>
+                    <IconHistory size={14} />
+                  </button>
+                ))}
+              </div>
+            ))}
+          </Card>
+        </div>
+
+        <Card
+          title="最近采集"
+          sub="按信源与计划归组；点开看本次产出，再决定是否再采一次"
+          flush
+          action={<button type="button" className="btn btn-sm" onClick={onOpenRuns}>全部记录</button>}
+        >
+          {(runs === null ? <Loading lines={2} /> : runs.length === 0 ? (
+            <Empty title="还没有采集记录" text="计划触发与手动采集都会留在这里。" />
+          ) : (
+            <div className="list">
+              {(runs ?? []).map((run) => (
+                <button
+                  key={run.id}
+                  type="button"
+                  className="list-row clickable"
+                  onClick={() =>
+                    setRecord({
+                      sourceId: run.sourceId,
+                      runId: run.id,
+                      title: `采集记录 · ${(sources ?? []).find((item) => item.id === run.sourceId)?.name ?? run.sourceId}`,
+                    })
+                  }
+                >
+                  <span className={`dot ${run.status === "failed" ? "bad" : run.status === "succeeded" ? "ok" : "warn"}`} />
+                  <span className="list-main">
+                    <span className="list-title">
+                      {(sources ?? []).find((item) => item.id === run.sourceId)?.name ?? run.sourceId}
+                      <span className="badge neutral" style={{ marginLeft: 6 }}>{run.mode === "manual" ? "手动" : "计划"}</span>
+                    </span>
+                    <span className="list-meta">
+                      <span>{relative(run.createdAt)}</span>
+                      <span>{run.status === "succeeded" ? "成功" : run.status === "failed" ? "失败" : run.status === "running" ? "执行中" : "排队"}</span>
+                      {run.planId ? <span>计划 {(plans ?? []).find((item) => item.id === run.planId)?.name ?? run.planId}</span> : null}
+                    </span>
+                    {run.error ? <span className="list-meta" style={{ color: "var(--danger)" }}>{run.error}</span> : null}
+                  </span>
+                  <IconChevronRight size={14} />
+                </button>
+              ))}
+            </div>
+          ))}
+        </Card>
+
+        <Card
+          title="起步清单"
+          sub={wizard ? (wizard.status === "ready" ? "已就绪，无待办" : `${wizard.pending} 项待办，按数据实时计算`) : undefined}
+          flush
+          action={
+            <div className="row" style={{ gap: 6 }}>
+              {wizard ? <Badge tone={wizard.status === "ready" ? "ok" : "warn"}>{wizard.status === "ready" ? "已就绪" : "待办"}</Badge> : null}
+              <button type="button" className="btn btn-sm" onClick={() => setShowAllSteps((value) => !value)}>
+                {showAllSteps ? "只看待办" : "显示全部环节"}
+              </button>
+            </div>
+          }
+        >
+          {!wizard ? (
+            <Empty title="暂时没有清单" text="刷新重试。" />
+          ) : visibleSteps.length === 0 ? (
+            <Empty title="没有待办环节" text="信源、模型与内容都已就绪。" />
+          ) : (
+            <div className="list">
+              {visibleSteps.map((step) => {
+                const link = STEP_LINKS[step.id];
+                return (
+                  <div className="list-row" key={step.id}>
+                    <span className="list-main">
+                      <span className="list-title">{step.title}</span>
+                      <span className="list-meta">
+                        {step.description ? <span>{step.description}</span> : null}
+                        {!step.met && step.hint ? <span>去哪儿做：{step.hint}</span> : null}
+                      </span>
+                    </span>
+                    <span className="row" style={{ gap: 6 }}>
+                      <Badge tone={step.status === "done" ? "ok" : step.status === "optional" ? "neutral" : "warn"}>
+                        {step.status === "done" ? "完成" : step.status === "optional" ? "可选" : "待办"}
+                      </Badge>
+                      {link && !step.met ? (
+                        <button type="button" className="btn btn-sm" onClick={() => navigate(link.page)}>
+                          {link.label}
+                        </button>
+                      ) : null}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {record ? (
+        <RunsDrawer
+          title={record.title}
+          sourceId={record.sourceId}
+          planId={record.planId}
+          initialRunId={record.runId}
+          projectId={project.id}
+          onClose={() => setRecord(null)}
+        />
+      ) : null}
     </Card>
   );
 }
-
-function TryPanel({
-  projectId,
-  onNotify,
-}: {
-  projectId: string;
-  onNotify: UiNotify;
-}) {
-  const [engines, setEngines] = useState<SearchEngine[]>([]);
-  const [engine, setEngine] = useState("");
-  const [query, setQuery] = useState("");
-  const [searchResult, setSearchResult] = useState<SearchResult | null>(null);
-  const [url, setUrl] = useState("");
-  const [fetchResult, setFetchResult] = useState<FetchResult | null>(null);
-  const [parseResult, setParseResult] = useState<Record<string, unknown> | null>(null);
-  const [preconditions, setPreconditions] = useState<PreconditionReport | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    void listSearchEngines()
-      .then((page) => setEngines(page.items))
-      .catch(() => setEngines([]));
-    void getPreconditions()
-      .then(setPreconditions)
-      .catch(() => setPreconditions(null));
-  }, []);
-
-  async function search() {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    setBusy(true);
-    try {
-      setSearchResult(await runSearch({ query: trimmed, engine: engine || undefined, projectId, limit: 10 }));
-    } catch (problem) {
-      setSearchResult(null);
-      onNotify("bad", "试搜失败", problem instanceof Error ? problem.message : undefined);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function fetchPage() {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    setBusy(true);
-    try {
-      setFetchResult(await fetchUrl(trimmed));
-    } catch (problem) {
-      setFetchResult(null);
-      onNotify("bad", "获取失败", problem instanceof Error ? problem.message : undefined);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function parsePage() {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    setBusy(true);
-    try {
-      setParseResult(await parseInput({ url: trimmed }));
-      onNotify("ok", "解析完成");
-    } catch (problem) {
-      setParseResult(null);
-      onNotify("bad", "解析失败", problem instanceof Error ? problem.message : undefined);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="grid cols-2">
-      <Card title="试搜" sub="走产品搜索路径：前置未满足时返回 412 与“去哪配”。">
-        <div className="stack">
-          <div className="row" style={{ gap: 8 }}>
-            <select className="input" style={{ width: 200 }} value={engine} onChange={(event) => setEngine(event.target.value)}>
-              <option value="">默认引擎</option>
-              {engines.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                  {item.requiresKeyRef ? "（需密钥）" : ""}
-                </option>
-              ))}
-            </select>
-            <input
-              className="input"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索关键词"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void search();
-              }}
-            />
-            <button type="button" className="btn btn-primary" onClick={() => void search()} disabled={busy}>
-              搜索
-            </button>
-          </div>
-          {preconditions && !preconditions.met ? (
-            <div className="small muted">
-              前置未就绪：
-              {preconditions.scopes
-                .filter((item) => !item.met)
-                .map((item) => item.requirements.map((req) => `${req.message}（${req.where}）`).join("；"))
-                .join("；")}
-            </div>
-          ) : null}
-          {searchResult ? (
-            <div className="stack" style={{ gap: 6 }}>
-              <span className="small muted">
-                引擎 {searchResult.engine} · {searchResult.count} 条结果
-              </span>
-              {searchResult.results.map((hit, index) => (
-                <div key={index} className="stack" style={{ gap: 1 }}>
-                  <a href={hit.url ?? "#"} target="_blank" rel="noreferrer" className="mono small">
-                    {hit.title ?? hit.url ?? "(无标题)"}
-                  </a>
-                  {hit.snippet ? <span className="small muted">{hit.snippet}</span> : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </Card>
-
-      <Card title="试取正文" sub="POST /fetch：URL → 正文，回环地址也可用于本机验证。">
-        <div className="stack">
-          <div className="row" style={{ gap: 8 }}>
-            <input
-              className="input"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://example.com/page"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void fetchPage();
-              }}
-            />
-            <button type="button" className="btn btn-primary" onClick={() => void fetchPage()} disabled={busy}>
-              获取
-            </button>
-          </div>
-          {fetchResult ? (
-            <div className="stack" style={{ gap: 4 }}>
-              <span className="small muted">
-                HTTP {fetchResult.status} · {fetchResult.contentType || "未知类型"}
-                {fetchResult.truncated ? " · 已截断" : ""}
-              </span>
-              <pre className="mono small" style={{ maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap" }}>
-                {fetchResult.text.slice(0, 4000)}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      </Card>
-
-      <Card title="试解析" sub="POST /parse：URL → 结构化抽取（rawprism 未接入时返回 412）。">
-        <div className="stack">
-          <div className="row" style={{ gap: 8 }}>
-            <input
-              className="input"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://example.com/page"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void parsePage();
-              }}
-            />
-            <button type="button" className="btn btn-primary" onClick={() => void parsePage()} disabled={busy}>
-              解析
-            </button>
-          </div>
-          {parseResult ? (
-            <pre className="mono small" style={{ maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap" }}>
-              {JSON.stringify(parseResult, null, 2).slice(0, 4000)}
-            </pre>
-          ) : null}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-type UiNotify = (tone: "ok" | "bad", title: string, detail?: string) => void;
-type UiRun = (operation: never, label: string) => Promise<unknown>;

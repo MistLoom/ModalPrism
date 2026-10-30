@@ -26,4 +26,4 @@ pub use query::{
     AsOf, EdgeDir, Expand, Expr, FacetList, FacetSelector, LineageDir, OrderBy, Query, QueryFrom,
     Search, SelectItem,
 };
-pub use task::{AccessTask, QueueName, TaskReason};
+pub use task::{AccessTask, QueueName, TaskReason, compose_locator_key};

@@ -23,6 +23,7 @@ mod schema;
 mod scope;
 mod security;
 mod snapshot;
+pub mod source_type;
 mod store;
 mod yaml;
 
@@ -37,7 +38,9 @@ pub use explain::{FieldOrigin, explain};
 pub use inspect::{domain_of_module, domain_of_path, modules};
 pub use load::{EnvSource, LoadOptions, validate};
 pub use migration::{
-    AtomicWrite, MigrationPlan, SourceMigration, apply_atomic, apply_migration, plan_migration,
+    AtomicWrite, MigrationPlan, SourceMigration, apply_atomic, apply_migration,
+    backfill_source_types, migrate_schedules_to_plans, plan_migration, plan_schedule_migration,
+    plan_source_type_backfill,
 };
 pub use presets::{BuiltinPreset, builtin_presets};
 pub use scope::overlay_system_policy;

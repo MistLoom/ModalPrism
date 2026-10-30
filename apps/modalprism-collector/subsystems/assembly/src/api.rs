@@ -466,6 +466,13 @@ impl Services {
         self.runner_run(task).await
     }
 
+    /// 控制台「立即执行」入口：按任务号跑一条既有任务并回显。
+    /// 直接按 id 租约，绕开调度器的到期/容量/暂停闸门，用于补跑卡在排队的任务。
+    pub async fn task_run(&self, task_id: &TaskId) -> Result<TaskRow, Error> {
+        self.run_task_by_id(task_id).await?;
+        self.task_row(task_id).await
+    }
+
     /// 跑一轮：`Some(source)` 先把它置到期，`None` 只执行本轮已到期的。
     ///
     /// 定时循环与「立即采集」共用这一个入口，不另存一份执行编排。
@@ -535,12 +542,24 @@ impl Services {
             plan.locator = Locator::Url { url };
         }
         let task = planner::make_task(&plan, TaskReason::Manual, Timestamp::now())?;
-        let task_id = task.task_id.clone();
+        let new_id = task.task_id.clone();
+        let source_str = plan.source_id.as_str().to_string();
+        let locator_json = task.locator_key();
         self.strata.enqueue(std::slice::from_ref(&task)).await?;
+        // 入队对同 source+locator 的活跃任务去重：这条新任务可能被跳过而不入库。
+        // 解析出真正活跃的那条，避免对不存在的新 id 直接 run/回读而误报「任务不存在」。
+        let effective_id = match self.strata.task_row(&new_id).await? {
+            Some(_) => new_id,
+            None => self
+                .strata
+                .active_task_id(&source_str, &locator_json)
+                .await?
+                .ok_or_else(|| Error::new("信源已有活跃任务"))?,
+        };
         if run_now {
-            self.run_task_by_id(&task_id).await?;
+            self.run_task_by_id(&effective_id).await?;
         }
-        self.task_row(&task_id).await
+        self.task_row(&effective_id).await
     }
 
     /// 读出单条任务用于回显。

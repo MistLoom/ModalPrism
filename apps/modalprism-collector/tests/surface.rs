@@ -111,6 +111,11 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
 
     let mut manifest: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for entry in running.host().catalog() {
+        // rawprism 是运行时装载的仓颉 Guest 解析引擎（fun 协议、无 logic 面），
+        // 不属于一方法能力治理表：/parse 钩子直连 host 调用，不经运维面白名单。
+        if entry.instance.as_str() == "rawprism" {
+            continue;
+        }
         manifest
             .entry(entry.instance.as_str().to_string())
             .or_default()

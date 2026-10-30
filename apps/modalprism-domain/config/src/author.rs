@@ -183,6 +183,7 @@ pub fn create(dir: &Path, options: &LoadOptions, draft: &Draft) -> Result<Saved,
         .ok_or_else(|| invalid(&file, "声明必须是对象"))?;
     doc.insert("id".into(), json!(format!("{prefix}/{slug}")));
     doc.insert("kind".into(), json!(prefix));
+    stamp_source_type(prefix, &mut doc);
     doc.entry("name").or_insert_with(|| json!(slug));
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|source| Error::Read {
@@ -215,6 +216,7 @@ pub fn update(dir: &Path, options: &LoadOptions, draft: &Draft) -> Result<Saved,
         .ok_or_else(|| invalid(&file, "声明必须是对象"))?;
     doc.insert("id".into(), json!(format!("{prefix}/{slug}")));
     doc.insert("kind".into(), json!(prefix));
+    stamp_source_type(prefix, &mut doc);
     write(&target, &Value::Object(doc))?;
     if let Err(error) = validate(dir, options) {
         restore(&target, &original)?;
@@ -224,6 +226,20 @@ pub fn update(dir: &Path, options: &LoadOptions, draft: &Draft) -> Result<Saved,
         id: format!("{prefix}/{slug}"),
         file,
     })
+}
+
+/// 落盘前为信源补齐有效 `sourceType`。
+///
+/// 类型是信源的意图层声明，缺省时由 access/pipeline 推导，推导规则只有
+/// `source_type::derive` 一处。HTTP、MCP、命令行都经这里写盘，因此补齐放在这一层，
+/// 而不是各入口各写一遍。已声明则原样保留：一致性、矩阵与付费限制仍由
+/// `check_source` 在整库校验里判定，这里不做第二套校验。
+fn stamp_source_type(prefix: &str, doc: &mut serde_json::Map<String, Value>) {
+    if prefix != "source" || doc.contains_key("sourceType") {
+        return;
+    }
+    let kind = crate::source_type::derive(&Value::Object(doc.clone()));
+    doc.insert("sourceType".into(), json!(kind.as_str()));
 }
 
 /// 删除一份声明。内置适配器拒绝删除；被其它声明引用时由校验兜底并恢复原文。
@@ -491,6 +507,7 @@ pub fn list(dir: &Path) -> Result<Value, Error> {
     let accessors = entries(dir, "accessor")?;
     let adapters = entries(dir, "adapter")?;
     let bindings = entries(dir, "binding")?;
+    let plans = entries(dir, "plan")?;
     let all: Vec<&Entry> = sources
         .iter()
         .chain(accessors.iter())
@@ -513,12 +530,34 @@ pub fn list(dir: &Path) -> Result<Value, Error> {
         .iter()
         .map(|entry| binding_row(entry, &all))
         .collect();
+    let plans: Vec<Value> = plans.iter().map(plan_row).collect();
     Ok(json!({
         "sources": sources,
         "accessors": accessors,
         "adapters": adapters,
         "bindings": bindings,
+        "plans": plans,
     }))
+}
+
+/// 计划行：一等采集计划的声明视图（节律、额度、目标信源、优先级、启停）。
+fn plan_row(entry: &Entry) -> Value {
+    let doc = &entry.doc;
+    json!({
+        "id": id_of(entry),
+        "slug": entry.slug,
+        "file": entry.file,
+        "name": name_of(doc, &entry.slug),
+        "description": doc.get("description").cloned().unwrap_or(Value::Null),
+        "enabled": enabled_of(doc),
+        "targets": doc.get("targets").cloned().unwrap_or_else(|| json!([])),
+        "trigger": doc.get("trigger").cloned().unwrap_or(Value::Null),
+        "queue": doc.get("queue").cloned().unwrap_or(Value::Null),
+        "priority": doc.get("priority").cloned().unwrap_or(Value::Null),
+        "quota": doc.get("quota").cloned().unwrap_or(Value::Null),
+        "stopPolicy": doc.get("stopPolicy").cloned().unwrap_or(Value::Null),
+        "doc": doc,
+    })
 }
 
 fn source_row(entry: &Entry, all: &[&Entry]) -> Value {
@@ -697,7 +736,8 @@ fn folder_of(kind: &str) -> Result<(&'static str, &'static str), Error> {
         "accessor" => Ok(("accessors", "accessor")),
         "adapter" => Ok(("adapters", "adapter")),
         "binding" => Ok(("bindings", "binding")),
-        _ => Err(invalid("", "只支持信源、访问器、适配器与绑定")),
+        "plan" => Ok(("plans", "plan")),
+        _ => Err(invalid("", "只支持信源、访问器、适配器、绑定与计划")),
     }
 }
 
@@ -975,6 +1015,60 @@ mod tests {
             },
         )
         .expect("创建绑定信源")
+    }
+
+    /// R12/S2：写盘入口统一补齐 `sourceType`，HTTP 与 MCP 不再各写一遍。
+    #[test]
+    fn author_stamps_effective_source_type() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_config(dir.path());
+        create_binding(dir.path(), "b1");
+        create_bound_source(dir.path(), "s1", "binding/b1");
+        let file = dir.path().join("sources/s1.yaml");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("sourceType: feed"), "{text}");
+
+        // 已声明则保留原值，不在写盘层改写调用者的选择。
+        let explicit = create(
+            dir.path(),
+            &LoadOptions::default(),
+            &Draft {
+                kind: "source".into(),
+                slug: "s2".into(),
+                doc: json!({
+                    "name": "s2",
+                    "sourceType": "web",
+                    "access": {"accessor": "accessor/rss", "locator": {"url": "https://example.com/feed"}},
+                    "pipeline": [{"binding": "binding/b1"}],
+                    "schedule": {"interval": "1h"},
+                    "admission": {},
+                }),
+            },
+        );
+        // web 与 rss 访问器不一致，由整库校验拒绝并恢复原文。
+        assert!(explicit.is_err());
+        assert!(!dir.path().join("sources/s2.yaml").exists());
+
+        // 缺省声明的更新同样补齐。
+        let saved = update(
+            dir.path(),
+            &LoadOptions::default(),
+            &Draft {
+                kind: "source".into(),
+                slug: "s1".into(),
+                doc: json!({
+                    "name": "s1",
+                    "access": {"accessor": "accessor/rss", "locator": {"url": "https://example.com/feed2"}},
+                    "pipeline": [{"binding": "binding/b1"}],
+                    "schedule": {"interval": "2h"},
+                    "admission": {},
+                }),
+            },
+        )
+        .expect("更新绑定信源");
+        assert_eq!(saved.id, "source/s1");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("sourceType: feed"), "{text}");
     }
 
     /// R5.2：仍被信源引用的绑定拒删。

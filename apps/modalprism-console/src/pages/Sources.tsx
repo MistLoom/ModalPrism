@@ -4,18 +4,22 @@ import {
   IconCheck,
   IconClose,
   IconFlask,
+  IconHistory,
   IconPlay,
   IconPlus,
   IconRefresh,
   IconTrash,
 } from "../components/icons";
-import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, useUi } from "../components/ui";
+import { RunsDrawer } from "../components/RunsDrawer";
+import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, StructuredValue, Tabs, useUi } from "../components/ui";
+import { FilterPanel, SortHeader, sortRows, useSort } from "../components/Table";
+import { Pager, slicePage } from "../components/Pager";
 import {
   analyzeSource,
   approveAdapterDraft,
-  bindProjectResource,
   createAdapterDraft,
   createCollectionRun,
+  createPlan,
   createSource,
   deleteSource,
   disableSource,
@@ -25,67 +29,97 @@ import {
   listAccessMethods,
   listPlans,
   listSources,
-  pausePlan,
+  listSourceTypes,
   probeSource,
   rejectAdapterDraft,
-  resumePlan,
+  shareSource,
+  unshareSource,
   updateSource,
 } from "../lib/api";
-import { interval, relative, statusLabel, statusTone } from "../lib/format";
+import { relative, statusLabel, statusTone } from "../lib/format";
 import { useCurrentProject } from "../lib/project";
 import { navigate, useRoute } from "../lib/router";
-import type { NamedResource, Operation, Plan, Source, SourceInput } from "../lib/types";
+import type { NamedResource, Operation, Plan, Schedule, Source, SourceInput, SourcePayload, SourceTypeRecord } from "../lib/types";
 
 const EMPTY: SourceInput = {
   name: "",
+  sourceType: "feed",
   accessMethodId: "rss",
   adapterIds: ["feed-items"],
   enabled: true,
   endpoint: "",
+  channel: "",
   schedule: { mode: "fixed", intervalMs: 7_200_000 },
 };
+
+// 自定义适配器的声明示例：与内置适配器同构，放进 config/adapters 后即可在信源里勾选。
+const ADAPTER_EXAMPLE = `id: adapter/news-json
+kind: adapter
+name: 新闻 JSON 列表
+description: 从 JSON 响应里抽取标题、链接与时间
+implementation: builtin:json-list
+role: search
+consumes:
+  - {kind: raw, media_type: application/json}
+produces: [discovery]
+limits:
+  timeout: 30s
+  concurrency: 1`;
 
 export function SourcesPage() {
   const { params } = useRoute();
   const { notify, run } = useUi();
-  const { currentProject, boundIds } = useCurrentProject();
+  const { currentProject } = useCurrentProject();
   const [sources, setSources] = useState<Source[] | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [methods, setMethods] = useState<NamedResource[]>([]);
   const [adapters, setAdapters] = useState<NamedResource[]>([]);
+  const [types, setTypes] = useState<SourceTypeRecord[]>([]);
   const [drafts, setDrafts] = useState<NamedResource[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(params.get("query") ?? "");
   const [health, setHealth] = useState(params.get("status") ?? "all");
+  const [typeFilter, setTypeFilter] = useState(params.get("type") ?? "all");
   const [editing, setEditing] = useState<Source | "new" | null>(params.get("new") ? "new" : null);
   const [busy, setBusy] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState(false);
   const [draftOpen, setDraftOpen] = useState(false);
-  const [scope, setScope] = useState<"all" | "project">("all");
+  // 采集记录速览：不离开当前页就看上游（信源/计划）与下游（本次产出）。
+  const [record, setRecord] = useState<Source | null>(null);
+  const [scope, setScope] = useState<"all" | "project">("project");
+  const [selection, setSelection] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [tab, setTab] = useState<"list" | "adapters">((params.get("tab") === "adapters" ? "adapters" : "list"));
+  const [flag, setFlag] = useState<"all" | "enabled" | "disabled" | "shared" | "alert">("all");
+  const { sort, toggle } = useSort();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [sourcePage, planPage, methodPage, adapterPage, draftPage] = await Promise.all([
-        listSources({ limit: 200 }),
+      const [sourcePage, planPage, methodPage, adapterPage, draftPage, typePage] = await Promise.all([
+        // 项目隔离由后端按 x-project-id 处理；"全部"显式请求 scope=all 取消过滤。
+        listSources({ limit: 200, scope: scope === "all" ? "all" : undefined }),
         listPlans({ limit: 200 }),
         listAccessMethods(),
         listAdapters(),
         listAdapterDrafts(),
+        listSourceTypes(),
       ]);
       setSources(sourcePage.items);
       setPlans(planPage.items);
       setMethods(methodPage.items);
       setAdapters(adapterPage.items);
       setDrafts(draftPage.items);
+      setTypes(typePage.items);
       setError(null);
     } catch (problem) {
       setError(problem);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     void load();
@@ -99,10 +133,14 @@ export function SourcesPage() {
 
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    const projectBound = scope === "project" && currentProject ? new Set(boundIds("source")) : null;
-    return (sources ?? []).filter((source) => {
-      if (projectBound && !projectBound.has(source.id)) return false;
+    // 项目可见性已由后端按活跃项目过滤（含共享信源），这里只做本地关键词/健康/类型筛选。
+    const filtered = (sources ?? []).filter((source) => {
+      if (typeFilter !== "all" && source.sourceType !== typeFilter) return false;
       if (health !== "all" && source.health !== health) return false;
+      if (flag === "enabled" && !source.enabled) return false;
+      if (flag === "disabled" && source.enabled) return false;
+      if (flag === "shared" && !source.shared) return false;
+      if (flag === "alert" && !(source.alert || source.stopReason || source.health === "failed" || source.health === "configurationError")) return false;
       if (!needle) return true;
       return (
         source.name.toLowerCase().includes(needle) ||
@@ -110,9 +148,65 @@ export function SourcesPage() {
         source.endpoint.toLowerCase().includes(needle)
       );
     });
-  }, [sources, search, health, scope, currentProject, boundIds]);
+    return sortRows(filtered, sort, (source, key) => {
+      if (key === "name") return source.name;
+      if (key === "health") return source.health ?? "";
+      if (key === "yield") return source.todayYield ?? 0;
+      if (key === "nextRun") return source.nextRunAt ?? "";
+      if (key === "plans") {
+        return plans.filter(
+          (plan) =>
+            plan.id === source.id ||
+            (plan.targets ?? []).some((target) => target === source.id || target === `source/${source.id}`),
+        ).length;
+      }
+      return "";
+    });
+  }, [sources, search, health, typeFilter, flag, sort, plans]);
 
-  const planOf = (sourceId: string) => plans.find((plan) => plan.sourceId === sourceId);
+  // 类型 id → 产品命名的展示映射，来自后端注册表（不在前端复刻矩阵）。
+  const typeLabelOf = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of types) map.set(item.id, item.label);
+    return (id: string) => map.get(id) ?? id;
+  }, [types]);
+
+  const pagedRows = useMemo(() => slicePage(rows, page, pageSize), [rows, page, pageSize]);
+
+  // 筛选集变化后当前页可能越界，回到第一页。
+  useEffect(() => {
+    setPage(1);
+    setSelection([]);
+  }, [search, health, typeFilter, scope, flag, sources?.length]);
+
+  // 计划归计划页管理：信源页只呈现关联数量，点击跳转过滤。
+  const planCountOf = (sourceId: string) =>
+    plans.filter(
+      (plan) =>
+        plan.id === sourceId ||
+        (plan.targets ?? []).some((target) => target === sourceId || target === `source/${sourceId}`),
+    ).length;
+
+  // 批量动作逐项执行、保留成功项（与任务页同一语义）。
+  async function batchAct(label: string, action: (source: Source) => Promise<unknown>) {
+    const targets = rows.filter((row) => selection.includes(row.id));
+    if (!targets.length) return;
+    setBusy("batch");
+    let succeeded = 0;
+    let failed = 0;
+    for (const source of targets) {
+      try {
+        await action(source);
+        succeeded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setSelection([]);
+    notify(failed ? "warn" : "ok", `${label}：成功 ${succeeded} 个`, failed ? `失败 ${failed} 个（可能停用中被引用等原因）。` : undefined);
+    await load();
+    setBusy(null);
+  }
 
   async function act(label: string, action: () => Promise<unknown>) {
     setBusy(label);
@@ -162,6 +256,13 @@ export function SourcesPage() {
     }
   }
 
+  async function toggleShare(source: Source) {
+    const sharing = !source.shared;
+    await act(sharing ? "共享信源" : "取消共享", () =>
+      sharing ? shareSource(source.id) : unshareSource(source.id),
+    );
+  }
+
   async function probe(source: Source) {
     setBusy(`probe-${source.id}`);
     let started = false;
@@ -183,9 +284,9 @@ export function SourcesPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">sources · 信源</div>
-          <h1 className="page-title">信源、接入方式与采集计划</h1>
+          <h1 className="page-title">信源清单与适配器</h1>
           <p className="page-lede">
-            信源是采集的业务对象，接入方式与适配器藏在业务选项后面。手动采集、探测与自动计划共用同一条执行核心；所有修改都经过配置校验与代际热加载。
+            信源声明取什么、怎么解析；执行节律、数量上限与停止条件在「计划」页管理。手动采集与探测共用同一条执行核心；所有修改都经过配置校验与热加载。
           </p>
         </div>
         <div className="page-actions">
@@ -203,6 +304,17 @@ export function SourcesPage() {
 
       {error ? <Problem error={error} onRetry={() => void load()} /> : null}
 
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        items={[
+          { id: "list", label: "信源清单", count: rows.length },
+          { id: "adapters", label: "适配器", count: adapters.length },
+        ]}
+      />
+
+      {tab === "list" ? (
+      <>
       <div className="toolbar-band">
         <label className="search">
           <span className="muted" aria-hidden="true">⌕</span>
@@ -212,9 +324,9 @@ export function SourcesPage() {
           {[
             ["all", "全部"],
             ["healthy", "正常"],
-            ["degraded", "退化"],
+            ["degraded", "能力受限"],
             ["failed", "失败"],
-            ["suspicious", "可疑"],
+            ["suspicious", "待核实"],
             ["configurationError", "配置错误"],
           ].map(([id, label]) => (
             <button key={id} type="button" className={health === id ? "is-active" : ""} onClick={() => setHealth(id)}>
@@ -222,26 +334,70 @@ export function SourcesPage() {
             </button>
           ))}
         </div>
-        <div className="seg" role="group" aria-label="项目范围">
-          <button type="button" className={scope === "all" ? "is-active" : ""} onClick={() => setScope("all")}>
-            全部
-          </button>
-          <button
-            type="button"
-            className={scope === "project" ? "is-active" : ""}
-            onClick={() => setScope("project")}
-            disabled={!currentProject}
+        <FilterPanel active={[typeFilter !== "all", scope === "all", flag !== "all"].filter(Boolean).length} onReset={() => { setTypeFilter("all"); setScope("project"); setFlag("all"); }}>
+          <select
+            className="select"
+            value={typeFilter}
+            onChange={(event) => setTypeFilter(event.target.value)}
+            aria-label="类型筛选"
           >
-            {currentProject ? `仅 ${currentProject.name}` : "当前项目"}
-          </button>
-        </div>
+            <option value="all">全部信源类型</option>
+            {types.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+          <select className="select" value={flag} onChange={(event) => setFlag(event.target.value as typeof flag)} aria-label="状态附加筛选">
+            <option value="all">不限状态</option>
+            <option value="enabled">仅启用</option>
+            <option value="disabled">仅停用</option>
+            <option value="alert">需处理的事项</option>
+            <option value="shared">已共享给其他项目</option>
+          </select>
+          <div className="seg" role="group" aria-label="项目范围">
+            <button type="button" className={scope === "all" ? "is-active" : ""} onClick={() => setScope("all")}>
+              全部项目
+            </button>
+            <button
+              type="button"
+              className={scope === "project" ? "is-active" : ""}
+              onClick={() => setScope("project")}
+              disabled={!currentProject}
+            >
+              {currentProject ? `仅 ${currentProject.name}` : "当前项目"}
+            </button>
+          </div>
+        </FilterPanel>
         <span className="fill" />
         <span className="small muted">
           {rows.length} / {sources?.length ?? 0} 个信源
         </span>
       </div>
 
-      <Card title="信源清单" sub="启停、计划与最近一次运行" flush>
+      {selection.length > 0 ? (
+        <div className="batchbar">
+          <span>已选 {selection.length} 个信源</span>
+          <button type="button" className="btn btn-sm" disabled={busy === "batch"} onClick={() => void batchAct("批量启用", (source) => (source.enabled ? Promise.resolve() : enableSource(source.id, source.etag)))}>
+            批量启用
+          </button>
+          <button type="button" className="btn btn-sm" disabled={busy === "batch"} onClick={() => void batchAct("批量停用", (source) => (source.enabled ? disableSource(source.id, source.etag) : Promise.resolve()))}>
+            批量停用
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            disabled={busy === "batch"}
+            onClick={() => {
+              if (!window.confirm(`删除选中的 ${selection.length} 个信源？引用它们的声明必须先行处理。`)) return;
+              void batchAct("批量删除", (source) => deleteSource(source.id, source.etag));
+            }}
+          >
+            <IconTrash size={12} /> 批量删除
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => setSelection([])}>清除选择</button>
+        </div>
+      ) : null}
+
+      <Card title="信源清单" sub="启停、关联计划与最近一次运行" flush>
         {loading && !sources ? (
           <div className="card-body">
             <Loading lines={5} />
@@ -257,34 +413,75 @@ export function SourcesPage() {
             <table className="table source-table">
               <thead>
                 <tr>
+                  <th style={{ width: 34 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="全选"
+                      checked={rows.length > 0 && selection.length === rows.length}
+                      onChange={(event) => setSelection(event.target.checked ? rows.map((row) => row.id) : [])}
+                    />
+                  </th>
                   <th>信源</th>
-                  <th>健康</th>
-                  <th>节奏</th>
-                  <th>今日产出</th>
-                  <th>下一次</th>
+                  <SortHeader label="健康" sortKey="health" sort={sort} onSort={toggle} />
+                  <SortHeader label="计划" sortKey="plans" sort={sort} onSort={toggle} />
+                  <SortHeader label="今日产出" sortKey="yield" sort={sort} onSort={toggle} />
+                  <SortHeader label="下一次" sortKey="nextRun" sort={sort} onSort={toggle} />
                   <th>状态</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {rows.map((source) => {
-                  const plan = planOf(source.id);
+                {pagedRows.map((source) => {
+                  const planCount = planCountOf(source.id);
+                  // 归属当前项目才能改；他项目共享来的只读。
+                  const owned = !source.project || source.project === currentProject?.id;
                   return (
-                    <tr key={source.id}>
+                    <tr key={source.id} className={selection.includes(source.id) ? "is-selected" : ""}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择 ${source.name}`}
+                          checked={selection.includes(source.id)}
+                          onChange={(event) =>
+                            setSelection((current) =>
+                              event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id),
+                            )
+                          }
+                        />
+                      </td>
                       <td>
                         <div className="cell-main">
-                          <span className="source-name">{source.name}</span>
-                          <span className="source-sub mono">{source.id} · {source.endpoint}</span>
+                          <span className="source-name">
+                            {source.name}
+                            <span className="badge neutral" style={{ marginLeft: 6 }}>{typeLabelOf(source.sourceType)}</span>
+                            {source.shared ? <span className="badge neutral" style={{ marginLeft: 6 }}>已共享</span> : null}
+                          </span>
+                          <span className="source-sub mono">{source.id} · {source.endpoint || (source.channel ? `频道 ${source.channel}` : "")}</span>
                         </div>
                       </td>
                       <td>
-                        <StatusBadge status={source.health} />
-                      </td>
-                      <td>
                         <div className="cell-main">
-                          <span className="small">{source.schedule.mode === "push" ? "随推送" : interval(source.schedule.intervalMs)}</span>
-                          <span className="source-sub">{plan?.status === "paused" ? "计划已暂停" : source.enabled ? "计划生效" : "未启用"}</span>
+                          <StatusBadge status={source.health} />
+                          {source.stopReason ? <span className="source-sub">命中限额/停止：{source.stopReason}</span> : null}
+                          {source.alert && source.sourceType === "web" ? (
+                            <span className="source-sub" style={{ color: "var(--danger)" }}>疑似改版失效，请检查页面结构</span>
+                          ) : null}
                         </div>
+                      </td>
+                      <td className="small">
+                        {planCount > 0 ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => navigate(`plans?target=${encodeURIComponent(source.id.startsWith("source/") ? source.id : `source/${source.id}`)}`)}
+                          >
+                            关联计划 {planCount}
+                          </button>
+                        ) : source.sourceType === "push" ? (
+                          <span className="muted">入口监听</span>
+                        ) : (
+                          <span className="muted">未配置计划</span>
+                        )}
                       </td>
                       <td className="mono">{source.todayYield ?? 0}</td>
                       <td className="small muted">{relative(source.nextRunAt)}</td>
@@ -292,51 +489,60 @@ export function SourcesPage() {
                         <span className={`badge ${source.enabled ? "ok" : "neutral"}`}>{source.enabled ? "启用" : "停用"}</span>
                       </td>
                       <td className="actions">
-                        <div className="row" style={{ justifyContent: "flex-end" }}>
-                          <button type="button" className="btn btn-sm" onClick={() => void collect(source)} disabled={busy === `collect-${source.id}` || !source.enabled}>
-                            <IconPlay size={12} /> 采集
-                          </button>
-                          <button type="button" className="btn btn-sm" onClick={() => void probe(source)} disabled={busy === `probe-${source.id}`}>
-                            <IconFlask size={12} /> 探测
-                          </button>
-                          <button type="button" className="btn btn-sm" onClick={() => setEditing(source)}>
-                            编辑
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            onClick={() => void act(source.enabled ? "停用" : "启用", async () =>
-                              source.enabled ? disableSource(source.id, source.etag) : enableSource(source.id, source.etag),
+                        {owned ? (
+                          <div className="row" style={{ justifyContent: "flex-end" }}>
+                            <button type="button" className="btn btn-sm" title="查看采集记录" aria-label={`查看 ${source.name} 的采集记录`} onClick={() => setRecord(source)}>
+                              <IconHistory size={12} /> 记录
+                            </button>
+                            {source.sourceType === "push" ? null : (
+                              <button type="button" className="btn btn-sm" onClick={() => void collect(source)} disabled={busy === `collect-${source.id}` || !source.enabled}>
+                                <IconPlay size={12} /> 采集
+                              </button>
                             )}
-                            disabled={busy === "启用" || busy === "停用"}
-                          >
-                            {source.enabled ? "停用" : "启用"}
-                          </button>
-                          {plan ? (
+                            {source.sourceType === "push" ? null : (
+                              <button type="button" className="btn btn-sm" onClick={() => void probe(source)} disabled={busy === `probe-${source.id}`}>
+                                <IconFlask size={12} /> 探测
+                              </button>
+                            )}
+                            <button type="button" className="btn btn-sm" onClick={() => setEditing(source)}>
+                              编辑
+                            </button>
                             <button
                               type="button"
                               className="btn btn-sm"
-                              onClick={() =>
-                                void act(plan.status === "paused" ? "恢复计划" : "暂停计划", async () =>
-                                  plan.status === "paused" ? resumePlan(plan.id, plan.etag) : pausePlan(plan.id, plan.etag),
-                                )
-                              }
+                              onClick={() => void toggleShare(source)}
+                              disabled={busy === "共享信源" || busy === "取消共享"}
                             >
-                              {plan.status === "paused" ? "恢复" : "暂停"}
+                              {source.shared ? "取消共享" : "共享"}
                             </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            aria-label={`删除 ${source.name}`}
-                            onClick={() => {
-                              if (!window.confirm(`删除信源「${source.name}」？引用它的声明必须先行处理。`)) return;
-                              void perform("删除信源", async () => deleteSource(source.id, source.etag));
-                            }}
-                          >
-                            <IconTrash size={15} />
-                          </button>
-                        </div>
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={() => void act(source.enabled ? "停用" : "启用", async () =>
+                                source.enabled ? disableSource(source.id, source.etag) : enableSource(source.id, source.etag),
+                              )}
+                              disabled={busy === "启用" || busy === "停用"}
+                            >
+                              {source.enabled ? "停用" : "启用"}
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              aria-label={`删除 ${source.name}`}
+                              onClick={() => {
+                                if (!window.confirm(`删除信源「${source.name}」？引用它的声明必须先行处理。`)) return;
+                                void perform("删除信源", async () => deleteSource(source.id, source.etag));
+                              }}
+                            >
+                              <IconTrash size={15} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
+                            <span className="badge neutral">他项目共享</span>
+                            <span className="small muted">只读</span>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -345,79 +551,153 @@ export function SourcesPage() {
             </table>
           </div>
         )}
+        {rows.length > pageSize ? (
+          <Pager
+            page={page}
+            pageSize={pageSize}
+            total={rows.length}
+            onPage={setPage}
+            onPageSize={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+          />
+        ) : null}
       </Card>
+      </>
+      ) : null}
 
-      <Card
-        title="适配器草稿"
-        sub="AI 生成的适配器在批准前不会写入配置"
-        action={
-          <button type="button" className="btn btn-sm" onClick={() => setDraftOpen(true)}>
-            <IconPlus size={12} /> 新建草稿
-          </button>
-        }
-        flush
-      >
-        {drafts.length === 0 ? (
-          <Empty title="没有适配器草稿" text="先做一次信源分析，再根据页面结构生成适配器。" />
-        ) : (
-          <div className="list">
-            {drafts.map((draft) => {
-              const status = String(draft.status ?? "draft");
-              const etag = String(draft.etag ?? "");
-              return (
-                <div className="list-row" key={draft.id}>
-                  <span className="list-main">
-                    <span className="list-title">{draft.name}</span>
-                    <span className="list-meta">
-                      <span className="mono">{draft.id}</span>
-                      <span>分析 {String(draft.sourceAnalysisId ?? "")}</span>
-                      {Array.isArray(draft.checks) && draft.checks.length > 0 ? <span>{draft.checks.length} 项检查未通过</span> : null}
+      {tab === "adapters" ? (
+      <div className="stack" style={{ gap: 16 }}>
+        <Card
+          title="可用适配器"
+          sub="适配器负责把信源原始响应解析成条目；下面列出当前可勾选的适配器与各自用在哪类信源"
+          action={
+            <button type="button" className="btn btn-sm" onClick={() => setEditing("new")}>
+              <IconPlus size={12} /> 用适配器新建信源
+            </button>
+          }
+          flush
+        >
+          {adapters.length === 0 ? (
+            <Empty title="没有可用适配器" text="检查 config/adapters 下的声明是否通过校验。" />
+          ) : (
+            <div className="list">
+              {adapters.map((adapter) => {
+                const used = (sources ?? []).filter((source) => source.adapterIds.includes(adapter.id));
+                return (
+                  <div className="list-row" key={adapter.id}>
+                    <span className="list-main">
+                      <span className="list-title">
+                        {adapter.name}
+                        {adapter.builtin ? <span className="badge neutral" style={{ marginLeft: 6 }}>内置</span> : null}
+                        {String(adapter.role ?? "") ? <span className="badge neutral" style={{ marginLeft: 6 }}>{String(adapter.role)}</span> : null}
+                      </span>
+                      <span className="list-meta">
+                        <span className="mono">{adapter.id}</span>
+                        {adapter.description ? <span>{String(adapter.description)}</span> : null}
+                        {Array.isArray(adapter.produces) && adapter.produces.length ? (
+                          <span>产出：{adapter.produces.map((item) => String((item as Record<string, unknown>)?.kind ?? item)).join("、")}</span>
+                        ) : null}
+                      </span>
                     </span>
-                  </span>
-                  <span className={`badge ${statusTone(status)}`}>{statusLabel(status)}</span>
-                  {status === "validated" ? (
-                    <div className="row">
+                    {used.length > 0 ? (
                       <button
                         type="button"
-                        className="btn btn-sm"
-                        onClick={() =>
-                          void act("批准适配器", async () => {
-                            const operation = await approveAdapterDraft(draft.id, etag, "控制台批准");
-                            await run(operation, "批准适配器");
-                          })
-                        }
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setSearch(used[0].id)}
+                        title={used.map((source) => source.name).join("、")}
                       >
-                        <IconCheck size={12} /> 批准
+                        {used.length} 个信源在用
                       </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={() =>
-                          void act("驳回适配器", async () => {
-                            await rejectAdapterDraft(draft.id, etag, "控制台驳回");
-                          })
-                        }
-                      >
-                        <IconClose size={12} /> 驳回
+                    ) : (
+                      <span className="small muted">暂无信源使用</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        <Card
+          title="AI 生成草稿"
+          sub="AI 生成的适配器在批准前不会写入配置；批准后可与内置适配器一样勾选"
+          action={
+            <button type="button" className="btn btn-sm" onClick={() => setDraftOpen(true)}>
+              <IconPlus size={12} /> 新建草稿
+            </button>
+          }
+          flush
+        >
+          {drafts.length === 0 ? (
+            <Empty title="没有适配器草稿" text="先做一次信源分析，再根据页面结构生成适配器。" />
+          ) : (
+            <div className="list">
+              {drafts.map((draft) => {
+                const status = String(draft.status ?? "draft");
+                const etag = String(draft.etag ?? "");
+                return (
+                  <div className="list-row" key={draft.id}>
+                    <span className="list-main">
+                      <span className="list-title">{draft.name}</span>
+                      <span className="list-meta">
+                        <span className="mono">{draft.id}</span>
+                        <span>分析 {String(draft.sourceAnalysisId ?? "")}</span>
+                        {Array.isArray(draft.checks) && draft.checks.length > 0 ? <span>{draft.checks.length} 项检查未通过</span> : null}
+                      </span>
+                    </span>
+                    <span className={`badge ${statusTone(status)}`}>{statusLabel(status)}</span>
+                    {status === "validated" ? (
+                      <div className="row">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() =>
+                            void act("批准适配器", async () => {
+                              const operation = await approveAdapterDraft(draft.id, etag, "控制台批准");
+                              await run(operation, "批准适配器");
+                            })
+                          }
+                        >
+                          <IconCheck size={12} /> 批准
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() =>
+                            void act("驳回适配器", async () => {
+                              await rejectAdapterDraft(draft.id, etag, "控制台驳回");
+                            })
+                          }
+                        >
+                          <IconClose size={12} /> 驳回
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" className="btn btn-sm" onClick={() => navigate(`logs?correlationId=${encodeURIComponent(String(draft.id ?? ""))}`)}>
+                        查看日志
                       </button>
-                    </div>
-                  ) : (
-                    <button type="button" className="btn btn-sm" onClick={() => navigate(`logs?correlationId=${encodeURIComponent(String(draft.id ?? ""))}`)}>
-                      查看日志
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Card>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        <Card title="声明示例" sub="自定义适配器写成一份 YAML，放进 config/adapters 即参与校验与勾选">
+          <div className="code">{ADAPTER_EXAMPLE}</div>
+        </Card>
+      </div>
+      ) : null}
 
       {editing ? (
         <SourceDrawer
           source={editing === "new" ? null : editing}
           methods={methods}
           adapters={adapters}
+          types={types}
           onClose={() => setEditing(null)}
           onAnalyze={() => setAnalysis(true)}
           onSaved={async () => {
@@ -440,6 +720,14 @@ export function SourcesPage() {
         />
       ) : null}
 
+      {record ? (
+        <RunsDrawer
+          title={`采集记录 · ${record.name}`}
+          sourceId={record.id}
+          onClose={() => setRecord(null)}
+        />
+      ) : null}
+
       {draftOpen ? <AdapterDraftModal sources={sources ?? []} onClose={() => setDraftOpen(false)} onCreated={() => void load()} /> : null}
     </div>
   );
@@ -449,6 +737,7 @@ function SourceDrawer({
   source,
   methods,
   adapters,
+  types,
   onClose,
   onAnalyze,
   onSaved,
@@ -456,20 +745,22 @@ function SourceDrawer({
   source: Source | null;
   methods: NamedResource[];
   adapters: NamedResource[];
+  types: SourceTypeRecord[];
   onClose: () => void;
   onAnalyze: () => void;
   onSaved: () => void | Promise<void>;
 }) {
   const { notify, run } = useUi();
-  const { currentProjectId } = useCurrentProject();
   const [form, setForm] = useState<SourceInput>(() =>
     source
       ? {
           name: source.name,
+          sourceType: source.sourceType,
           accessMethodId: source.accessMethodId,
           adapterIds: source.adapterIds,
           enabled: source.enabled,
           endpoint: source.endpoint,
+          channel: source.channel ?? "",
           schedule: { ...source.schedule },
         }
       : { ...EMPTY, adapterIds: [...EMPTY.adapterIds], schedule: { ...EMPTY.schedule } },
@@ -501,6 +792,35 @@ function SourceDrawer({
     return () => window.removeEventListener("modalprism:source-proposal", apply);
   }, []);
 
+  // 类型剖面向表单收窄：接入方式取注册表的 formAccessors（简易表单能落盘的子集），
+  // 适配器取 allowedAdapters；前端只渲染，判断一律在后端。
+  const selectedType = types.find((item) => item.id === (form.sourceType ?? "feed"));
+  const formAccessors = selectedType?.formAccessors ?? null;
+  const allowedAdapters = selectedType?.allowedAdapters ?? null;
+  const methodOptions = formAccessors ? methods.filter((item) => formAccessors.includes(item.id)) : methods;
+  const adapterOptions = allowedAdapters ? adapters.filter((item) => allowedAdapters.includes(item.id)) : adapters;
+  const isPush = (form.sourceType ?? "feed") === "push";
+
+  function changeType(id: string) {
+    const next = types.find((item) => item.id === id);
+    const accessors = next?.formAccessors ?? methods.map((item) => item.id);
+    const allowed = next?.allowedAdapters ?? adapters.map((item) => item.id);
+    setForm((current) => {
+      const accessMethodId = accessors.includes(current.accessMethodId)
+        ? current.accessMethodId
+        : accessors[0] ?? current.accessMethodId;
+      let adapterIds = current.adapterIds.filter((item) => allowed.includes(item));
+      if (adapterIds.length === 0) adapterIds = allowed.slice(0, 1);
+      const schedule: Schedule =
+        id === "push"
+          ? { mode: "push" }
+          : current.schedule.mode === "push"
+            ? { mode: "fixed", intervalMs: 7_200_000 }
+            : current.schedule;
+      return { ...current, sourceType: id, accessMethodId, adapterIds, schedule, channel: id === "push" ? current.channel ?? "" : "" };
+    });
+  }
+
   function toggleAdapter(id: string) {
     setForm((current) => ({
       ...current,
@@ -513,31 +833,49 @@ function SourceDrawer({
   async function save() {
     setSaving(true);
     setError(null);
-    const payload: SourceInput = {
+    // 信源不再承载节律：采集节律落到计划。这里只写静态声明，节律经计划表达。
+    const { schedule, ...base } = {
       ...form,
       schedule:
         form.schedule.mode === "push"
           ? { mode: "push" }
           : { ...form.schedule, intervalMs: Math.max(60_000, Math.round(intervalValue) * 60_000) },
     };
+    const minutes = Math.max(1, Math.round(intervalValue));
+    const trigger =
+      schedule.mode === "push"
+        ? { kind: "oneShot", fireAt: "immediate" }
+        : { kind: "recurring", interval: `${minutes}m` };
     try {
-      if (!payload.name.trim() || !payload.endpoint.trim()) {
-        throw new Error("名称与地址不能为空");
+      if (!base.name.trim()) {
+        throw new Error("名称不能为空");
       }
-      if (payload.adapterIds.length === 0) {
+      if (base.sourceType === "push") {
+        if (!(base.channel ?? "").trim()) throw new Error("接收类信源需要频道标识");
+      } else if (!base.endpoint.trim()) {
+        throw new Error("地址不能为空");
+      }
+      if (base.adapterIds.length === 0) {
         throw new Error("至少选择一个适配器");
       }
+      // 接收类不写地址与节律：后端按 channel 落 locator.channel，并去掉 schedule。
+      const payload: SourcePayload =
+        base.sourceType === "push"
+          ? { ...base, endpoint: "", channel: (base.channel ?? "").trim() }
+          : { ...base, channel: undefined };
       if (!source) {
         const created = await createSource(payload);
-        // 新建信源默认归属当前项目（上下文未就绪则跳过，可稍后在项目页手动绑定）。
-        if (currentProjectId) {
+        // 新建信源配一个同名计划（默认关闭），确认后在计划页启用；接收类由入口监听驱动，不建计划。
+        if (created.sourceType !== "push") {
           try {
-            await bindProjectResource(currentProjectId, "source", created.id);
+            // 默认关闭：新建信源先核对，采集在计划页确认后再启用。
+            await createPlan({ name: `${created.name} · 采集计划`, targets: [created.id], trigger, enabled: false });
           } catch {
-            // 绑定失败不阻断创建本身。
+            // 计划创建失败不回滚信源，可在计划页补建。
           }
         }
-        notify("ok", "信源已创建");
+        // 归属由后端按当前项目自动写入，无需手动绑定。
+        notify("ok", "信源已创建并归入当前项目");
       } else {
         await updateSource(source.id, payload, source.etag);
         notify("ok", "信源已更新");
@@ -582,10 +920,12 @@ function SourceDrawer({
       <div className="stack" style={{ gap: 14 }}>
         {error ? <div className="alert bad">{error}</div> : null}
         <div className="row wrap">
-          <button type="button" className="btn btn-sm" onClick={onAnalyze}>
-            <IconFlask size={13} /> 让 AI 分析地址
-          </button>
-          {source ? (
+          {!isPush ? (
+            <button type="button" className="btn btn-sm" onClick={onAnalyze}>
+              <IconFlask size={13} /> 让 AI 分析地址
+            </button>
+          ) : null}
+          {source && !isPush ? (
             <button type="button" className="btn btn-sm" onClick={() => void collectNow()}>
               <IconPlay size={13} /> 立即采集
             </button>
@@ -594,37 +934,53 @@ function SourceDrawer({
         <Field label="名称" htmlFor="source-name">
           <input id="source-name" className="input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如 Hugging Face Blog" />
         </Field>
-        <Field label="地址" hint="只接受 http/https。单 URL 采集会替换这个地址，但不会改写声明。" htmlFor="source-endpoint">
-          <input id="source-endpoint" className="input" value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value })} placeholder="https://example.com/feed.xml" />
+        <Field label="信源类型" hint="先定类型：地址/频道与可选的接入方式、适配器都随类型收窄">
+          <select className="select" value={form.sourceType ?? "feed"} onChange={(event) => changeType(event.target.value)}>
+            {types.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
         </Field>
+        {isPush ? (
+          <Field label="频道标识" hint="接收类信源由外部按频道推送，不抓取地址；采集进程据此频道监听。" htmlFor="source-channel">
+            <input id="source-channel" className="input mono" value={form.channel ?? ""} onChange={(event) => setForm({ ...form, channel: event.target.value })} placeholder="items" />
+          </Field>
+        ) : (
+          <Field label="地址" hint="只接受 http/https。单 URL 采集会替换这个地址，但不会改写声明。" htmlFor="source-endpoint">
+            <input id="source-endpoint" className="input" value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value })} placeholder="https://example.com/feed.xml" />
+          </Field>
+        )}
         <div className="grid cols-2">
           <Field label="接入方式">
             <select className="select" value={form.accessMethodId} onChange={(event) => setForm({ ...form, accessMethodId: event.target.value })}>
-              {methods.map((method) => (
+              {methodOptions.map((method) => (
                 <option key={method.id} value={method.id}>{method.name}</option>
               ))}
             </select>
           </Field>
-          <Field label="采集节奏" hint={form.schedule.mode === "push" ? "推送信源按通道速率接收" : "固定间隔；自适应由系统在上下限内调整"}>
+          <Field
+            label="采集节奏"
+            hint={
+              source
+                ? "节律已由采集计划承载，请到「计划」页调整这条信源所属计划的节律与额度。"
+                : "信源不再承载节律：创建后会生成一个默认关闭的同名计划，确认无误再到「计划」页启用。"
+            }
+          >
             <div className="row">
-              <input
-                className="input"
-                type="number"
-                min={1}
-                value={intervalValue}
-                onChange={(event) => setIntervalValue(Number(event.target.value))}
-                disabled={form.schedule.mode === "push"}
-                aria-label="采集间隔（分钟）"
-              />
-              <span className="muted small">分钟</span>
+              <span className="muted small">
+                {form.schedule.mode === "push" ? "随推送（一次性触发）" : "在「计划」页配置"}
+              </span>
             </div>
           </Field>
         </div>
         <Field label="适配器" hint="适配器负责把原始响应解析为内容；可多选并按顺序执行">
           <div className="stack" style={{ gap: 6 }}>
-            {adapters.map((adapter) => (
+            {adapterOptions.map((adapter) => (
               <label key={adapter.id} className="switch" style={{ justifyContent: "space-between" }}>
-                <span>{adapter.name}</span>
+                <span className="stack" style={{ gap: 2 }}>
+                  <span>{adapter.name}</span>
+                  {adapter.description ? <span className="small muted">{String(adapter.description)}</span> : null}
+                </span>
                 <input type="checkbox" checked={form.adapterIds.includes(adapter.id)} onChange={() => toggleAdapter(adapter.id)} />
               </label>
             ))}
@@ -635,9 +991,12 @@ function SourceDrawer({
           <span>启用这条信源</span>
         </label>
         {source ? (
-          <div className="code">
-            {JSON.stringify({ id: source.id, health: source.health, references: source.references, etag: source.etag }, null, 2)}
-          </div>
+          <dl className="kv">
+            <dt>信源标识</dt><dd className="mono">{source.id}</dd>
+            <dt>健康状态</dt><dd>{source.health || "—"}{source.healthReason ? ` · ${source.healthReason}` : ""}</dd>
+            <dt>关联引用</dt><dd>{typeof source.references === "number" ? source.references : "—"}</dd>
+            <dt>配置版本</dt><dd className="mono">{source.etag}</dd>
+          </dl>
         ) : null}
       </div>
     </Drawer>
@@ -703,7 +1062,7 @@ function AnalyzeModal({ onClose, onUse }: { onClose: () => void; onUse: (proposa
         {result ? (
           <>
             <div className="alert info">模型给出的是草稿；请核对接入方式、地址与风险，再保存信源。</div>
-            <div className="code">{JSON.stringify(proposal, null, 2)}</div>
+            <StructuredValue value={proposal} />
           </>
         ) : null}
       </div>

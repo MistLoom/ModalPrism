@@ -240,7 +240,6 @@ async fn link(root: Arc<ReadRoot>) -> Result<Arc<AbilityHost>, types::Error> {
         ("config_inspect", config_inspect::provider(Arc::clone(&ctx))),
         ("type_article", type_article::provider(Arc::clone(&ctx))),
         ("type_hotlist", type_hotlist::provider(Arc::clone(&ctx))),
-        ("workflow", ability_workflow::provider(Arc::clone(&ctx))),
         ("web", web_provider()),
     ];
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

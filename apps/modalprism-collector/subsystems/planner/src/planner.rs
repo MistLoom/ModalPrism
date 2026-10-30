@@ -17,6 +17,8 @@ use crate::queue::Queue;
 #[derive(Clone, Debug)]
 pub struct SourcePlan {
     pub source_id: SourceId,
+    /// 所属采集计划 id（`plan/<slug>`）。去重与预算按此维度归组。
+    pub plan_id: Option<String>,
     pub locator: Locator,
     pub accessor: String,
     pub queue: QueueName,
@@ -41,6 +43,23 @@ pub struct SourcePlan {
     pub failure_threshold: u32,
     /// 每日产出上限；未配置时不限制。
     pub daily_limit: Option<u64>,
+    /// 触发形态：一次性计划（oneShot）首轮到期派发后即转 completed，不再排下次。
+    pub one_shot: bool,
+    /// 单次每信源产出上限（来自计划 quota.perRunItems）。
+    pub per_run_items: Option<u64>,
+    /// 计划累计产出上限（来自计划 quota.totalItems）；命中后按 stopPolicy 处理。
+    pub total_items: Option<u64>,
+    /// 预算/额度耗尽时的停止策略：`pause`（停派发）或 `skip`（跳过本轮，默认）。
+    pub on_budget_exhausted: String,
+    /// 连续空命中升级为告警的周期数（v3 R18，来自信源类型）；`None` 表示不做停滞升级。
+    pub stagnation_cycles: Option<u32>,
+}
+
+impl SourcePlan {
+    /// 队列去重键：带计划维度，使一信源多计划互不吞并。
+    pub fn dedup_key(&self) -> String {
+        strata_model::compose_locator_key(self.plan_id.as_deref(), &self.locator)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +110,9 @@ pub(crate) struct Db {
     /// 被暂停的队列：暂停后定时扫描不再往该队列派发。
     #[serde(default)]
     pub paused: BTreeSet<String>,
+    /// 已派发完成的一次性计划 id：oneShot 首轮派发后写入，后续轮次不再重复触发。
+    #[serde(default)]
+    pub completed_plans: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -145,6 +167,15 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             if !due.contains(plan.source_id.as_str()) || !plan.enabled {
                 continue;
             }
+            // 一次性计划派发完成后不再进入本轮选择。
+            if plan.one_shot
+                && plan
+                    .plan_id
+                    .as_ref()
+                    .is_some_and(|id| db.completed_plans.contains(id))
+            {
+                continue;
+            }
             chosen.push(plan);
         }
         chosen.sort_by(|left, right| {
@@ -164,7 +195,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
                 continue;
             }
             let lease_for = lease_span(plan.timeout);
-            let key = locator_key(&plan.locator)?;
+            let key = plan.dedup_key();
             let leased = if self.queue.active(plan.source_id.as_str(), &key).await? {
                 let Some(task) = self
                     .queue
@@ -187,6 +218,11 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
                     .checked_add(lease_for)
                     .map_err(|source| PlannerError::with_source("租约时间", source))?;
                 row.next_at = Some(stamp(until)?);
+            }
+            if plan.one_shot {
+                if let Some(id) = plan.plan_id.as_ref() {
+                    db.completed_plans.insert(id.clone());
+                }
             }
             tasks.push(leased);
         }
@@ -442,6 +478,7 @@ pub fn make_task(
         task_id: TaskId::new(format!("t_{}", ulid::Ulid::new()))
             .map_err(|source| PlannerError::with_source("任务 ID", source))?,
         source_id: plan.source_id.clone(),
+        plan_id: plan.plan_id.clone(),
         accessor: plan.accessor.clone(),
         locator: plan.locator.clone(),
         spec: plan.spec.clone(),
@@ -461,6 +498,9 @@ fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
     let today_yield = yield_sum(&db.yields, &id, today, 0, 1);
     let paused = db.paused.contains(plan.queue.label());
     let capped = plan.daily_limit.is_some_and(|limit| today_yield >= limit);
+    let total_exhausted = plan
+        .total_items
+        .is_some_and(|limit| cumulative_yield(&db.yields, plan.source_id.as_str()) >= limit);
     let row = db
         .sources
         .entry(id)
@@ -477,11 +517,18 @@ fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
     row.generation = plan.generation;
     if paused {
         row.skip_reason = Some("queue-paused".into());
+    } else if total_exhausted {
+        // 计划累计额度耗尽：按 stopPolicy 记 pause / skip，派发侧凭 total_items 门槛停派。
+        row.skip_reason = Some(if plan.on_budget_exhausted == "pause" {
+            "quota-paused".into()
+        } else {
+            "quota-exhausted".into()
+        });
     } else if capped {
         row.skip_reason = Some("daily-cap".into());
     } else if matches!(
         row.skip_reason.as_deref(),
-        Some("queue-paused" | "daily-cap")
+        Some("queue-paused" | "daily-cap" | "quota-paused" | "quota-exhausted")
     ) {
         row.skip_reason = None;
     }
@@ -539,17 +586,27 @@ fn due_ids(db: &Db, plans: &[SourcePlan], now: Timestamp) -> BTreeSet<String> {
 }
 
 fn dispatchable(db: &Db, plan: &SourcePlan, today: &str) -> bool {
+    let cumulative = cumulative_yield(&db.yields, plan.source_id.as_str());
     plan.enabled
         && !db.paused.contains(plan.queue.label())
         && plan
             .daily_limit
             .is_none_or(|limit| yield_sum(&db.yields, plan.source_id.as_str(), today, 0, 1) < limit)
+        && plan.total_items.is_none_or(|limit| cumulative < limit)
         && !matches!(
             db.health
                 .get(&format!("source/{}", plan.source_id))
                 .map(|health| health.status.as_str()),
             Some("paused" | "misconfigured")
         )
+}
+
+/// 某信源跨全部日桶的累计产出，用于计划级 `totalItems` 上限判定。
+fn cumulative_yield(yields: &BTreeMap<String, BTreeMap<String, u64>>, source: &str) -> u64 {
+    yields
+        .get(source)
+        .map(|days| days.values().sum())
+        .unwrap_or(0)
 }
 
 fn status_of(db: &Db, source: &str, now: Timestamp) -> SourceStatus {
@@ -611,10 +668,6 @@ pub(crate) fn lease_span(timeout: Duration) -> Duration {
 pub(crate) fn stamp(now: Timestamp) -> Result<String, PlannerError> {
     now.to_rfc3339()
         .map_err(|source| PlannerError::with_source("时间", source))
-}
-
-pub(crate) fn locator_key(locator: &Locator) -> Result<String, PlannerError> {
-    serde_json::to_string(locator).map_err(|source| PlannerError::with_source("定位符", source))
 }
 
 pub(crate) async fn load_db<P: Persist>(persist: &P) -> Result<Db, PlannerError> {

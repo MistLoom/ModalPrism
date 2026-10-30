@@ -19,6 +19,7 @@ fn now() -> Timestamp {
 fn plan() -> SourcePlan {
     SourcePlan {
         source_id: SourceId::new("source/blog").unwrap(),
+        plan_id: None,
         locator: Locator::Url {
             url: "https://example.com/blog".into(),
         },
@@ -42,6 +43,11 @@ fn plan() -> SourcePlan {
         yield_drop_ratio: 0.3,
         failure_threshold: 5,
         daily_limit: None,
+        one_shot: false,
+        per_run_items: None,
+        total_items: None,
+        on_budget_exhausted: "skip".into(),
+        stagnation_cycles: None,
     }
 }
 
@@ -167,6 +173,53 @@ async fn lease_blocks_a_second_dispatch_until_shutdown() {
         .unwrap();
     assert_eq!(again.len(), 1);
     assert_eq!(again[0].task_id, released[0].task_id);
+}
+
+#[tokio::test]
+async fn plan_total_items_cap_stops_dispatch() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let mut p = plan();
+    p.plan_id = Some("plan/cap".into());
+    p.total_items = Some(1);
+    let first = planner
+        .tick(std::slice::from_ref(&p), &caps(), now())
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    // 记一次产出即达计划累计上限；释放租约后仍停派，并按 skipPolicy 记 exhausted 原因。
+    planner
+        .note_yield(p.source_id.as_str(), now(), 1)
+        .await
+        .unwrap();
+    planner.shutdown(now()).await.unwrap();
+    let second = planner
+        .tick(std::slice::from_ref(&p), &caps(), now())
+        .await
+        .unwrap();
+    assert!(second.is_empty(), "计划累计产出达 totalItems 上限后应停派");
+    let status = planner.source_status(p.source_id.as_str()).await.unwrap();
+    assert_eq!(status.skip_reason.as_deref(), Some("quota-exhausted"));
+}
+
+#[tokio::test]
+async fn one_shot_plan_dispatches_once_then_completes() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let mut p = plan();
+    p.one_shot = true;
+    p.plan_id = Some("plan/one".into());
+    let first = planner
+        .tick(std::slice::from_ref(&p), &caps(), now())
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].plan_id.as_deref(), Some("plan/one"));
+    // 释放租约也不应让一次性计划重新触发：首轮派发即转 completed。
+    planner.shutdown(now()).await.unwrap();
+    let second = planner
+        .tick(std::slice::from_ref(&p), &caps(), now())
+        .await
+        .unwrap();
+    assert!(second.is_empty(), "oneShot 计划派发一次后应转 completed");
 }
 
 #[tokio::test]
@@ -481,6 +534,7 @@ async fn follow_task_is_leased_after_the_source_is_scheduled() {
     let follow = AccessTask {
         task_id: TaskId::new("t_follow_1").unwrap(),
         source_id: SourceId::new("source/blog").unwrap(),
+        plan_id: None,
         accessor: "accessor/http".into(),
         locator: Locator::Url {
             url: "https://example.com/blog/post".into(),
@@ -543,6 +597,91 @@ async fn finish(planner: &Planner<MemoryQueue, MemoryPersist>, task: AccessTask,
         .run(&paid_plan(), task, &handler, &(), at, at)
         .await
         .unwrap();
+}
+
+struct Fixed {
+    quality: Quality,
+}
+
+#[async_trait]
+impl Handler for Fixed {
+    async fn execute(
+        &self,
+        _task: &strata_model::AccessTask,
+        _cursor: Option<serde_json::Value>,
+    ) -> Result<TaskSuccess, Classified> {
+        Ok(TaskSuccess {
+            ops: Vec::new(),
+            cursor: None,
+            receipt: None,
+            quality: self.quality,
+            selector_miss: false,
+            blocked: false,
+            ttl: None,
+            retry_after: None,
+            cache_max_age: None,
+            expires: None,
+            new_resources: 0,
+            render_level: None,
+            cost: 0,
+            adapters: Vec::new(),
+            follows: Vec::new(),
+        })
+    }
+}
+
+/// v3 R18：web 类连续空命中达 `stagnation_cycles` 才升级为告警；未到阈值仅 suspect 不告警。
+#[tokio::test]
+async fn empty_hits_escalate_to_alert_after_stagnation_cycles() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let mut p = plan();
+    p.stagnation_cycles = Some(3);
+    let handler = Fixed {
+        quality: Quality::Empty,
+    };
+    for cycle in 1..=3 {
+        planner.make_due(p.source_id.as_str(), now()).await.unwrap();
+        let mut tasks = planner
+            .tick(std::slice::from_ref(&p), &caps(), now())
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1, "第 {cycle} 轮应派发一个任务");
+        let task = tasks.remove(0);
+        planner
+            .run(&p, task, &handler, &(), now(), now())
+            .await
+            .unwrap();
+        let status = planner.source_status(p.source_id.as_str()).await.unwrap();
+        assert_eq!(status.health_status, "suspect", "空命中应判 suspect");
+        if cycle < 3 {
+            assert!(!status.alert, "未到阈值不应告警（第 {cycle} 轮）");
+        }
+    }
+    let status = planner.source_status(p.source_id.as_str()).await.unwrap();
+    assert!(status.alert, "连续 3 轮空命中达阈值应升级为告警");
+}
+
+/// v3 R18：非停滞类型（`stagnation_cycles=None`）单轮空命中判 suspect 但不告警。
+#[tokio::test]
+async fn empty_hits_without_stagnation_policy_do_not_alert() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let mut p = plan();
+    p.stagnation_cycles = None;
+    let handler = Fixed {
+        quality: Quality::Empty,
+    };
+    let mut tasks = planner
+        .tick(std::slice::from_ref(&p), &caps(), now())
+        .await
+        .unwrap();
+    let task = tasks.remove(0);
+    planner
+        .run(&p, task, &handler, &(), now(), now())
+        .await
+        .unwrap();
+    let status = planner.source_status(p.source_id.as_str()).await.unwrap();
+    assert_eq!(status.health_status, "suspect");
+    assert!(!status.alert, "无停滞阈值的类型不因空命中告警");
 }
 
 #[tokio::test]

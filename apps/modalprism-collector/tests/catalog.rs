@@ -1,11 +1,7 @@
-//! 声明式目录与内容加工的行为测试。
+//! 声明式目录的行为测试。
 //!
-//! 两条主线：
-//!
-//! - 信源与适配器可以只靠声明新增、启停、删除，不需要改代码；内置适配器只能停用不能删除。
-//! - 一条工作流能对真实文章跑完、把结果写回文章、并在运行记录里留下痕迹。
+//! 信源与适配器可以只靠声明新增、启停、删除，不需要改代码；内置适配器只能停用不能删除。
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +11,6 @@ use assembly::Binds;
 use config::builtin_presets;
 use frame_core::{Gateway, InvokeRequest};
 use serde_json::{Value, json};
-use strata_model::{ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, Target};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -247,149 +242,4 @@ async fn sources_and_adapters_are_managed_by_declaration() {
     );
 
     running.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn a_workflow_runs_on_a_real_article_and_writes_back() {
-    let data = tempfile::tempdir().unwrap();
-    let config = tempfile::tempdir().unwrap();
-    config_dir(config.path());
-    let running = modalprism_collector::boot(data.path(), config.path(), binds())
-        .await
-        .unwrap();
-    let gateway = running.gateway();
-
-    // 命令行模型：模板步骤不调用它，但声明必须先存在，否则工作流无法保存。
-    ok(
-        &gateway,
-        "workflow",
-        "save_model",
-        json!({
-            "slug": "mock",
-            "doc": {"name": "本机回声", "mode": "cli", "command": ["echo", "ok"]}
-        }),
-    )
-    .await;
-    ok(
-        &gateway,
-        "workflow",
-        "save",
-        json!({
-            "slug": "digest",
-            "doc": {
-                "name": "标题摘要",
-                "enabled": false,
-                "model": "mock",
-                "steps": [{"id": "title", "kind": "template", "template": "{{article.title}}"}],
-                "outputs": {"facet": {"kind": "md", "variant": "summary", "body": "{{steps.title}}"}}
-            }
-        }),
-    )
-    .await;
-
-    let catalog = ok(&gateway, "workflow", "catalog", json!({})).await;
-    assert_eq!(catalog["workflows"][0]["slug"], json!("digest"));
-    assert_eq!(catalog["workflows"][0]["available"], json!(true));
-
-    let rid = publish(&running, "示例标题").await;
-    let run = ok(
-        &gateway,
-        "workflow",
-        "run",
-        json!({"slug": "digest", "rid": rid}),
-    )
-    .await;
-    assert_eq!(run["status"], json!("ok"), "{run}");
-    assert_eq!(run["steps"][0]["status"], json!("ok"));
-
-    // 产出写回文章，而不是只留在运行记录里。
-    let summary = ok(
-        &gateway,
-        "strata_read",
-        "get",
-        json!({"facet": format!("{rid}@md:summary#latest")}),
-    )
-    .await;
-    assert_eq!(summary["text"], json!("示例标题"));
-
-    let runs = ok(&gateway, "workflow", "runs", json!({"limit": 10})).await;
-    let rows = runs.as_array().unwrap();
-    assert!(
-        rows.iter()
-            .any(|row| row["workflow"] == json!("digest") && row["status"] == json!("ok")),
-        "{runs}"
-    );
-
-    // 停用后不再进入可运行集合，但记录仍可读。
-    ok(
-        &gateway,
-        "workflow",
-        "toggle",
-        json!({"slug": "digest", "enabled": true}),
-    )
-    .await;
-    let toggled = ok(&gateway, "workflow", "get", json!({"slug": "digest"})).await;
-    assert_eq!(toggled["document"]["enabled"], json!(true));
-
-    running.shutdown().await.unwrap();
-}
-
-async fn publish(running: &modalprism_collector::Running, title: &str) -> String {
-    let strata = running.services().strata();
-    strata
-        .apply(
-            ChangeSet {
-                producer: Producer {
-                    module: "catalog-test".into(),
-                    version: "1".into(),
-                    config_generation: 1,
-                },
-                idempotency_key: None,
-                ack: None,
-                ops: vec![
-                    Op::Ensure {
-                        identity: format!("url:https://example.com/{title}"),
-                        ns: None,
-                        labels: BTreeMap::new(),
-                        r#as: "article".into(),
-                    },
-                    Op::PutFacet {
-                        target: Target::Alias("article".into()),
-                        kind: FacetKind::Struct,
-                        variant: Some("article".into()),
-                        body: Body::Struct {
-                            value: json!({"title": title, "url": "https://example.com/a"}),
-                        },
-                        media_type: Some("application/json".into()),
-                        lineage: LineageInput {
-                            inputs: Vec::new(),
-                            params_hash: "params".into(),
-                        },
-                    },
-                    Op::PutFacet {
-                        target: Target::Alias("article".into()),
-                        kind: FacetKind::Md,
-                        variant: Some("readable".into()),
-                        body: Body::Text {
-                            text: format!("{title}的正文"),
-                        },
-                        media_type: Some("text/markdown".into()),
-                        lineage: LineageInput {
-                            inputs: Vec::new(),
-                            params_hash: "params".into(),
-                        },
-                    },
-                ],
-            },
-            ApplyOpts::default(),
-        )
-        .await
-        .unwrap();
-    strata.flush().await.unwrap();
-    strata
-        .resolve(&format!("url:https://example.com/{title}"))
-        .await
-        .unwrap()
-        .unwrap()
-        .to_string()
 }

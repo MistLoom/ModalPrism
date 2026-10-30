@@ -1,0 +1,11 @@
+id: plan/status-search
+kind: plan
+name: 状态搜索 · 采集计划
+# 查询型信源按节律重跑同一查询；示例默认关闭，避免启动即产生外部调用。
+enabled: false
+project: proj_default
+targets:
+  - source/status-search
+trigger:
+  interval: 30m
+  kind: recurring

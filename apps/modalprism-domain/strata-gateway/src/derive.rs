@@ -152,6 +152,7 @@ pub async fn trigger(
             tasks.push(AccessTask {
                 task_id: TaskId::new(ulid::Ulid::new().to_string())?,
                 source_id: SourceId::new(spec.name.clone())?,
+                plan_id: None,
                 accessor: spec.accessor_name().to_string(),
                 locator: Locator::Query { query: locator },
                 spec: serde_json::to_value(&payload)?,

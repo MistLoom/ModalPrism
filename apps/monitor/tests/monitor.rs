@@ -10,6 +10,10 @@ use frame_core::InvokeRequest;
 use leaf_monitor::{MonitorConfig, attach, fun_call};
 use serde_json::json;
 
+/// 监视器 sink 是进程级单例：并行跑测试会互相顶掉注册，事件落到别的队列。
+/// 这些用例都依赖"本用例的 app 收到全部事件"，因此统一串行。
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn provider(id: &str) -> Arc<dyn Ability> {
     let m = crate_manifest(id);
     // 停留片刻，保证主线程能观察到在途链路。
@@ -36,6 +40,7 @@ fn crate_manifest(id: &str) -> ability_support::AbilityManifest {
 
 #[tokio::test]
 async fn recorder_and_query_surfaces() {
+    let _serial = SERIAL.lock().await;
     let log = std::env::temp_dir().join(format!("leaf-monitor-test-{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&log);
     let config = MonitorConfig {
@@ -120,6 +125,7 @@ async fn recorder_and_query_surfaces() {
 
 #[tokio::test]
 async fn queue_drops_oldest_without_blocking() {
+    let _serial = SERIAL.lock().await;
     let config = MonitorConfig {
         log_path: String::new(), // 不落盘
         queue_capacity: 32,

@@ -6,16 +6,20 @@
 
 mod bindings;
 mod catalog;
+mod channels;
 mod collection;
 mod content;
+pub mod delivery;
 mod error;
+pub mod external;
 mod maintenance;
+pub mod monitor;
+mod models;
+mod notifications;
 mod observe;
 mod operations;
 mod preconditions;
-mod production;
 mod projects;
-mod publication;
 pub mod search;
 mod settings;
 mod store;
@@ -33,7 +37,7 @@ use std::time::Instant;
 use assembly::Services;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::{FromRequestParts, Request, State};
 use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -48,10 +52,14 @@ use crate::error::REQUEST_ID;
 /// HTTP 服务版本，随公开协议冻结。
 pub const API_VERSION: &str = "1.0.0";
 
-/// 结构化解析钩子：宿主（collector）注入 rawprism 调用；None 时 /parse 返回 412。
+/// 结构化解析钩子：宿主（collector）注入 rawprism 调用；未设置时 /parse 返回 412。
 pub type ParseHookFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>>;
 pub type ParseHook = Arc<dyn Fn(&Value) -> ParseHookFuture + Send + Sync>;
+
+/// 框架监测投影钩子：宿主（collector）把 `leaf_monitor::MonitorApp` 包成同步视图。
+/// `what` 取 chains/events/stats/graph/summary，`tail` 为事件截取条数。
+pub type MonitorHook = Arc<dyn Fn(&str, usize) -> Value + Send + Sync>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -64,10 +72,11 @@ pub struct AppState {
     pub maintenance: Arc<AtomicBool>,
     pub resetting: Arc<AtomicBool>,
     pub retention_at: Arc<AtomicU64>,
-    pub parse_hook: ParseHookOption,
+    /// 宿主注入的钩子经 `OnceLock` 一次性写入：`open` 会 spawn 持 Arc 的后台任务，
+    /// 返回后再拿可变引用已不可能（Arc::get_mut 静默失败），共享后单写仍安全。
+    pub parse_hook: std::sync::OnceLock<ParseHook>,
+    pub monitor_hook: std::sync::OnceLock<MonitorHook>,
 }
-
-pub type ParseHookOption = Option<ParseHook>;
 
 pub type Shared = Arc<AppState>;
 
@@ -89,7 +98,8 @@ impl AppState {
             maintenance: Arc::new(AtomicBool::new(false)),
             resetting: Arc::new(AtomicBool::new(false)),
             retention_at: Arc::new(AtomicU64::new(0)),
-            parse_hook: None,
+            parse_hook: std::sync::OnceLock::new(),
+            monitor_hook: std::sync::OnceLock::new(),
         });
         settings::seed(&state).await?;
         projects::seed(&state).await?;
@@ -110,6 +120,15 @@ impl AppState {
         let retention = Arc::clone(&state);
         tokio::spawn(async move {
             crate::observe::maybe_retention(&retention).await;
+        });
+        let stops = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::observe::watch_plan_stops(&stops).await;
+        });
+        // 自动投递轮询：订阅式实现，放在领域层，不改采集链路。
+        let sweeper = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::delivery::spawn_auto_sweeper(sweeper).await;
         });
         Ok(state)
     }
@@ -150,8 +169,11 @@ pub fn router(state: Shared) -> Router {
         .merge(bindings::routes())
         .merge(collection::routes())
         .merge(content::routes())
-        .merge(production::routes())
-        .merge(publication::routes())
+        .merge(channels::routes())
+        .merge(delivery::routes())
+        .merge(notifications::routes())
+        .merge(external::routes())
+        .merge(monitor::routes())
         .merge(projects::routes())
         .merge(wizard::routes())
         .merge(search::routes())
@@ -229,6 +251,19 @@ async fn associate(State(state): State<Shared>, mut request: Request, next: Next
     request
         .extensions_mut()
         .insert(RequestId(request_id.clone()));
+    // :action 重写会二次分发并重跑 associate：已有活跃项目时不得覆盖。
+    if request.extensions().get::<ActiveProject>().is_none() {
+        let active_project = request
+            .headers()
+            .get("x-project-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        request
+            .extensions_mut()
+            .insert(ActiveProject(active_project));
+    }
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     let started = Instant::now();
@@ -256,8 +291,6 @@ async fn associate(State(state): State<Shared>, mut request: Request, next: Next
         "contentId": Value::Null,
         "runId": Value::Null,
         "attemptId": Value::Null,
-        "workflowVersionId": Value::Null,
-        "publicationId": Value::Null,
         "deliveryId": Value::Null,
         "configGeneration": state.services.config_generation() as i64,
         "data": {"method": method.as_str(), "path": path, "status": status, "durationMs": ms},
@@ -273,6 +306,40 @@ async fn associate(State(state): State<Shared>, mut request: Request, next: Next
 
 #[derive(Clone, Debug)]
 pub struct RequestId(pub String);
+
+/// 当前请求的活跃项目（由 `x-project-id` 头经中间件写入扩展）。
+/// `None` 表示未显式指定项目：读写按默认项目处理，列表可用 `?scope=all` 取消过滤。
+#[derive(Clone, Debug)]
+pub struct ActiveProject(pub Option<String>);
+
+impl ActiveProject {
+    /// 无头时回落默认项目。
+    pub fn id(&self) -> &str {
+        self.0
+            .as_deref()
+            .unwrap_or(crate::projects::DEFAULT_PROJECT_ID)
+    }
+
+    /// 是否显式携带了项目头。
+    pub fn is_explicit(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for ActiveProject {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(parts
+            .extensions
+            .get::<ActiveProject>()
+            .cloned()
+            .unwrap_or(ActiveProject(None)))
+    }
+}
 
 /// 维护模式拒绝写入；维护端点自身与操作取消/重试保持可达。
 async fn maintenance_guard(State(state): State<Shared>, request: Request, next: Next) -> Response {

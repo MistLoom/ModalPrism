@@ -98,7 +98,7 @@ export function statusTone(status?: string | null): "ok" | "warn" | "bad" | "inf
 const STATUS_LABELS: Record<string, string> = {
   online: "在线",
   offline: "离线",
-  degraded: "退化",
+  degraded: "能力受限",
   maintenance: "维护中",
   healthy: "正常",
   failed: "失败",
@@ -119,11 +119,11 @@ const STATUS_LABELS: Record<string, string> = {
   disabled: "停用",
   publishing: "发布中",
   published: "已发布",
-  partiallyPublished: "部分发布",
+  partiallyPublished: "部分成功",
   delivering: "投递中",
   delivered: "已投递",
   scheduled: "已排期",
-  suspicious: "可疑",
+  suspicious: "待核实",
   configurationError: "配置错误",
   draft: "草稿",
   validated: "已校验",
@@ -139,8 +139,6 @@ export function kindLabel(kind: string): string {
   return (
     {
       collection: "采集",
-      production: "生产",
-      publication: "发布",
       maintenance: "维护",
       sourceAnalysis: "信源分析",
       adapterDraft: "适配器草稿",

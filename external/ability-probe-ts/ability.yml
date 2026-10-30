@@ -9,6 +9,10 @@ methods:
     description: 外部探针 ping
     input:
       type: object
+  - id: slow
+    description: 长任务探针：返回 task_handle，经 handle 轮询
+    input:
+      type: object
 events:
   - name: pong
     dir: emit

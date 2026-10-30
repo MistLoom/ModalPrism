@@ -21,45 +21,218 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_HITS: usize = 20;
 /// 项目维度搜索记录的文档种类（经 project_binding 关联到项目）。
 const SEARCH_RECORD_KIND: &str = "search_record";
+/// 搜索引擎平台配置（启用与密钥引用名），与系统设置分开保存。
+const PLATFORM_KIND: &str = "search_platform_config";
+const PLATFORM_ID: &str = "default";
 
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/search/engines", get(list_engines))
+        .route("/search/engines/test", post(test_engine))
+        .route("/search/platforms", get(list_platforms).put(save_platforms))
         .route("/search", post(run_search))
 }
 
 /// 引擎目录：`requires_key` 引用 settings 的密钥引用名字段。
+/// 每个引擎带图标键与配置字段，前端按同一份目录渲染平台卡片。
 pub fn engine_catalog() -> Vec<Value> {
     vec![
         json!({
             "id": "ddg",
             "name": "DuckDuckGo",
+            "icon": "ddg",
             "requiresKeyRef": Option::<String>::None,
             "builtin": true,
+            "docs": "免密钥，结果受页面标记影响；空结果自动回退 DuckDuckGo Lite",
+            "fields": [],
+        }),
+        json!({
+            "id": "ddg_lite",
+            "name": "DuckDuckGo Lite",
+            "icon": "ddg",
+            "requiresKeyRef": Option::<String>::None,
+            "builtin": true,
+            "docs": "免密钥的轻量页面，标记更稳定",
+            "fields": [],
         }),
         json!({
             "id": "bing",
             "name": "Bing Web Search",
+            "icon": "bing",
             "requiresKeyRef": "search.bingKeyRef",
             "builtin": false,
+            "docs": "密钥引用名指向环境变量，可选 env: 前缀",
+            "fields": [{"key": "keyRef", "label": "密钥环境变量名", "required": true, "placeholder": "BING_SEARCH_KEY"}],
         }),
         json!({
             "id": "google_cse",
             "name": "Google Programmable Search (CSE)",
+            "icon": "google",
             "requiresKeyRef": "search.googleCseKeyRef",
             "builtin": false,
+            "docs": "引用名写成 key,cx（密钥与搜索引擎标识用逗号分隔）",
+            "fields": [{"key": "keyRef", "label": "密钥与引擎标识", "required": true, "placeholder": "GOOGLE_KEY,cx"}],
         }),
         json!({
             "id": "serpapi",
             "name": "SerpAPI",
+            "icon": "serpapi",
             "requiresKeyRef": "search.serpApiKeyRef",
             "builtin": false,
+            "docs": "以 google 引擎参数调用，返回 organic_results",
+            "fields": [{"key": "keyRef", "label": "密钥环境变量名", "required": true, "placeholder": "SERPAPI_KEY"}],
         }),
     ]
 }
 
 async fn list_engines() -> Result<Response, ApiError> {
     Ok(util::ok(&json!({ "items": engine_catalog() })))
+}
+
+/// 平台配置：启用状态与密钥引用名。未保存时回落到系统设置的密钥引用。
+async fn platform_items(state: &Shared) -> Vec<Value> {
+    let saved = state
+        .store
+        .get_document(PLATFORM_KIND, PLATFORM_ID)
+        .await
+        .ok()
+        .flatten()
+        .map(|doc| doc.body["items"].as_array().cloned().unwrap_or_default())
+        .unwrap_or_default();
+    let mut items = Vec::new();
+    for entry in engine_catalog() {
+        let engine = entry["id"].as_str().unwrap_or_default();
+        let found = saved
+            .iter()
+            .find(|item| item["engine"].as_str() == Some(engine));
+        let key_field = entry["requiresKeyRef"].as_str().unwrap_or_default();
+        let fallback = if key_field.is_empty() {
+            String::new()
+        } else {
+            settings_key_ref(state, key_field).await
+        };
+        let enabled = found
+            .and_then(|item| item["enabled"].as_bool())
+            .unwrap_or_else(|| entry["builtin"].as_bool().unwrap_or(false));
+        let key_ref = found
+            .and_then(|item| item["keyRef"].as_str())
+            .map(str::to_string)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(fallback);
+        items.push(json!({
+            "engine": engine,
+            "enabled": enabled,
+            "keyRef": key_ref,
+            "catalog": entry,
+        }));
+    }
+    items
+}
+
+async fn list_platforms(State(state): State<Shared>) -> Result<Response, ApiError> {
+    Ok(util::ok(&json!({"items": platform_items(&state).await})))
+}
+
+async fn save_platforms(
+    State(state): State<Shared>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let map = util::object(&body)?;
+    util::unknown(map, &["items"])?;
+    let items = map
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::validation("items", "required", "需要提供平台列表"))?;
+    let known = engine_catalog();
+    let mut next = Vec::new();
+    for item in items {
+        let engine = item["engine"].as_str().unwrap_or_default();
+        if !known.iter().any(|entry| entry["id"].as_str() == Some(engine)) {
+            return Err(ApiError::validation(
+                "items",
+                "unknown",
+                format!("未知搜索引擎: {engine}"),
+            ));
+        }
+        if !item["enabled"].is_boolean() {
+            return Err(ApiError::validation("items", "type", "enabled 必须是布尔值"));
+        }
+        next.push(json!({
+            "engine": engine,
+            "enabled": item["enabled"],
+            "keyRef": item["keyRef"].as_str().unwrap_or_default(),
+        }));
+    }
+    if !next.iter().any(|item| item["enabled"] == json!(true)) {
+        return Err(ApiError::validation(
+            "items",
+            "required",
+            "至少启用一个搜索引擎",
+        ));
+    }
+    let doc = json!({"items": next, "updatedAt": crate::now()});
+    match state.store.get_document(PLATFORM_KIND, PLATFORM_ID).await? {
+        Some(existing) => {
+            state
+                .store
+                .update_document(PLATFORM_KIND, PLATFORM_ID, &doc, Some(existing.version))
+                .await?;
+        }
+        None => {
+            state
+                .store
+                .insert_document(PLATFORM_KIND, PLATFORM_ID, &doc)
+                .await?;
+        }
+    }
+    Ok(util::ok(&json!({"items": platform_items(&state).await})))
+}
+
+/// 连通检测：真实跑一次小查询，返回耗时与命中数（不写入搜索记录）。
+async fn test_engine(
+    State(state): State<Shared>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let map = util::object(&body)?;
+    util::unknown(map, &["engine", "keyRef"])?;
+    let engine = util::non_empty(map, "engine")?;
+    let key_ref = match util::optional_text(map, "keyRef")? {
+        Some(value) if !value.trim().is_empty() => value,
+        _ => {
+            let field = engine_catalog()
+                .iter()
+                .find(|entry| entry["id"].as_str() == Some(engine.as_str()))
+                .and_then(|entry| entry["requiresKeyRef"].as_str().map(str::to_string))
+                .unwrap_or_default();
+            if field.is_empty() {
+                String::new()
+            } else {
+                engine_key_ref(&state, &field, &engine).await
+            }
+        }
+    };
+    let started = std::time::Instant::now();
+    let hits = match engine.as_str() {
+        "ddg" => ddg_search("ModalPrism", 3).await?,
+        "ddg_lite" => ddg_lite_search("ModalPrism", 3).await?,
+        "bing" => bing_search(&key_ref, "ModalPrism", 3).await?,
+        "google_cse" => google_cse_search(&key_ref, "ModalPrism", 3).await?,
+        "serpapi" => serpapi_search(&key_ref, "ModalPrism", 3).await?,
+        other => {
+            return Err(ApiError::validation(
+                "engine",
+                "invalid",
+                format!("未知引擎: {other}"),
+            ));
+        }
+    };
+    Ok(util::ok(&json!({
+        "ok": true,
+        "engine": engine,
+        "latencyMs": started.elapsed().as_millis() as u64,
+        "count": hits.len(),
+        "sample": hits.first().cloned().unwrap_or(Value::Null),
+    })))
 }
 
 fn hit_count(hits: &[Value]) -> usize {
@@ -129,11 +302,7 @@ async fn run_search(
         .find(|entry| entry["id"] == json!(engine))
         .ok_or_else(|| ApiError::validation("engine", "invalid", format!("未知引擎: {engine}")))?;
     if let Some(key_ref_field) = entry["requiresKeyRef"].as_str() {
-        let key_ref = crate::settings::value(&state, key_ref_field)
-            .await
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default();
+        let key_ref = engine_key_ref(&state, key_ref_field, &engine).await;
         if key_ref.trim().is_empty() {
             return Err(precondition_requirements(vec![json!({
                 "type": "engine_key",
@@ -146,23 +315,57 @@ async fn run_search(
     }
 
     // 密钥引用名来自 settings；实际密钥由各引擎经 resolve_secret 从环境解析。
+    // ddg 为主免密钥引擎，其结果被 HTML 标记波动影响：空结果或不可达时自动回退
+    // ddg_lite（同为免密钥、标记更稳定）。served_engine 记录真正命中的引擎。
+    let mut served_engine = engine.clone();
+    let mut degraded = false;
     let hits = match engine.as_str() {
-        "ddg" => ddg_search(&query, limit).await?,
+        "ddg" => match ddg_search(&query, limit).await {
+            Ok(hits) if !hits.is_empty() => hits,
+            result => {
+                let primary = result.err().map(|e| e.to_string());
+                match ddg_lite_search(&query, limit).await {
+                    Ok(hits) if !hits.is_empty() => {
+                        served_engine = "ddg_lite".to_string();
+                        hits
+                    }
+                    Ok(_) => {
+                        degraded = true;
+                        if let Some(error) = primary {
+                            return Err(ApiError::dependency(format!(
+                                "搜索引擎未能返回结果（ddg: {error}；ddg_lite 亦为空）"
+                            ))
+                            .retryable());
+                        }
+                        Vec::new()
+                    }
+                    Err(error) => {
+                        // ddg 与 ddg_lite 都不可达：回传 lite 侧错误（更可能是根因）。
+                        let _ = primary;
+                        return Err(error);
+                    }
+                }
+            }
+        },
+        "ddg_lite" => ddg_lite_search(&query, limit).await?,
         "bing" => {
-            let key_ref = settings_key_ref(&state, "search.bingKeyRef").await;
+            let key_ref = engine_key_ref(&state, "search.bingKeyRef", "bing").await;
             bing_search(&key_ref, &query, limit).await?
         }
         "google_cse" => {
-            let key_ref = settings_key_ref(&state, "search.googleCseKeyRef").await;
+            let key_ref = engine_key_ref(&state, "search.googleCseKeyRef", "google_cse").await;
             google_cse_search(&key_ref, &query, limit).await?
         }
         "serpapi" => {
-            let key_ref = settings_key_ref(&state, "search.serpApiKeyRef").await;
+            let key_ref = engine_key_ref(&state, "search.serpApiKeyRef", "serpapi").await;
             serpapi_search(&key_ref, &query, limit).await?
         }
         _ => unreachable!("引擎已校验"),
     };
     let hits: Vec<Value> = hits.into_iter().take(limit).map(normalize_hit).collect();
+    if hits.is_empty() {
+        degraded = true;
+    }
 
     // 最小关联：项目维度搜索落一条 search_record 并绑定到项目，
     // 可经 /projects/{projectId}/resources?kind=search_record 查看。
@@ -177,7 +380,8 @@ async fn run_search(
         let record = json!({
             "id": record_id,
             "projectId": project_id,
-            "engine": engine,
+            "engine": served_engine,
+            "requestedEngine": engine,
             "query": query,
             "count": hit_count(&hits),
             "topUrls": urls,
@@ -203,11 +407,20 @@ async fn run_search(
     }
 
     let mut payload = json!({
-        "engine": engine,
+        "engine": served_engine,
         "query": query,
         "count": hit_count(&hits),
         "results": hits,
     });
+    if served_engine != engine {
+        payload["requestedEngine"] = json!(engine);
+    }
+    if degraded {
+        payload["degraded"] = json!(true);
+        payload["note"] = json!(
+            "免密钥引擎未能返回结果（DDG 主页与 Lite 均为空）；如需稳定结果请在设置配置带密钥引擎。"
+        );
+    }
     if !project_id.is_empty() {
         payload["projectId"] = json!(project_id);
     }
@@ -248,6 +461,25 @@ async fn settings_key_ref(state: &Shared, field: &str) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_default()
+}
+
+/// 引擎密钥引用：平台配置优先，其次回落系统设置；空串表示未配置。
+async fn engine_key_ref(state: &Shared, field: &str, engine: &str) -> String {
+    if let Ok(Some(doc)) = state.store.get_document(PLATFORM_KIND, PLATFORM_ID).await
+        && let Some(value) = doc.body["items"]
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item["engine"].as_str() == Some(engine))
+            })
+            .and_then(|item| item["keyRef"].as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        return value.to_string();
+    }
+    settings_key_ref(state, field).await
 }
 
 /// 解析密钥引用名：`env:VAR` 或裸名字都指向环境变量；`value:literal` 直接取字面量。
@@ -487,10 +719,105 @@ async fn ddg_search(query: &str, limit: usize) -> Result<Vec<Value>, ApiError> {
     Ok(parse_ddg_html(&html, limit))
 }
 
+/// DDG Lite 端点搜索：HTML 主页标记变化时的免密钥回退路径。
+async fn ddg_lite_search(query: &str, limit: usize) -> Result<Vec<Value>, ApiError> {
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| ApiError::dependency(format!("搜索客户端不可用: {error}")))?;
+    let response = client
+        .post("https://lite.duckduckgo.com/lite/")
+        .form(&[("q", query)])
+        .header("user-agent", "Mozilla/5.0 (compatible; ModalPrism)")
+        .send()
+        .await
+        .map_err(|error| ApiError::dependency(format!("搜索引擎不可达: {error}")).retryable())?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(ApiError::dependency(format!("搜索引擎返回 {status}")).retryable());
+    }
+    let html = response
+        .text()
+        .await
+        .map_err(|error| ApiError::dependency(format!("搜索响应读取失败: {error}")))?;
+    Ok(parse_ddg_lite_html(&html, limit))
+}
+
+/// 从 DDG Lite 结果页提取统一搜索结果。纯函数，便于离线测试。
+/// Lite 版为表格布局：`<a href="URL" class='result-link'>标题</a>`，
+/// href 在标记之前、标题在标记之后，故按位置扫描而非整块切分。
+pub fn parse_ddg_lite_html(html: &str, limit: usize) -> Vec<Value> {
+    let mut hits = Vec::new();
+    let marker = "result-link";
+    let mut from = 0usize;
+    while hits.len() < limit {
+        let Some(rel) = html[from..].find(marker) else {
+            break;
+        };
+        let anchor_at = from + rel;
+        // 标题：跳过 `<a …>` 开标签剩余，取到 `</a>`。
+        let after_marker = anchor_at + marker.len();
+        let Some(open_gt) = html[after_marker..].find('>') else {
+            from = after_marker;
+            continue;
+        };
+        let title_start = after_marker + open_gt + 1;
+        let Some(title_rel_end) = html[title_start..].find("</a>") else {
+            from = after_marker;
+            continue;
+        };
+        let title = strip_tags(&html[title_start..title_start + title_rel_end]);
+        // 链接：标记之前最近的 href（属于本 `<a>`）。
+        let Some(url) = extract_href(&html[..anchor_at]) else {
+            from = title_start;
+            continue;
+        };
+        let url = decode_ddg_redirect(url.trim());
+        if url.is_empty() {
+            from = title_start;
+            continue;
+        }
+        // 摘要：标题之后第一个 result-snippet 单元。
+        let body_from = title_start + title_rel_end;
+        let snippet = html[body_from..]
+            .find("result-snippet")
+            .and_then(|rel_start| {
+                let block = &html[body_from + rel_start..];
+                let gt = block.find('>')?;
+                let rest = &block[gt + 1..];
+                let end = rest.find("</td>")?;
+                Some(strip_tags(&rest[..end]))
+            })
+            .unwrap_or_default();
+        hits.push(json!({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+            "source": "ddg_lite",
+        }));
+        from = body_from;
+    }
+    hits
+}
+
+/// 从标签片段里取最后一个 `href="…"` 或 `href='…'`。
+fn extract_href(fragment: &str) -> Option<String> {
+    let rest = fragment.rsplit("href=").next()?;
+    let trimmed = rest.trim_start();
+    let quote = trimmed.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value = &trimmed[1..];
+    value.split(quote).next().map(str::to_string)
+}
+
 /// 从 DDG HTML 端点结果页提取统一搜索结果。纯函数，便于离线测试。
+/// 按 `result__body` 子串切块：兼容旧版 `class="result__body"` 与现网
+/// `class="links_main links_deep result__body"`（前缀类名会变，子串稳定）。
 pub fn parse_ddg_html(html: &str, limit: usize) -> Vec<Value> {
     let mut hits = Vec::new();
-    for segment in html.split("class=\"result__body\"").skip(1) {
+    for segment in html.split("result__body").skip(1) {
         if hits.len() >= limit {
             break;
         }
@@ -624,6 +951,43 @@ mod tests {
         <div class="result__body"><a class="result__a" href="https://a">A</a></div>
         <div class="result__body"><a class="result__a" href="https://b">B</a></div>"#;
         assert_eq!(parse_ddg_html(html, 1).len(), 1);
+    }
+
+    // 现网 DDG 把结果块类名改成 links_main links_deep result__body，
+    // 解析须按 result__body 子串切块仍能命中。
+    #[test]
+    fn parse_ddg_html_handles_current_markup() {
+        let html = r##"
+        <div class="result results_links results_links_deep web-result ">
+          <div class="links_main links_deep result__body">
+            <h2 class="result__title">
+              <a rel="nofollow" class="result__a" href="https://rust-lang.org/">Rust Programming Language</a>
+            </h2>
+            <a class="result__snippet" href="https://rust-lang.org/"><b>Rust</b> is a fast, reliable language.</a>
+          </div>
+        </div>"##;
+        let hits = parse_ddg_html(html, 10);
+        assert_eq!(hits.len(), 1, "现网标记应解析出 1 条");
+        assert_eq!(hits[0]["url"], "https://rust-lang.org/");
+        assert_eq!(hits[0]["title"], "Rust Programming Language");
+    }
+
+    #[test]
+    fn parse_ddg_lite_html_extracts_table_hits() {
+        let html = r#"
+        <table>
+          <tr><td><a rel="nofollow" href="https://rust-lang.org/" class='result-link'>Rust Programming Language</a></td></tr>
+          <tr><td>&nbsp;</td><td class='result-snippet'><b>Rust</b> is a fast, reliable language.</td></tr>
+          <tr><td><a rel="nofollow" href="https://doc.rust-lang.org/" class='result-link'>The Rust Programming Language</a></td></tr>
+          <tr><td>&nbsp;</td><td class='result-snippet'>Book about Rust.</td></tr>
+        </table>"#;
+        let hits = parse_ddg_lite_html(html, 10);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0]["url"], "https://rust-lang.org/");
+        assert_eq!(hits[0]["title"], "Rust Programming Language");
+        assert_eq!(hits[0]["snippet"], "Rust is a fast, reliable language.");
+        assert_eq!(hits[0]["source"], "ddg_lite");
+        assert_eq!(hits[1]["url"], "https://doc.rust-lang.org/");
     }
 
     #[test]

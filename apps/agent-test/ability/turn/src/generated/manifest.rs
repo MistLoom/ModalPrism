@@ -6,72 +6,10 @@ pub const DECL_FRAMEWORK_VERSION: &str = "1";
 pub fn manifest() -> AbilityManifest {
     AbilityManifest {
         id: ability_support::AbilityId::new(ABILITY_ID).expect("id"),
-        depends: vec![
-            ability_support::Dependency {
-                id: ability_support::AbilityId::new("session").expect("dep"),
-                alias: None,
-                optional: false,
-            },
-            ability_support::Dependency {
-                id: ability_support::AbilityId::new("dispatch").expect("dep"),
-                alias: None,
-                optional: false,
-            },
-            ability_support::Dependency {
-                id: ability_support::AbilityId::new("chat").expect("dep"),
-                alias: None,
-                optional: false,
-            },
-            ability_support::Dependency {
-                id: ability_support::AbilityId::new("prompt").expect("dep"),
-                alias: None,
-                optional: true,
-            },
-        ],
+        depends: vec![ability_support::Dependency { id: ability_support::AbilityId::new("session").expect("dep"), alias: None, optional: false }, ability_support::Dependency { id: ability_support::AbilityId::new("dispatch").expect("dep"), alias: None, optional: false }, ability_support::Dependency { id: ability_support::AbilityId::new("chat").expect("dep"), alias: None, optional: false }, ability_support::Dependency { id: ability_support::AbilityId::new("prompt").expect("dep"), alias: None, optional: true }],
         stateful: true,
         config_schema: serde_json::json!({"properties":{"max_rounds":{"default":32,"minimum":1,"type":"integer"},"system_prompt":{"type":"string"},"workspace_root":{"type":"string"}},"type":"object"}),
-        methods: vec![
-            ability_support::MethodMeta::new(
-                "run",
-                "对已有或新建 session 执行一整轮用户输入",
-                serde_json::json!({"properties":{"create_session":{"type":"boolean"},"session_id":{"type":"string"},"skill_paths":{"items":{"type":"string"},"type":"array"},"skill_root":{"type":"string"},"text":{"type":"string"}},"required":["text"],"type":"object"}),
-            ),
-            ability_support::MethodMeta::new(
-                "cancel",
-                "协作式取消在途 turn",
-                serde_json::json!({"properties":{"turn_id":{"type":"string"}},"required":["turn_id"],"type":"object"}),
-            ),
-            ability_support::MethodMeta::new(
-                "spawn",
-                "子代理：分叉会话并执行独立 turn",
-                serde_json::json!({"properties":{"prompt":{"type":"string"},"session_id":{"type":"string"},"summarize":{"default":true,"type":"boolean"}},"required":["session_id","prompt"],"type":"object"}),
-            ),
-        ],
-        events: vec![
-            ability_support::EventDecl {
-                name: "started".into(),
-                dir: ability_support::EventDir::Emit,
-                description: "".into(),
-                payload_schema: serde_json::json!({"properties":{"session_id":{"type":"string"},"turn_id":{"type":"string"}},"required":["session_id","turn_id"],"type":"object"}),
-            },
-            ability_support::EventDecl {
-                name: "round".into(),
-                dir: ability_support::EventDir::Emit,
-                description: "".into(),
-                payload_schema: serde_json::json!({"properties":{"round":{"type":"integer"},"stop":{"type":"boolean"},"turn_id":{"type":"string"}},"required":["turn_id","round","stop"],"type":"object"}),
-            },
-            ability_support::EventDecl {
-                name: "tool_batch".into(),
-                dir: ability_support::EventDir::Emit,
-                description: "".into(),
-                payload_schema: serde_json::json!({"properties":{"calls":{"type":"array"},"turn_id":{"type":"string"}},"required":["turn_id","calls"],"type":"object"}),
-            },
-            ability_support::EventDecl {
-                name: "completed".into(),
-                dir: ability_support::EventDir::Emit,
-                description: "".into(),
-                payload_schema: serde_json::json!({"properties":{"reason":{"enum":["stopped","max_rounds","cancelled","provider_error"],"type":"string"},"session_id":{"type":"string"},"text":{"type":"string"},"turn_id":{"type":"string"}},"required":["session_id","turn_id","reason"],"type":"object"}),
-            },
-        ],
+        methods: vec![ability_support::MethodMeta::new("run", "对已有或新建 session 执行一整轮用户输入", serde_json::json!({"properties":{"create_session":{"type":"boolean"},"session_id":{"type":"string"},"skill_paths":{"items":{"type":"string"},"type":"array"},"skill_root":{"type":"string"},"text":{"type":"string"}},"required":["text"],"type":"object"})), ability_support::MethodMeta::new("cancel", "协作式取消在途 turn", serde_json::json!({"properties":{"turn_id":{"type":"string"}},"required":["turn_id"],"type":"object"})), ability_support::MethodMeta::new("spawn", "子代理：分叉会话并执行独立 turn", serde_json::json!({"properties":{"prompt":{"type":"string"},"session_id":{"type":"string"},"summarize":{"default":true,"type":"boolean"}},"required":["session_id","prompt"],"type":"object"}))],
+        events: vec![ability_support::EventDecl { name: "started".into(), dir: ability_support::EventDir::Emit, description: "".into(), payload_schema: serde_json::json!({"properties":{"session_id":{"type":"string"},"turn_id":{"type":"string"}},"required":["session_id","turn_id"],"type":"object"}) }, ability_support::EventDecl { name: "round".into(), dir: ability_support::EventDir::Emit, description: "".into(), payload_schema: serde_json::json!({"properties":{"round":{"type":"integer"},"stop":{"type":"boolean"},"turn_id":{"type":"string"}},"required":["turn_id","round","stop"],"type":"object"}) }, ability_support::EventDecl { name: "tool_batch".into(), dir: ability_support::EventDir::Emit, description: "".into(), payload_schema: serde_json::json!({"properties":{"calls":{"type":"array"},"turn_id":{"type":"string"}},"required":["turn_id","calls"],"type":"object"}) }, ability_support::EventDecl { name: "completed".into(), dir: ability_support::EventDir::Emit, description: "".into(), payload_schema: serde_json::json!({"properties":{"reason":{"enum":["stopped","max_rounds","cancelled","provider_error"],"type":"string"},"session_id":{"type":"string"},"text":{"type":"string"},"turn_id":{"type":"string"}},"required":["session_id","turn_id","reason"],"type":"object"}) }],
     }
 }

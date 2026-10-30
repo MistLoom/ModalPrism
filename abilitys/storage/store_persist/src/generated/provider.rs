@@ -10,7 +10,9 @@ macro_rules! handler_impl {
     ($method:ident) => {
         move |ctx: &dyn ability_support::AbilityCtx, args: serde_json::Value| {
             let handlers = instance();
-            ability_support::box_fut(async move { handlers.$method(ctx, args).await })
+            ability_support::box_fut(async move {
+                handlers.$method(ctx, args).await
+            })
         }
     };
 }
@@ -21,8 +23,7 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
         ability_support::FRAMEWORK_VERSION,
         "ability.yml framework_version 与当前框架不匹配"
     );
-    AbilitySpec::try_new(ABILITY_ID)
-        .expect("id")
+    AbilitySpec::try_new(ABILITY_ID).expect("id")
         .depends_id("store")
         .on(
             "get",

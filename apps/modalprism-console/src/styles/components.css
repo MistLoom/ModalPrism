@@ -55,6 +55,11 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+/* 自适应铺满：条目数不整除列数时不产生尾列空档。 */
+.grid.cols-fill {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -434,6 +439,33 @@
   white-space: nowrap;
 }
 
+/* 固定列宽表：长文本单行省略，不再换行堆叠，也不把页面撑出横向滚动。 */
+.table-fixed {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.table-fixed th,
+.table-fixed td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-fixed td > .row,
+.table-fixed td > .stack {
+  min-width: 0;
+}
+
+/* 单元格内需要自行截断的文本（如“名称 + 标识”两行）。 */
+.cell-ellipsis {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .table tbody tr {
   cursor: default;
 }
@@ -533,6 +565,51 @@
   overflow-wrap: anywhere;
 }
 
+/* 嵌套结构：在父字段值里再缩进一层，保持可读层级而不回到 JSON 文本。 */
+.kv.is-nested {
+  grid-template-columns: minmax(72px, 110px) minmax(0, 1fr);
+  gap: 6px 12px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--line-soft);
+  background: var(--surface-2);
+  border-radius: 0 var(--radius-sm, 6px) var(--radius-sm, 6px) 0;
+}
+
+.value-list {
+  display: grid;
+  gap: 6px;
+}
+
+.value-item {
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-2);
+}
+
+.value-text {
+  display: grid;
+  gap: 8px;
+  line-height: 1.65;
+}
+
+.value-text p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.value-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.value-link:hover {
+  color: var(--accent-strong, var(--accent));
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -604,6 +681,26 @@
   padding: 12px 16px;
   border-bottom: 1px solid var(--line-soft);
   min-width: 0;
+}
+
+/* 可点击的行用 button 实现：按钮默认居中，这里统一成左对齐整行。 */
+button.list-row {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+button.list-row:hover {
+  background: var(--surface-2);
+}
+
+.list-row.is-selected {
+  background: var(--accent-soft);
 }
 
 .list-row:last-child {
@@ -705,7 +802,21 @@
 
 .drawer-body {
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 18px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 长 URL / 无空格正文不把抽屉撑出横向滚动。 */
+.drawer-body .body-text,
+.drawer-body .body-text p {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.drawer-body .body-text {
+  max-width: 100%;
 }
 
 .drawer-foot,

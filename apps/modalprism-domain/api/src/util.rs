@@ -30,6 +30,11 @@ pub fn page(items: Vec<Value>, next: Option<String>) -> Value {
     json!({"items": items, "nextCursor": next})
 }
 
+/// 带总条数的分页响应：总数可知的列表用它，前端据此做页码跳转。
+pub fn page_total(items: Vec<Value>, next: Option<String>, total: usize) -> Value {
+    json!({"items": items, "nextCursor": next, "total": total})
+}
+
 pub fn hash_short(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     digest[..8]
@@ -69,6 +74,20 @@ pub fn cursor_offset(raw: Option<&str>, filter: &str) -> Result<usize, ApiError>
     offset
         .parse::<usize>()
         .map_err(|_| ApiError::cursor_expired())
+}
+
+/// 页码式分页的偏移解析：`offset` 优先于 `cursor`，两者语义一致（跳过筛选快照前 N 行）。
+pub fn page_offset(
+    offset: Option<&str>,
+    cursor: Option<&str>,
+    filter: &str,
+) -> Result<usize, ApiError> {
+    if let Some(raw) = offset.map(str::trim).filter(|value| !value.is_empty()) {
+        return raw
+            .parse::<usize>()
+            .map_err(|_| ApiError::validation("offset", "invalid", "必须是非负整数"));
+    }
+    cursor_offset(cursor, filter)
 }
 
 /// 资源版本标签：读时返回，写入要求 If-Match 一致。
@@ -134,6 +153,19 @@ pub fn flag(body: &Map<String, Value>, key: &str) -> Result<bool, ApiError> {
     match body.get(key) {
         Some(Value::Bool(value)) => Ok(*value),
         Some(Value::Null) | None => Err(ApiError::validation(key, "required", "不能为空")),
+        _ => Err(ApiError::validation(key, "type", "必须是布尔值")),
+    }
+}
+
+/// 可选布尔：缺省返回 `default`。
+pub fn optional_flag(
+    body: &Map<String, Value>,
+    key: &str,
+    default: bool,
+) -> Result<bool, ApiError> {
+    match body.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(Value::Bool(value)) => Ok(*value),
         _ => Err(ApiError::validation(key, "type", "必须是布尔值")),
     }
 }

@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use crate::error::ApiError;
 use crate::observe::Refs;
 use crate::operations::accepted;
-use crate::util::{self, cursor, cursor_offset, page};
+use crate::util::{self, cursor, page_total};
 use crate::{AppState, Shared, new_id, now};
 
 pub fn routes() -> Router<Shared> {
@@ -26,8 +26,11 @@ pub fn routes() -> Router<Shared> {
         )
         .route("/catalog/sources/{sourceId}/enable", post(enable_source))
         .route("/catalog/sources/{sourceId}/disable", post(disable_source))
+        .route("/catalog/sources/{sourceId}/share", post(share_source))
+        .route("/catalog/sources/{sourceId}/unshare", post(unshare_source))
         .route("/catalog/sources/{sourceId}/probe", post(probe_source))
         .route("/catalog/accessMethods", get(list_access_methods))
+        .route("/catalog/sourceTypes", get(list_source_types))
         .route("/catalog/adapters", get(list_adapters))
         .route("/catalog/templates", get(list_templates))
         .route("/catalog/sourceAnalyses", post(create_source_analysis))
@@ -52,9 +55,14 @@ pub(crate) struct ListQuery {
     #[serde(default)]
     pub(crate) cursor: Option<String>,
     #[serde(default)]
+    pub(crate) offset: Option<String>,
+    #[serde(default)]
     pub(crate) query: Option<String>,
     #[serde(default)]
     pub(crate) status: Option<String>,
+    /// `all` 取消项目隔离过滤（管理与迁移用）；缺省按活跃项目过滤。
+    #[serde(default)]
+    pub(crate) scope: Option<String>,
 }
 
 pub(crate) fn options() -> config::LoadOptions {
@@ -79,6 +87,22 @@ pub(crate) async fn source_rows(state: &AppState) -> Result<Vec<Value>, ApiError
         .await
         .map_err(ApiError::from)?;
     let mut rows = Vec::new();
+    // 采集节律已迁出信源、落到计划：按 target 建立 source→trigger 映射，回显节奏。
+    let mut plan_by_target: std::collections::BTreeMap<String, Value> =
+        std::collections::BTreeMap::new();
+    for plan in list["plans"].as_array().cloned().unwrap_or_default() {
+        let Some(trigger) = plan.get("trigger") else {
+            continue;
+        };
+        for target in plan["targets"].as_array().cloned().unwrap_or_default() {
+            let Some(id) = target.as_str() else {
+                continue;
+            };
+            plan_by_target
+                .entry(id.trim_start_matches("source/").to_string())
+                .or_insert_with(|| trigger.clone());
+        }
+    }
     for source in list["sources"].as_array().cloned().unwrap_or_default() {
         let slug = source["slug"].as_str().unwrap_or_default();
         let doc = source.get("doc").cloned().unwrap_or_else(|| json!({}));
@@ -93,6 +117,7 @@ pub(crate) async fn source_rows(state: &AppState) -> Result<Vec<Value>, ApiError
                     "lastError": status.last_error,
                     "todayYield": status.today_yield,
                     "alert": status.alert,
+                    "skipReason": status.skip_reason,
                 })
             })
             .unwrap_or_else(|| {
@@ -103,6 +128,7 @@ pub(crate) async fn source_rows(state: &AppState) -> Result<Vec<Value>, ApiError
                     "lastError": Value::Null,
                     "todayYield": 0,
                     "alert": false,
+                    "skipReason": Value::Null,
                 })
             });
         let accessor = doc
@@ -121,19 +147,26 @@ pub(crate) async fn source_rows(state: &AppState) -> Result<Vec<Value>, ApiError
                     .map(|value| value.trim_start_matches("adapter/").to_string())
             })
             .collect();
-        let interval = doc
-            .pointer("/schedule/interval")
+        let trigger = plan_by_target.get(slug).cloned().unwrap_or(Value::Null);
+        let interval = trigger
+            .get("interval")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let mode = if accessor == "push" {
             "push"
-        } else if doc.pointer("/schedule/adaptive").is_some() {
+        } else if trigger.get("adaptive").is_some() {
             "adaptive"
+        } else if trigger.is_null() {
+            "none"
         } else {
             "fixed"
         };
         let endpoint = doc
             .pointer("/access/locator/url")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let channel = doc
+            .pointer("/access/locator/channel")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let etag = util::etag(&[slug, &util::hash_short(&doc.to_string())]);
@@ -142,9 +175,14 @@ pub(crate) async fn source_rows(state: &AppState) -> Result<Vec<Value>, ApiError
             "name": source["name"],
             "description": source["description"],
             "enabled": source["enabled"],
+            "project": doc.get("project").cloned()
+                .unwrap_or_else(|| json!(crate::projects::DEFAULT_PROJECT_ID)),
+            "shared": doc.get("shared").and_then(Value::as_bool).unwrap_or(false),
             "accessMethodId": accessor,
+            "sourceType": config::source_type::effective(&doc).as_str(),
             "adapterIds": adapters,
             "endpoint": endpoint,
+            "channel": channel,
             "schedule": {
                 "mode": mode,
                 "intervalMs": util::duration_ms(interval),
@@ -156,6 +194,7 @@ pub(crate) async fn source_rows(state: &AppState) -> Result<Vec<Value>, ApiError
             "lastRunAt": status.get("lastOkAt").cloned().unwrap_or(Value::Null),
             "todayYield": status.get("todayYield").cloned().unwrap_or(Value::Null),
             "alert": status.get("alert").cloned().unwrap_or(Value::Null),
+            "stopReason": status.get("skipReason").cloned().unwrap_or(Value::Null),
             "references": source["references"],
             "labels": doc.get("labels").cloned().unwrap_or_else(|| json!({})),
             "etag": etag,
@@ -177,17 +216,75 @@ fn normalize_health(raw: &str) -> &str {
     }
 }
 
+/// 信源对某项目是否可见：归属该项目，或被标记共享。
+pub(crate) fn source_visible(row: &Value, project_id: &str) -> bool {
+    row["shared"].as_bool().unwrap_or(false) || row["project"].as_str() == Some(project_id)
+}
+
+/// 信源是否可被某项目修改：仅归属该项目时（共享只放开读，不放开写）。
+pub(crate) fn source_editable(row: &Value, project_id: &str) -> bool {
+    row["project"].as_str() == Some(project_id)
+}
+
+/// 某项目**自有**（非共享）的信源 id 集合，同样是 slug 与 `source/{slug}` 两种写法。
+///
+/// 项目是数据归属的根：信源归属项目，内容、任务、运行由信源派生归属；
+/// 共享只放开“信源声明”的跨项目只读，不能让共享信源产出的内容/任务跑到其他项目。
+/// 因此内容与运行类列表一律用自有集合过滤，信源列表才用可见集合。
+pub(crate) async fn owned_source_ids(
+    state: &AppState,
+    project_id: &str,
+) -> Result<std::collections::HashSet<String>, ApiError> {
+    let rows = source_rows(state).await?;
+    let mut ids = std::collections::HashSet::new();
+    for row in rows
+        .iter()
+        .filter(|row| crate::catalog::source_editable(row, project_id))
+    {
+        if let Some(slug) = row["id"].as_str() {
+            ids.insert(slug.to_string());
+            ids.insert(format!("source/{slug}"));
+        }
+    }
+    Ok(ids)
+}
+
+/// 某类型的全部信源 id（slug 与 `source/{slug}` 两种写法），供内容按类型过滤。
+pub(crate) async fn source_ids_of_type(
+    state: &AppState,
+    kind: &str,
+) -> Result<std::collections::HashSet<String>, ApiError> {
+    let rows = source_rows(state).await?;
+    let mut ids = std::collections::HashSet::new();
+    for row in rows
+        .iter()
+        .filter(|row| row["sourceType"].as_str() == Some(kind))
+    {
+        if let Some(slug) = row["id"].as_str() {
+            ids.insert(slug.to_string());
+            ids.insert(format!("source/{slug}"));
+        }
+    }
+    Ok(ids)
+}
+
 async fn list_sources(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let limit = util::limit(query.limit.as_deref())?;
     let filter = format!(
-        "sources:{}:{}",
+        "sources:{}:{}:{}",
         query.query.clone().unwrap_or_default(),
-        query.status.clone().unwrap_or_default()
+        query.status.clone().unwrap_or_default(),
+        if query.scope.as_deref() == Some("all") {
+            "all".to_string()
+        } else {
+            project.id().to_string()
+        }
     );
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     let needle = query
         .query
         .as_deref()
@@ -195,6 +292,11 @@ async fn list_sources(
         .filter(|value| !value.is_empty());
     let status = query.status.as_deref().filter(|value| !value.is_empty());
     let mut rows = source_rows(&state).await?;
+    // 项目隔离：仅显示归属当前项目或共享的信源；scope=all 取消过滤。
+    if query.scope.as_deref() != Some("all") {
+        let active = project.id();
+        rows.retain(|row| source_visible(row, active));
+    }
     if let Some(needle) = needle {
         rows.retain(|row| {
             row["name"]
@@ -226,7 +328,7 @@ async fn list_sources(
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 async fn get_source(
@@ -256,8 +358,10 @@ fn source_doc(
     let adapters = util::strings(map, "adapterIds")?;
     let enabled = util::flag(map, "enabled")?;
     let endpoint = util::optional_text(map, "endpoint")?;
+    let channel = util::optional_text(map, "channel")?;
     let schedule = util::optional_object(map, "schedule")?;
     let admission = util::optional_object(map, "admission")?;
+    let declared_type = util::optional_text(map, "sourceType")?;
     let accessor = if accessor.starts_with("accessor/") {
         accessor
     } else {
@@ -279,23 +383,35 @@ fn source_doc(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let endpoint_value = endpoint.or_else(|| {
-        locator
-            .get("url")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    });
-    if let Some(endpoint) = &endpoint_value {
-        let parsed = url::Url::parse(endpoint)
-            .map_err(|_| ApiError::validation("endpoint", "format", "不是有效地址"))?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err(ApiError::validation(
-                "endpoint",
-                "scheme",
-                "只接受 http/https",
-            ));
+    let channel_value = channel
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    if let Some(channel) = &channel_value {
+        // 接收类只认频道标识：派生规则按 channel 优先，同一声明不能既是 url 源又是 push 源。
+        locator.insert("channel".into(), Value::String(channel.clone()));
+        locator.remove("url");
+        locator.remove("endpoint");
+    } else {
+        let endpoint_value = endpoint.or_else(|| {
+            locator
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        if let Some(endpoint) = &endpoint_value {
+            let parsed = url::Url::parse(endpoint)
+                .map_err(|_| ApiError::validation("endpoint", "format", "不是有效地址"))?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(ApiError::validation(
+                    "endpoint",
+                    "scheme",
+                    "只接受 http/https",
+                ));
+            }
+            locator.insert("url".into(), Value::String(endpoint.clone()));
         }
-        locator.insert("url".into(), Value::String(endpoint.clone()));
     }
     access.insert("locator".into(), Value::Object(locator));
     doc.insert("access".into(), Value::Object(access));
@@ -313,10 +429,49 @@ fn source_doc(
         }]),
     );
     doc.insert("enabled".into(), Value::Bool(enabled));
+    // R12/R14/S3：类型闭集 + 一致性 + 矩阵校验。调用方可声明；缺省按装配后的形状推导，
+    // 保证经 HTTP/MCP/Skill 写盘的信源始终带显式 sourceType，且与 accessor/adapter 组合自洽。
+    let resolved = match declared_type.as_deref() {
+        Some(text) => config::source_type::SourceType::parse(text).ok_or_else(|| {
+            ApiError::validation(
+                "sourceType",
+                "closedSet",
+                format!(
+                    "未知类型: {text}（应为 {}）",
+                    config::source_type::SourceType::closed_set_text()
+                ),
+            )
+        })?,
+        None => config::source_type::derive(&Value::Object(doc.clone())),
+    };
+    doc.insert("sourceType".into(), json!(resolved.as_str()));
+    if resolved == config::source_type::SourceType::Push {
+        let has_channel = doc
+            .get("access")
+            .and_then(|access| access.get("locator"))
+            .and_then(|locator| locator.get("channel"))
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty());
+        if !has_channel {
+            return Err(ApiError::validation(
+                "channel",
+                "required",
+                "接收类信源需要频道标识",
+            ));
+        }
+        // 推送是事件驱动：计划退化为入口 + 准入，不保留轮询间隔。
+        doc.remove("schedule");
+    }
+    if let Some(issue) = config::source_type::validate(&Value::Object(doc.clone()))
+        .into_iter()
+        .next()
+    {
+        return Err(ApiError::validation("sourceType", "combination", issue));
+    }
     if let Some(schedule) = schedule {
         util::unknown(&schedule, &["mode", "intervalMs", "minimumIntervalMs"])?;
         let mode = util::text(&schedule, "mode")?;
-        if mode == "push" {
+        if mode == "push" || resolved == config::source_type::SourceType::Push {
             doc.remove("schedule");
         } else {
             let interval_ms = schedule
@@ -350,6 +505,7 @@ fn source_doc(
 
 async fn create_source(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let map = util::object(&body)?;
@@ -361,11 +517,18 @@ async fn create_source(
             "adapterIds",
             "enabled",
             "endpoint",
+            "channel",
             "schedule",
             "admission",
+            "sourceType",
+            "shared",
         ],
     )?;
-    let (doc, name) = source_doc(None, map)?;
+    let shared = util::optional_flag(map, "shared", false)?;
+    let (mut doc, name) = source_doc(None, map)?;
+    // 创建即归属活跃项目；共享只放开跨项目读。
+    doc["project"] = json!(project.id());
+    doc["shared"] = json!(shared);
     let base = util::slug(&name);
     let mut slug = base.clone();
     for index in 2..20 {
@@ -403,6 +566,7 @@ async fn create_source(
 
 async fn update_source(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     AxPath(source_id): AxPath<String>,
     headers: HeaderMap,
     Json(body): Json<Value>,
@@ -416,11 +580,17 @@ async fn update_source(
             "adapterIds",
             "enabled",
             "endpoint",
+            "channel",
             "schedule",
             "admission",
+            "sourceType",
+            "shared",
         ],
     )?;
     let current = source_by_slug(&state, &source_id).await?;
+    if !source_editable(&current, project.id()) {
+        return Err(ApiError::not_found(format!("信源 {source_id}")));
+    }
     util::if_match(&headers, current["etag"].as_str().unwrap_or(""))?;
     let existing = config::entries(&state.config_dir, "source")?
         .into_iter()
@@ -434,7 +604,17 @@ async fn update_source(
             "该信源含 AdapterBinding 引用，信源 PATCH 会丢失绑定；请经绑定 API 换绑",
         ));
     }
-    let (doc, name) = source_doc(Some(&existing), map)?;
+    let (mut doc, name) = source_doc(Some(&existing), map)?;
+    // 归属项目固定；shared 可随 PATCH 调整。
+    doc["project"] = existing
+        .get("project")
+        .cloned()
+        .unwrap_or_else(|| json!(project.id()));
+    doc["shared"] = json!(util::optional_flag(
+        map,
+        "shared",
+        existing["shared"].as_bool().unwrap_or(false)
+    )?);
     config::update(
         &state.config_dir,
         &options(),
@@ -468,10 +648,14 @@ async fn source_by_slug(state: &AppState, slug: &str) -> Result<Value, ApiError>
 
 async fn delete_source(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     AxPath(source_id): AxPath<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let current = source_by_slug(&state, &source_id).await?;
+    if !source_editable(&current, project.id()) {
+        return Err(ApiError::not_found(format!("信源 {source_id}")));
+    }
     util::if_match(&headers, current["etag"].as_str().unwrap_or(""))?;
     let operation = crate::operations::start(
         &state,
@@ -505,20 +689,98 @@ pub async fn execute_source_delete(
 
 async fn enable_source(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     AxPath(source_id): AxPath<String>,
     headers: HeaderMap,
     Json(_body): Json<Value>,
 ) -> Result<Response, ApiError> {
+    ensure_source_editable(&state, &source_id, project.id()).await?;
     toggle_source(&state, &source_id, true, &headers).await
 }
 
 async fn disable_source(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     AxPath(source_id): AxPath<String>,
     headers: HeaderMap,
     Json(_body): Json<Value>,
 ) -> Result<Response, ApiError> {
+    ensure_source_editable(&state, &source_id, project.id()).await?;
     toggle_source(&state, &source_id, false, &headers).await
+}
+
+/// 切换信源共享：共享后其他项目可读（写仍限归属项目）。
+async fn share_source(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    AxPath(source_id): AxPath<String>,
+    Json(_body): Json<Value>,
+) -> Result<Response, ApiError> {
+    set_source_shared(&state, &source_id, project.id(), true).await
+}
+
+async fn unshare_source(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    AxPath(source_id): AxPath<String>,
+    Json(_body): Json<Value>,
+) -> Result<Response, ApiError> {
+    set_source_shared(&state, &source_id, project.id(), false).await
+}
+
+/// 校验信源可被当前项目修改（归属校验），否则 404。
+async fn ensure_source_editable(
+    state: &AppState,
+    source_id: &str,
+    project_id: &str,
+) -> Result<(), ApiError> {
+    let row = source_by_slug(state, source_id).await?;
+    if !source_editable(&row, project_id) {
+        return Err(ApiError::not_found(format!("信源 {source_id}")));
+    }
+    Ok(())
+}
+
+/// 只改 shared 标记，重写信源正文（保留其余字段）。
+async fn set_source_shared(
+    state: &AppState,
+    source_id: &str,
+    project_id: &str,
+    shared: bool,
+) -> Result<Response, ApiError> {
+    ensure_source_editable(state, source_id, project_id).await?;
+    let existing = config::entries(&state.config_dir, "source")?
+        .into_iter()
+        .find(|entry| entry.slug == source_id)
+        .map(|entry| entry.doc)
+        .ok_or_else(|| ApiError::not_found(format!("信源 {source_id}")))?;
+    let mut doc = existing;
+    doc["shared"] = json!(shared);
+    config::update(
+        &state.config_dir,
+        &options(),
+        &config::Draft {
+            kind: "source".into(),
+            slug: source_id.to_string(),
+            doc,
+        },
+    )?;
+    state.services.config_reload()?;
+    crate::observe::append_audit(
+        state,
+        "catalog.source.share",
+        "succeeded",
+        if shared {
+            "共享信源"
+        } else {
+            "取消共享信源"
+        },
+        json!({"id": source_id, "shared": shared}),
+        None,
+    )
+    .await?;
+    let row = source_by_slug(state, source_id).await?;
+    Ok(util::ok(&row))
 }
 
 async fn toggle_source(
@@ -550,13 +812,14 @@ async fn toggle_source(
 
 async fn probe_source(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     AxPath(source_id): AxPath<String>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let map = util::object(&body)?;
     util::unknown(map, &["locator", "persistResult"])?;
     let locator = util::optional_text(map, "locator")?;
-    source_by_slug(&state, &source_id).await?;
+    ensure_source_editable(&state, &source_id, project.id()).await?;
     let operation = crate::operations::start(
         &state,
         "catalog.probe",
@@ -627,6 +890,18 @@ async fn list_access_methods(
         })
         .collect();
     list_static(&state, items, query, "access-methods")
+}
+
+/// 类型注册表只读投影（v3 R13）：与校验、写路径同源，前端表单/筛选据此驱动，禁止复刻矩阵。
+async fn list_source_types(
+    State(state): State<Shared>,
+    Query(query): Query<ListQuery>,
+) -> Result<Response, ApiError> {
+    let items = config::source_type::registry_json()["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    list_static(&state, items, query, "source-types")
 }
 
 async fn list_adapters(
@@ -710,7 +985,7 @@ fn list_static(
 ) -> Result<Response, ApiError> {
     let limit = util::limit(query.limit.as_deref())?;
     let filter = format!("{filter_name}:{}", query.query.clone().unwrap_or_default());
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     let total = items.len();
     let items: Vec<Value> = items.into_iter().skip(offset).take(limit + 1).collect();
     let more = items.len() > limit;
@@ -720,7 +995,7 @@ fn list_static(
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 async fn create_source_analysis(
@@ -774,8 +1049,8 @@ pub async fn execute_source_analysis(
     let skill = skill_or_fallback(state, "skill-source-analysis", &["v2", "v1"]).await?;
     let input =
         format!("{prompt}\n\n技能约束：\n{skill}\n\n目标地址：{url}\n用户说明：{instruction}");
-    let reply = crate::production::call_model(state, &model, &input, operation_id).await?;
-    let raw = crate::production::extract_json(&reply)
+    let reply = crate::models::call_model(state, &model, &input, operation_id).await?;
+    let raw = crate::models::extract_json(&reply)
         .ok_or_else(|| ApiError::dependency("模型没有返回可解析的信源草稿 JSON"))?;
     // R7：把模型产出统一成 v2 `{source, bindings[]}`；v1 裸信源标记 legacy 供人工确认前转换。
     let (proposal, legacy) = normalize_proposal(&raw)?;
@@ -863,7 +1138,7 @@ async fn skill_or_fallback(
 ///   这样旧 draft 不丢失，人工确认前完成形状升级。
 pub(crate) fn normalize_proposal(raw: &Value) -> Result<(Value, bool), ApiError> {
     if raw.get("source").and_then(Value::as_object).is_some() {
-        let source = raw["source"].clone();
+        let source = stamp_source_type(&raw["source"]);
         let bindings = raw
             .get("bindings")
             .cloned()
@@ -874,11 +1149,27 @@ pub(crate) fn normalize_proposal(raw: &Value) -> Result<(Value, bool), ApiError>
         raw.get("access").is_some() || raw.get("kind").and_then(Value::as_str) == Some("source");
     if looks_like_source {
         let (source, bindings) = split_inline_bindings(raw);
+        let source = stamp_source_type(&source);
         return Ok((json!({"source": source, "bindings": bindings}), true));
     }
     Err(ApiError::dependency(
         "无法识别的信源草稿形状（既非 v1 裸信源，也非 v2 {source,bindings}）",
     ))
+}
+
+/// v3 R14/W2.4：给 AI 产出的信源草稿盖类型章——已声明则保留（写盘时仍过一致性/矩阵校验），
+/// 缺失则按 access/pipeline 推导。与人工回填走同一 `derive`，不提供第二套推断。
+fn stamp_source_type(source: &Value) -> Value {
+    let mut doc = source.clone();
+    let declared = doc
+        .get("sourceType")
+        .and_then(Value::as_str)
+        .and_then(config::source_type::SourceType::parse);
+    let kind = declared.unwrap_or_else(|| config::source_type::derive(&doc));
+    if let Some(map) = doc.as_object_mut() {
+        map.insert("sourceType".into(), json!(kind.as_str()));
+    }
+    doc
 }
 
 /// 从信源正文里剥离内联 pipeline spec 到 bindings（v1→v2）。
@@ -1024,8 +1315,8 @@ pub async fn execute_adapter_draft(
         draft.body["name"].as_str().unwrap_or(""),
         draft.body["instruction"].as_str().unwrap_or("")
     );
-    let reply = crate::production::call_model(state, &model, &input, operation_id).await?;
-    let generated = crate::production::extract_json(&reply)
+    let reply = crate::models::call_model(state, &model, &input, operation_id).await?;
+    let generated = crate::models::extract_json(&reply)
         .ok_or_else(|| ApiError::dependency("模型没有返回可解析的适配器草稿 JSON"))?;
     let check = validate_adapter_draft(&generated);
     let status = if check.is_empty() {
@@ -1300,5 +1591,99 @@ mod tests {
             proposal["source"]["pipeline"][0]["run"],
             json!(["adapter/feed-items"])
         );
+    }
+
+    /// v3 W2.1：缺省声明时 source_doc 按装配形状推导类型并写入。
+    #[test]
+    fn source_doc_derives_type_when_absent() {
+        let input = json!({
+            "name": "N", "accessMethodId": "rss", "adapterIds": ["feed-items"],
+            "enabled": true, "endpoint": "https://e.com/feed"
+        });
+        let (doc, _) = source_doc(None, input.as_object().unwrap()).expect("装配成功");
+        assert_eq!(doc["sourceType"], json!("feed"));
+    }
+
+    /// v3 W2.1/S3：未知类型值被拒。
+    #[test]
+    fn source_doc_rejects_unknown_type() {
+        let input = json!({
+            "name": "N", "accessMethodId": "rss", "adapterIds": ["feed-items"],
+            "enabled": true, "endpoint": "https://e.com/feed", "sourceType": "nonsense"
+        });
+        assert!(source_doc(None, input.as_object().unwrap()).is_err());
+    }
+
+    /// v3 W2.1：显式声明与形状不一致被拒。
+    #[test]
+    fn source_doc_rejects_mismatched_type() {
+        let input = json!({
+            "name": "N", "accessMethodId": "rss", "adapterIds": ["feed-items"],
+            "enabled": true, "endpoint": "https://e.com/feed", "sourceType": "web"
+        });
+        assert!(source_doc(None, input.as_object().unwrap()).is_err());
+    }
+
+    /// v3 W2.1：矩阵违规（feed 形塞入 page-fields）即便未声明类型也被拒。
+    #[test]
+    fn source_doc_rejects_matrix_violation() {
+        let input = json!({
+            "name": "N", "accessMethodId": "rss", "adapterIds": ["page-fields"],
+            "enabled": true, "endpoint": "https://e.com/feed"
+        });
+        assert!(source_doc(None, input.as_object().unwrap()).is_err());
+    }
+
+    /// v3 W3.3：接收类靠频道标识落盘，不带地址、不留轮询计划。
+    #[test]
+    fn source_doc_accepts_push_channel() {
+        let input = json!({
+            "name": "推送", "accessMethodId": "push", "adapterIds": ["json-list"],
+            "enabled": true, "sourceType": "push", "channel": " inbox ",
+            "schedule": {"mode": "fixed", "intervalMs": 3_600_000}
+        });
+        let (doc, _) = source_doc(None, input.as_object().unwrap()).unwrap();
+        assert_eq!(doc["sourceType"], json!("push"));
+        assert_eq!(
+            doc.pointer("/access/locator/channel"),
+            Some(&json!("inbox"))
+        );
+        assert!(doc.pointer("/access/locator/url").is_none());
+        assert!(doc.get("schedule").is_none());
+    }
+
+    /// v3 W3.3：接收类缺频道必须拒绝，而不是落一份采集器无法绑定的声明。
+    #[test]
+    fn source_doc_requires_channel_for_push() {
+        let input = json!({
+            "name": "推送", "accessMethodId": "push", "adapterIds": ["json-list"],
+            "enabled": true, "sourceType": "push"
+        });
+        assert!(source_doc(None, input.as_object().unwrap()).is_err());
+    }
+
+    /// 频道与 url 形态互斥：带 channel 的声明不能再派生为 url 源。
+    #[test]
+    fn source_doc_channel_overrides_endpoint() {
+        let input = json!({
+            "name": "推送", "accessMethodId": "push", "adapterIds": ["json-list"],
+            "enabled": true, "channel": "inbox", "endpoint": "https://e.com/x"
+        });
+        let (doc, _) = source_doc(None, input.as_object().unwrap()).unwrap();
+        assert_eq!(doc["sourceType"], json!("push"));
+        assert!(doc.pointer("/access/locator/url").is_none());
+    }
+
+    /// v3 W2.4：AI 草稿缺类型时由同一 derive 盖章。
+    #[test]
+    fn normalize_stamps_derived_type() {
+        let v2 = json!({
+            "source": {
+                "access": {"accessor": "accessor/bundle-list", "locator": {"url": "https://e.com"}},
+                "pipeline": [{"run": ["adapter/json-list"]}]
+            }
+        });
+        let (proposal, _) = normalize_proposal(&v2).unwrap();
+        assert_eq!(proposal["source"]["sourceType"], json!("web"));
     }
 }

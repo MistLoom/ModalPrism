@@ -7,80 +7,218 @@
   },
   "frame": {
     "type": "object",
-    "required": ["id", "body"],
+    "required": [
+      "id",
+      "body"
+    ],
     "properties": {
-      "id": { "type": "string" },
-      "reply_to": { "type": "string" },
-      "body": { "$ref": "#/body" }
+      "id": {
+        "type": "string"
+      },
+      "reply_to": {
+        "type": "string"
+      },
+      "body": {
+        "$ref": "#/body"
+      }
     }
   },
   "body": {
     "description": "serde 外部标签 type + snake_case 字段名",
     "oneOf": [
-      { "type": "object", "required": ["type"], "properties": { "type": { "const": "hello" } } },
       {
         "type": "object",
-        "required": ["type", "manifest"],
-        "properties": { "type": { "const": "manifest" }, "manifest": { "type": "object" } }
-      },
-      {
-        "type": "object",
-        "required": ["type", "config"],
-        "properties": { "type": { "const": "create" }, "config": {} }
-      },
-      {
-        "type": "object",
-        "required": ["type", "phase", "instance", "chain_id", "span"],
+        "required": [
+          "type"
+        ],
         "properties": {
-          "type": { "const": "lifecycle" },
-          "phase": { "type": "string" },
-          "instance": { "type": "string" },
-          "chain_id": { "type": "string" },
-          "span": { "type": "integer" }
+          "type": {
+            "const": "hello"
+          }
         }
       },
       {
         "type": "object",
-        "required": ["type", "method", "args", "instance", "chain_id", "span"],
+        "required": [
+          "type",
+          "manifest"
+        ],
         "properties": {
-          "type": { "const": "invoke" },
-          "method": { "type": "string" },
+          "type": {
+            "const": "manifest"
+          },
+          "manifest": {
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "type",
+          "config"
+        ],
+        "properties": {
+          "type": {
+            "const": "create"
+          },
+          "config": {}
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "type",
+          "phase",
+          "instance",
+          "chain_id",
+          "span"
+        ],
+        "properties": {
+          "type": {
+            "const": "lifecycle"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "string"
+          },
+          "span": {
+            "type": "integer"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "type",
+          "method",
+          "args",
+          "instance",
+          "chain_id",
+          "span"
+        ],
+        "properties": {
+          "type": {
+            "const": "invoke"
+          },
+          "method": {
+            "type": "string"
+          },
           "args": {},
-          "instance": { "type": "string" },
-          "chain_id": { "type": "string" },
-          "span": { "type": "integer" }
+          "instance": {
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "string"
+          },
+          "span": {
+            "type": "integer"
+          }
         }
       },
-      { "type": "object", "required": ["type"], "properties": { "type": { "const": "ok" }, "value": {} } },
       {
         "type": "object",
-        "required": ["type", "error"],
+        "required": [
+          "type"
+        ],
         "properties": {
-          "type": { "const": "err" },
-          "error": { "$ref": "#/wire_error" }
+          "type": {
+            "const": "ok"
+          },
+          "value": {}
         }
       },
       {
         "type": "object",
-        "required": ["type", "ctx_id", "op"],
-        "properties": { "type": { "const": "ctx" }, "ctx_id": { "type": "string" }, "op": { "$ref": "#/ctx_op" } }
-      },
-      {
-        "type": "object",
-        "required": ["type", "sub", "event"],
-        "properties": { "type": { "const": "event" }, "sub": { "type": "string" }, "event": { "type": "object" } }
-      },
-      {
-        "type": "object",
-        "required": ["type", "guest_id", "event"],
+        "required": [
+          "type",
+          "error"
+        ],
         "properties": {
-          "type": { "const": "run_handle" },
-          "guest_id": { "type": "string" },
-          "event": { "type": "object" },
-          "next_token": { "type": "string" }
+          "type": {
+            "const": "err"
+          },
+          "error": {
+            "$ref": "#/wire_error"
+          }
         }
       },
-      { "type": "object", "required": ["type"], "properties": { "type": { "const": "shutdown" } } }
+      {
+        "type": "object",
+        "required": [
+          "type",
+          "ctx_id",
+          "op"
+        ],
+        "properties": {
+          "type": {
+            "const": "ctx"
+          },
+          "ctx_id": {
+            "type": "string"
+          },
+          "op": {
+            "$ref": "#/ctx_op"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "type",
+          "sub",
+          "event"
+        ],
+        "properties": {
+          "type": {
+            "const": "event"
+          },
+          "sub": {
+            "type": "string"
+          },
+          "event": {
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "type",
+          "guest_id",
+          "event"
+        ],
+        "properties": {
+          "type": {
+            "const": "run_handle"
+          },
+          "guest_id": {
+            "type": "string"
+          },
+          "event": {
+            "type": "object"
+          },
+          "next_token": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "shutdown"
+          }
+        }
+      }
     ]
   },
   "ctx_op": {
@@ -104,21 +242,58 @@
     ]
   },
   "ctx_op_coverage": {
-    "call": ["wrap_alias_call_emit", "hub_surface"],
-    "dep": ["hub_surface"],
-    "catalog": ["hub_surface"],
-    "local_get": ["wrap_alias_call_emit", "push_effect_undo"],
-    "local_set": ["wrap_alias_call_emit", "push_effect_undo"],
-    "emit": ["probe_invoke_emit_unload", "wrap_alias_call_emit", "hub_surface"],
-    "load": ["hub_surface"],
-    "unload": ["hub_surface", "probe_invoke_emit_unload"],
-    "subscribe": ["subscribe_stream"],
-    "handle": ["hub_surface", "handle_middleware"],
-    "unhandle": ["handle_middleware"],
-    "event_next": ["handle_middleware"],
-    "share": ["share_chain_status"],
-    "feedback": ["feedback_submit"],
-    "chain_status": ["share_chain_status"]
+    "call": [
+      "wrap_alias_call_emit",
+      "hub_surface"
+    ],
+    "dep": [
+      "hub_surface"
+    ],
+    "catalog": [
+      "hub_surface"
+    ],
+    "local_get": [
+      "wrap_alias_call_emit",
+      "push_effect_undo"
+    ],
+    "local_set": [
+      "wrap_alias_call_emit",
+      "push_effect_undo"
+    ],
+    "emit": [
+      "probe_invoke_emit_unload",
+      "wrap_alias_call_emit",
+      "hub_surface"
+    ],
+    "load": [
+      "hub_surface"
+    ],
+    "unload": [
+      "hub_surface",
+      "probe_invoke_emit_unload"
+    ],
+    "subscribe": [
+      "subscribe_stream"
+    ],
+    "handle": [
+      "hub_surface",
+      "handle_middleware"
+    ],
+    "unhandle": [
+      "handle_middleware"
+    ],
+    "event_next": [
+      "handle_middleware"
+    ],
+    "share": [
+      "share_chain_status"
+    ],
+    "feedback": [
+      "feedback_submit"
+    ],
+    "chain_status": [
+      "share_chain_status"
+    ]
   },
   "runtime_adapters": [
     {
@@ -132,12 +307,26 @@
     {
       "id": "subprocess_python",
       "description": "python src/serve.py"
+    },
+    {
+      "id": "subprocess_cangjie",
+      "description": "cangjie guest 预构建/现场构建产物（cjpm）"
     }
   ],
   "wire_error": {
     "type": "object",
-    "required": ["kind", "message"],
-    "properties": { "kind": { "type": "string" }, "message": { "type": "string" } }
+    "required": [
+      "kind",
+      "message"
+    ],
+    "properties": {
+      "kind": {
+        "type": "string"
+      },
+      "message": {
+        "type": "string"
+      }
+    }
   },
   "handshake": [
     "宿主发送 body.type=hello",
@@ -172,7 +361,9 @@
       "id": "wrap_alias_call_emit",
       "description": "别名 call、push_effect/local、emit done",
       "ability_id": "probe.wrap",
-      "host_in_process": ["probe.echo"],
+      "host_in_process": [
+        "probe.echo"
+      ],
       "guest": {
         "rust_duplex": "external/ability-probe"
       }
@@ -208,7 +399,11 @@
       "id": "hub_surface",
       "description": "handle 事件链、load/unload note",
       "ability_id": "probe.hub",
-      "host_in_process": ["probe.echo", "probe.wrap", "probe.note"],
+      "host_in_process": [
+        "probe.echo",
+        "probe.wrap",
+        "probe.note"
+      ],
       "guest": {
         "rust_duplex": "external/ability-probe"
       }
@@ -260,5 +455,20 @@
         "rust_duplex": "external/ability-probe"
       }
     }
-  ]
+  ],
+  "transport_hygiene": {
+    "stdout_flush_after_frame": true,
+    "stdin_eof_clean_exit": true,
+    "notes": "各语言 Guest SDK MUST：每帧写 stdout 后 flush；stdin EOF 干净退出主循环。"
+  },
+  "features": {
+    "long_task_handle_poll": {
+      "description": "协议级 pending + {handle} 轮询；未落地语言不得宣称支持",
+      "node": true,
+      "python": true,
+      "cangjie": true,
+      "rust_duplex": false,
+      "cangjie_notes": "pending+handle poll API; work spawns on a background thread at start (true background), poll is state-read only"
+    }
+  }
 }

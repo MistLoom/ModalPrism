@@ -9,11 +9,7 @@ pub fn manifest() -> AbilityManifest {
         depends: vec![],
         stateful: false,
         config_schema: serde_json::json!(null),
-        methods: vec![ability_support::MethodMeta::new(
-            "run",
-            "Write contents to a file.",
-            serde_json::json!({"properties":{"contents":{"type":"string"},"path":{"type":"string"}},"required":["path","contents"],"type":"object"}),
-        )],
+        methods: vec![ability_support::MethodMeta::new("run", "Write contents to a file.", serde_json::json!({"properties":{"contents":{"type":"string"},"path":{"type":"string"}},"required":["path","contents"],"type":"object"}))],
         events: vec![],
     }
 }

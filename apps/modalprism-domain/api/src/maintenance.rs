@@ -34,7 +34,7 @@ const DOMAINS: &[&str] = &[
     "content",
     "blobs",
     "derivedData",
-    "production",
+    "delivery",
     "staging",
     "logs",
     "audit",
@@ -119,10 +119,23 @@ async fn preview_counts(state: &AppState, domains: &[String]) -> Result<Value, A
                     .sum();
                 json!({"count": derived, "bytes": 0})
             }
-            "production" => {
+            "delivery" => {
                 let count = count_docs(
                     state,
                     &[
+                        "delivery_rule",
+                        "delivery_endpoint",
+                        "delivery_record",
+                        "notification_entry",
+                        "notification_center_settings",
+                        "push_channel",
+                        "push_record",
+                        "channel",
+                        "publication",
+                        "delivery",
+                        "export",
+                        "upload",
+                        // 旧加工数据：功能已下线，仍随该域清理。
                         "input_set",
                         "workflow",
                         "workflow_version",
@@ -131,10 +144,6 @@ async fn preview_counts(state: &AppState, domains: &[String]) -> Result<Value, A
                         "candidate",
                         "review",
                         "draft",
-                        "publication",
-                        "delivery",
-                        "export",
-                        "upload",
                     ],
                 )
                 .await?;
@@ -184,21 +193,21 @@ async fn preview_counts(state: &AppState, domains: &[String]) -> Result<Value, A
 fn dependencies(domains: &[String]) -> Vec<Value> {
     let mut added = Vec::new();
     if domains.iter().any(|domain| domain == "content") {
-        for domain in ["derivedData", "production", "blobs"] {
+        for domain in ["derivedData", "blobs"] {
             if !domains.iter().any(|value| value == domain) {
                 added.push(json!({
                     "domain": domain,
-                    "reason": "内容墓碑与派生结果、生产输入、无引用对象存在依赖"
+                    "reason": "内容墓碑与派生结果、无引用对象存在依赖"
                 }));
             }
         }
     }
-    if domains.iter().any(|domain| domain == "production")
+    if domains.iter().any(|domain| domain == "delivery")
         && !domains.iter().any(|value| value == "content")
     {
         added.push(json!({
             "domain": "content",
-            "reason": "生产候选与草稿引用了内容版本"
+            "reason": "投递记录保存了内容快照，清理内容会一并清空投递记录"
         }));
     }
     added
@@ -625,7 +634,7 @@ async fn run_reset(
         .filter(|domain| {
             matches!(
                 domain.as_str(),
-                "tasks" | "content" | "production" | "staging" | "blobs"
+                "tasks" | "content" | "delivery" | "staging" | "blobs"
             )
         })
         .cloned()
@@ -781,9 +790,23 @@ async fn reset_domain(state: &AppState, domain: &str) -> Result<Value, ApiError>
                 .map_err(ApiError::from)?;
             Ok(serde_json::to_value(report).unwrap_or_else(|_| json!({})))
         }
-        "production" => {
+        "delivery" => {
             let mut removed = 0u64;
             for kind in [
+                "delivery_rule",
+                "delivery_endpoint",
+                "delivery_record",
+                "notification_entry",
+                "notification_center_settings",
+                "push_channel",
+                "push_record",
+                "channel",
+                "publication",
+                "delivery",
+                "export",
+                "upload",
+                // 旧加工与发布数据：功能已下线，仍随该域清理。
+                "publication",
                 "input_set",
                 "workflow",
                 "workflow_version",
@@ -792,10 +815,6 @@ async fn reset_domain(state: &AppState, domain: &str) -> Result<Value, ApiError>
                 "candidate",
                 "review",
                 "draft",
-                "publication",
-                "delivery",
-                "export",
-                "upload",
             ] {
                 removed += state.store.delete_kind(kind).await?;
             }

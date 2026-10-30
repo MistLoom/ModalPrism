@@ -88,7 +88,8 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         now: Timestamp,
         deadline: Timestamp,
     ) -> Result<Vec<strata_model::AccessTask>, PlannerError> {
-        let _guard = self.lock().await;
+        // 锁只保护计划状态的读改写：抓取是长 I/O，绝不能持锁执行，否则
+        // `source_statuses`（信源页、内容页的项目过滤都依赖它）会排在采集之后。
         let cursor = self
             .queue()
             .accepted_cursor(plan.source_id.as_str())
@@ -127,6 +128,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         receipts: &R,
         now: Timestamp,
     ) -> Result<Vec<strata_model::AccessTask>, PlannerError> {
+        let _guard = self.lock().await;
         if task.reason != strata_model::TaskReason::Schedule {
             self.queue()
                 .apply(changeset(plan, Some(task.task_id.clone()), success.ops))
@@ -189,6 +191,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         error: Classified,
         now: Timestamp,
     ) -> Result<(), PlannerError> {
+        let _guard = self.lock().await;
         tracing::warn!(
             source = plan.source_id.as_str(),
             task = task.task_id.as_str(),
@@ -318,7 +321,22 @@ fn record_success(db: &mut Db, plan: &SourcePlan, success: &TaskSuccess, now: Ti
             last_yield.clone(),
             now,
         );
+        // v3 R18：维护连续空命中轮数；产出条目即清零。
+        if success.quality == Quality::Empty {
+            health.empty_streak = health.empty_streak.saturating_add(1);
+        } else {
+            health.empty_streak = 0;
+        }
         health.status = status.to_string();
+        // 已判 suspect 且空命中持续到该计划类型的阈值，升级为告警（不改判定，只加强信号）。
+        if status == "suspect"
+            && success.quality == Quality::Empty
+            && plan
+                .stagnation_cycles
+                .is_some_and(|cycles| health.empty_streak >= cycles)
+        {
+            health.alert = true;
+        }
     }
 }
 

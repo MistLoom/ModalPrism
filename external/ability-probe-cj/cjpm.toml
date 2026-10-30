@@ -1,0 +1,13 @@
+[package]
+  cjc-version = "1.2.0"
+  name = "probe_cj"
+  description = "Cangjie external probe Guest (mirrors ability-probe-ts / ability-probe-py)"
+  output-type = "executable"
+  compiler-option = ""
+  code-root = "."
+  src-dir = "src"
+  target-dir = "target"
+  version = "0.1.0"
+
+[dependencies]
+  leaf_ability_sdk = { path = "../../SDK/ability-sdk-cj" }

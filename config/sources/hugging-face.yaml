@@ -1,18 +1,17 @@
-id: source/hugging-face
-kind: source
-name: "Hugging Face Blog"
-labels:
-  tier: T1
-  topic: "官方,开源"
 access:
   accessor: accessor/rss
   locator:
-    url: https://huggingface.co/blog/feed.xml
+    url: "https://huggingface.co/blog/feed.xml"
+admission: {}
+id: source/hugging-face
+kind: source
+labels:
+  tier: T1
+  topic: "官方,开源"
+name: Hugging Face Blog
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

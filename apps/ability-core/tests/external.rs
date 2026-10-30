@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use ability_core::AbilityHost;
-use ability_probe::{TraceAspect, echo_provider, hub_provider, note_provider, wrap_provider};
+use ability_probe::{
+    TraceAspect, echo_provider, hub_provider, note_provider, wrap_provider,
+};
 use ability_support::{
     EventClass, EventFilter, EventListener, InstanceId, LoadSpec, MethodId, SourceId,
 };

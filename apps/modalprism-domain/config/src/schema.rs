@@ -259,10 +259,46 @@ fn module_schema() -> Value {
         "required": ["id", "kind", "name"],
         "properties": {
             "id": {"type": "string", "minLength": 1},
-            "kind": {"enum": ["preset", "profile", "accessor", "adapter", "binding", "source", "type"]},
+            "kind": {"enum": ["preset", "profile", "accessor", "adapter", "binding", "source", "plan", "type"]},
             "name": {"type": "string", "minLength": 1},
+            "targets": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "trigger": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "kind": {"enum": ["recurring", "oneShot"]},
+                    "interval": duration_alt("immediate"),
+                    "floor": duration(),
+                    "ceiling": duration(),
+                    "expectedPeriod": duration(),
+                    "adaptive": {"type": "boolean"},
+                    "fireAt": {"type": "string"}
+                }
+            },
+            "queue": {"enum": ["free", "paid", "render", "push"]},
+            "priority": {"type": "integer"},
+            "quota": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "perRunItems": {"type": "integer", "minimum": 1},
+                    "totalItems": {"type": "integer", "minimum": 1},
+                    "maxAge": duration_alt("forever"),
+                    "dedupWindow": duration()
+                }
+            },
+            "stopPolicy": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "onBudgetExhausted": {"enum": ["pause", "skip"]},
+                    "onFailureThreshold": {"type": "integer", "minimum": 1}
+                }
+            },
             "description": {"type": "string"},
             "enabled": {"type": "boolean"},
+            "project": {"type": "string", "minLength": 1},
+            "shared": {"type": "boolean"},
             "labels": {"type": "object", "additionalProperties": {"type": "string"}},
             "extends": {"type": "array", "items": {"type": "string"}},
             "policy": policy_body(),
@@ -424,6 +460,7 @@ fn module_schema() -> Value {
                 "additionalProperties": {"type": "string", "pattern": "^env:.+$"}
             },
             "bindings": {"type": "array", "items": {"type": "string", "pattern": "^binding/"}},
+            "sourceType": {"enum": ["feed", "search", "web", "api", "push", "custom"]},
             "schema": {"type": "string", "minLength": 1}
         }
     })

@@ -27,7 +27,7 @@ struct ScopeQuery {
 /// 单条就绪项：`met` 为 false 时附 `requirements`（缺什么、去哪配）。
 async fn scope_report(state: &AppState, scope: &str) -> Result<Value, ApiError> {
     match scope {
-        // LLM 路径：加工/生产必须已配默认模型。
+        // LLM 路径：投递到模型、信源分析与模型自检都需要已配模型。
         "llm" => {
             let model_id = crate::settings::value(state, "ai.defaultModelId")
                 .await
@@ -42,7 +42,7 @@ async fn scope_report(state: &AppState, scope: &str) -> Result<Value, ApiError> 
                 "requirements": if met { vec![] } else { vec![json!({
                     "type": "model",
                     "setting": "ai.defaultModelId",
-                    "message": "尚未配置模型：生产/加工路径会拒绝启动",
+                    "message": "尚未配置模型：投递到模型与模型自检会失败",
                     "where": "设置 → 模型",
                 })]},
             }))

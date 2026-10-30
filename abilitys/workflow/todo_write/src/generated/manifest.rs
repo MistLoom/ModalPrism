@@ -9,11 +9,7 @@ pub fn manifest() -> AbilityManifest {
         depends: vec![],
         stateful: false,
         config_schema: serde_json::json!(null),
-        methods: vec![ability_support::MethodMeta::new(
-            "run",
-            "Update the structured todo list for the current session.",
-            serde_json::json!({"properties":{"merge":{"type":"boolean"},"todos":{"items":{"properties":{"content":{"type":"string"},"id":{"type":"string"},"status":{"enum":["pending","in_progress","completed","cancelled"],"type":"string"}},"required":["id","content","status"],"type":"object"},"type":"array"}},"required":["todos"],"type":"object"}),
-        )],
+        methods: vec![ability_support::MethodMeta::new("run", "Update the structured todo list for the current session.", serde_json::json!({"properties":{"merge":{"type":"boolean"},"todos":{"items":{"properties":{"content":{"type":"string"},"id":{"type":"string"},"status":{"enum":["pending","in_progress","completed","cancelled"],"type":"string"}},"required":["id","content","status"],"type":"object"},"type":"array"}},"required":["todos"],"type":"object"}))],
         events: vec![],
     }
 }

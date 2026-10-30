@@ -12,6 +12,8 @@ pub enum DocKind {
     /// 信源↔适配器之间的绑定装配（参数、端点模板、选择器、环境变量引用）。R3/R5/R10.3。
     AdapterBinding,
     Source,
+    /// 采集计划：一等实体，引用一个或多个信源，携带节律(trigger)与采集限制/停止策略。
+    Plan,
     Type,
     Defaults,
 }
@@ -155,6 +157,7 @@ pub fn allows_write(kind: DocKind, scope: Scope, defaults_for: Option<DocKind>) 
         DocKind::Accessor => scope == Scope::Accessor,
         DocKind::Adapter => scope == Scope::Shared,
         DocKind::AdapterBinding => scope == Scope::Shared,
+        DocKind::Plan => false,
         DocKind::Type => false,
     }
 }
@@ -243,6 +246,8 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "description",
             "enabled",
             "labels",
+            "project",
+            "shared",
             "extends",
             "policy",
             "spec",
@@ -253,6 +258,23 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "bindings",
             "schedule",
             "admission",
+            "sourceType",
+        ],
+        DocKind::Plan => &[
+            "id",
+            "kind",
+            "name",
+            "description",
+            "enabled",
+            "labels",
+            "project",
+            "extends",
+            "targets",
+            "trigger",
+            "queue",
+            "priority",
+            "quota",
+            "stopPolicy",
         ],
         DocKind::Type => &[
             "id",

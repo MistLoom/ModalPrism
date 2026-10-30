@@ -44,18 +44,23 @@ export const IconContent = (props: { size?: number }) => (
     <path d="M14 3v5h5M9 13h6M9 17h6" />
   </Icon>
 );
-export const IconProduction = (props: { size?: number }) => (
+export const IconDelivery = (props: { size?: number }) => (
   <Icon {...props}>
-    <circle cx="6" cy="6" r="2.2" />
-    <circle cx="18" cy="12" r="2.2" />
-    <circle cx="6" cy="18" r="2.2" />
-    <path d="M8 6h6a2 2 0 0 1 2 2v2M8 18h6a2 2 0 0 0 2-2v-2" />
+    <path d="M21 4 3 11l6 2.5L11.5 20z" />
+    <path d="M21 4 9.5 13.5" />
   </Icon>
 );
-export const IconOutbound = (props: { size?: number }) => (
+export const IconBell = (props: { size?: number }) => (
   <Icon {...props}>
-    <path d="M12 3 4 7v5c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7z" />
-    <path d="m9 12 2 2 4-4" />
+    <path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6z" />
+    <path d="M10 19a2 2 0 0 0 4 0" />
+  </Icon>
+);
+export const IconPlug = (props: { size?: number }) => (
+  <Icon {...props}>
+    <path d="M9 3v5M15 3v5" />
+    <path d="M6 8h12v3a6 6 0 0 1-12 0z" />
+    <path d="M12 17v4" />
   </Icon>
 );
 export const IconLogs = (props: { size?: number }) => (
@@ -102,6 +107,11 @@ export const IconChevronRight = (props: { size?: number }) => (
 export const IconChevronLeft = (props: { size?: number }) => (
   <Icon {...props}>
     <path d="M15 5 8 12l7 7" />
+  </Icon>
+);
+export const IconChevronDown = (props: { size?: number }) => (
+  <Icon {...props}>
+    <path d="m5 9 7 7 7-7" />
   </Icon>
 );
 export const IconMenu = (props: { size?: number }) => (
@@ -166,5 +176,12 @@ export const IconFlask = (props: { size?: number }) => (
   <Icon {...props}>
     <path d="M9 3h6M10 3v6L4 20h16L14 9V3" />
     <path d="M7.5 15h9" />
+  </Icon>
+);
+export const IconHistory = (props: { size?: number }) => (
+  <Icon {...props}>
+    <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" />
+    <path d="M3 4v5h5" />
+    <path d="M12 7.5V12l3 2" />
   </Icon>
 );

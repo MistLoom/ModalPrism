@@ -9,11 +9,7 @@ pub fn manifest() -> AbilityManifest {
         depends: vec![],
         stateful: false,
         config_schema: serde_json::json!(null),
-        methods: vec![ability_support::MethodMeta::new(
-            "run",
-            "Read a file from the local filesystem.",
-            serde_json::json!({"properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"path":{"type":"string"}},"required":["path"],"type":"object"}),
-        )],
+        methods: vec![ability_support::MethodMeta::new("run", "Read a file from the local filesystem.", serde_json::json!({"properties":{"limit":{"type":"integer"},"offset":{"type":"integer"},"path":{"type":"string"}},"required":["path"],"type":"object"}))],
         events: vec![],
     }
 }

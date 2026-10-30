@@ -1,18 +1,17 @@
-id: source/google-research
-kind: source
-name: "Google Research"
-labels:
-  tier: T1
-  topic: "官方,研究"
 access:
   accessor: accessor/rss
   locator:
-    url: https://research.google/blog/rss/
+    url: "https://research.google/blog/rss/"
+admission: {}
+id: source/google-research
+kind: source
+labels:
+  tier: T1
+  topic: "官方,研究"
+name: Google Research
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

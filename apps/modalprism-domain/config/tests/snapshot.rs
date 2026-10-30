@@ -82,6 +82,32 @@ fn options() -> LoadOptions {
 }
 
 #[test]
+fn plan_kind_loads_and_checks_target_existence() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "plans/demo.yaml",
+        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
+    let snapshot = validate(dir.path(), &options()).expect("计划应通过校验");
+    assert!(snapshot.modules.contains_key("plan/demo"));
+
+    // targets 指向不存在信源应被拒。
+    let bad = tempfile::tempdir().unwrap();
+    scaffold(bad.path());
+    write(
+        bad.path(),
+        "plans/bad.yaml",
+        "id: plan/bad\nkind: plan\nname: P\ntargets:\n  - source/ghost\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
+    assert!(
+        validate(bad.path(), &options()).is_err(),
+        "缺失 target 应校验失败"
+    );
+}
+
+#[test]
 fn preset_is_baseline_and_system_scope_follows_global_preset() {
     let dir = tempfile::tempdir().unwrap();
     scaffold(dir.path());

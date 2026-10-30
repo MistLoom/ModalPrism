@@ -1,43 +1,52 @@
 import type {
-  Attempt,
-  Candidate,
-  Channel,
+  ApiDocGroup,
+  CliCandidate,
+  CollectionRun,
   ContentDetail,
   ContentItem,
-  Delivery,
-  Draft,
+  DeliveryChannel,
+  DeliveryEndpoint,
+  DeliveryRecord,
+  DeliveryRule,
+  DeliveryTarget,
+  DeliveryTargetGroup,
   EffectiveSettings,
+  ExternalCatalog,
   FetchResult,
   HealthHistory,
-  InputSet,
   ListResponse,
   LogRecord,
   ModelResource,
+  ModelTestResult,
+  MonitorSummary,
   NamedResource,
+  NotificationCenterSettings,
+  NotificationEntry,
   Operation,
   Overview,
   Plan,
   PreconditionReport,
-  ProductionRun,
   Project,
   ProjectResource,
   PromptResource,
-  Publication,
+  PushChannel,
+  PushPlatform,
+  PushRecord,
+  PushTestResult,
   ResetPreview,
   SearchEngine,
+  SearchHit,
+  SearchPlatform,
   SearchResult,
   SettingsHistoryEntry,
   SettingsSchema,
   Snapshot,
   Source,
-  SourceInput,
+  SourcePayload,
+  SourceTypeRecord,
   SystemStatus,
   Task,
-  WizardCheck,
   WizardDoc,
-  Workflow,
-  WorkflowStep,
-  WorkflowVersion,
 } from "./types";
 
 export class ApiError extends Error {
@@ -69,6 +78,8 @@ interface CallOptions {
   etag?: string;
   idempotencyKey?: string;
   noIdempotency?: boolean;
+  /** 指定项目上下文，用于跨项目只读预览（项目页各卡片统计）；缺省跟随顶栏当前项目。 */
+  projectId?: string | null;
 }
 
 export interface Meta<T> {
@@ -87,6 +98,8 @@ async function call<T>(method: string, path: string, body?: unknown, options: Ca
 
 async function callWithMeta<T>(method: string, path: string, body?: unknown, options: CallOptions = {}): Promise<Meta<T>> {
   const headers: Record<string, string> = { accept: "application/json" };
+  const project = options.projectId ?? window.localStorage.getItem("modalprism.currentProjectId"); // 与 PROJECT_STORAGE_KEY 一致（避免与 project.tsx 循环引用）
+  if (project) headers["x-project-id"] = project;
   let payload: BodyInit | undefined;
   if (body instanceof FormData) {
     payload = body;
@@ -102,7 +115,8 @@ async function callWithMeta<T>(method: string, path: string, body?: unknown, opt
   }
   let response: Response;
   try {
-    response = await fetch(`/api/v1${path}`, { method, headers, body: payload });
+    // no-store：响应随当前项目头变化，避免浏览器按 URL 复用上一个项目的缓存。
+    response = await fetch(`/api/v1${path}`, { method, headers, body: payload, cache: "no-store" });
   } catch {
     throw new ApiError("Node 控制台没有响应", 0, "dependencyUnavailable", "", true);
   }
@@ -170,14 +184,19 @@ export async function runOperation(
 
 // system
 export const systemStatus = () => call<SystemStatus>("GET", "/system/status");
-export const systemOverview = () => call<Overview>("GET", "/system/overview");
+export const systemOverview = (projectId?: string) =>
+  call<Overview>("GET", "/system/overview", undefined, { projectId });
 
 // catalog
-export const listSources = (params: { limit?: number; cursor?: string; query?: string; status?: string } = {}) =>
-  call<ListResponse<Source>>("GET", `/catalog/sources${query(params)}`);
+export const listSources = (
+  params: { limit?: number; cursor?: string; query?: string; status?: string; scope?: string; projectId?: string } = {},
+) => {
+  const { projectId, ...rest } = params;
+  return call<ListResponse<Source>>("GET", `/catalog/sources${query(rest)}`, undefined, { projectId });
+};
 export const getSource = (id: string) => callWithMeta<Source>("GET", `/catalog/sources/${encodeURIComponent(id)}`);
-export const createSource = (source: SourceInput) => call<Source>("POST", "/catalog/sources", source);
-export const updateSource = (id: string, source: SourceInput, etag: string) =>
+export const createSource = (source: SourcePayload) => call<Source>("POST", "/catalog/sources", source);
+export const updateSource = (id: string, source: SourcePayload, etag: string) =>
   call<Source>("PATCH", `/catalog/sources/${encodeURIComponent(id)}`, source, { etag });
 export const deleteSource = (id: string, etag: string) =>
   call<Operation>("DELETE", `/catalog/sources/${encodeURIComponent(id)}`, undefined, { etag });
@@ -187,7 +206,12 @@ export const disableSource = (id: string, etag: string) =>
   call<Source>("POST", `/catalog/sources/${encodeURIComponent(id)}/disable`, {}, { etag });
 export const probeSource = (id: string, locator?: string) =>
   call<Operation>("POST", `/catalog/sources/${encodeURIComponent(id)}/probe`, { locator, persistResult: false });
+export const shareSource = (id: string) =>
+  call<Source>("POST", `/catalog/sources/${encodeURIComponent(id)}/share`, {}, { noIdempotency: true });
+export const unshareSource = (id: string) =>
+  call<Source>("POST", `/catalog/sources/${encodeURIComponent(id)}/unshare`, {}, { noIdempotency: true });
 export const listAccessMethods = () => call<ListResponse<NamedResource>>("GET", "/catalog/accessMethods?limit=200");
+export const listSourceTypes = () => call<ListResponse<SourceTypeRecord>>("GET", "/catalog/sourceTypes?limit=200");
 export const listAdapters = () => call<ListResponse<NamedResource>>("GET", "/catalog/adapters?limit=200");
 export const listTemplates = () => call<ListResponse<NamedResource>>("GET", "/catalog/templates?limit=200");
 export const analyzeSource = (input: { url: string; instruction?: string; modelId?: string }) =>
@@ -201,22 +225,38 @@ export const rejectAdapterDraft = (id: string, etag: string, comment: string) =>
   call<NamedResource>("POST", `/catalog/adapterDrafts/${encodeURIComponent(id)}/reject`, { decision: "reject", comment }, { etag });
 
 // collection
-export const listPlans = (params: { limit?: number; cursor?: string; status?: string } = {}) =>
-  call<ListResponse<Plan>>("GET", `/collection/plans${query(params)}`);
-export const updatePlan = (id: string, schedule: Plan["schedule"], etag: string) =>
-  call<Plan>("PATCH", `/collection/plans/${encodeURIComponent(id)}`, { schedule }, { etag });
+export const listPlans = (params: { limit?: number; cursor?: string; status?: string; projectId?: string } = {}) => {
+  const { projectId, ...rest } = params;
+  return call<ListResponse<Plan>>("GET", `/collection/plans${query(rest)}`, undefined, { projectId });
+};
+export const createPlan = (input: Record<string, unknown>) =>
+  call<Plan>("POST", "/collection/plans", input);
+export const deletePlan = (id: string) =>
+  call<{ id: string; deleted: boolean }>("DELETE", `/collection/plans/${encodeURIComponent(id)}`);
+export const createCollectionJob = (input: { targets: string[]; name?: string; queue?: string; priority?: number }) =>
+  call<{ planId: string; dispatched: unknown[]; failed: unknown[] }>("POST", "/collection/jobs", input);
+export const updatePlan = (id: string, patch: Record<string, unknown>, etag: string) =>
+  call<Plan>("PATCH", `/collection/plans/${encodeURIComponent(id)}`, patch, { etag });
 export const pausePlan = (id: string, etag: string) =>
   call<Plan>("POST", `/collection/plans/${encodeURIComponent(id)}/pause`, {}, { etag });
 export const resumePlan = (id: string, etag: string) =>
   call<Plan>("POST", `/collection/plans/${encodeURIComponent(id)}/resume`, {}, { etag });
 export const createCollectionRun = (input: { sourceId: string; mode: string; locator?: string; reason?: string }) =>
   call<Operation>("POST", "/collection/runs", input);
-export const listCollectionRuns = (params: { limit?: number; cursor?: string; status?: string; sourceId?: string } = {}) =>
-  call<ListResponse<Record<string, unknown>>>("GET", `/collection/runs${query(params)}`);
+export const listCollectionRuns = (
+  params: { limit?: number; cursor?: string; status?: string; sourceId?: string; planId?: string; projectId?: string } = {},
+) => {
+  const { projectId, ...rest } = params;
+  return call<ListResponse<CollectionRun>>("GET", `/collection/runs${query(rest)}`, undefined, { projectId });
+};
 
 // content
-export const listContent = (params: { limit?: number; cursor?: string; query?: string; sourceId?: string; status?: string } = {}) =>
-  call<ListResponse<ContentItem>>("GET", `/content/items${query(params)}`);
+export const listContent = (
+  params: { limit?: number; cursor?: string; offset?: number; query?: string; sourceId?: string; sourceType?: string; status?: string; projectId?: string } = {},
+) => {
+  const { projectId, ...rest } = params;
+  return call<ListResponse<ContentItem>>("GET", `/content/items${query(rest)}`, undefined, { projectId });
+};
 export const getContent = (id: string) => callWithMeta<ContentDetail>("GET", `/content/items/${encodeURIComponent(id)}`);
 export const patchContent = (id: string, patch: { tags?: string[]; title?: string }, etag: string) =>
   call<ContentItem>("PATCH", `/content/items/${encodeURIComponent(id)}`, patch, { etag });
@@ -232,73 +272,10 @@ export const contentLineage = (id: string) =>
   call<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }>("GET", `/content/items/${encodeURIComponent(id)}/lineage`);
 export const contentRelations = (id: string) =>
   call<ListResponse<Record<string, unknown>>>("GET", `/content/items/${encodeURIComponent(id)}/relations?limit=200`);
-export const listSnapshots = (params: { limit?: number; cursor?: string } = {}) =>
+export const listSnapshots = (params: { limit?: number; cursor?: string; offset?: number } = {}) =>
   call<ListResponse<Snapshot>>("GET", `/content/snapshots${query(params)}`);
 export const replaySnapshot = (input: { snapshotId: string; scope: string; contentIds?: string[] }) =>
   call<Operation>("POST", "/content/replays", input);
-
-// production
-export const listInputSets = (params: { limit?: number; cursor?: string } = {}) =>
-  call<ListResponse<InputSet>>("GET", `/production/inputSets${query(params)}`);
-export const createInputSet = (input: { name: string; inputs: Record<string, unknown>[] }) =>
-  call<InputSet>("POST", "/production/inputSets", input);
-export const uploadInputFile = (file: File) => {
-  const form = new FormData();
-  form.append("file", file);
-  form.append("name", file.name);
-  return call<Record<string, unknown>>("POST", "/production/inputSets/upload", form);
-};
-export const listWorkflows = (params: { limit?: number; cursor?: string } = {}) =>
-  call<ListResponse<Workflow>>("GET", `/production/workflows${query(params)}`);
-export const createWorkflow = (input: { name: string; description: string }) =>
-  call<Workflow>("POST", "/production/workflows", input);
-export const listWorkflowVersions = (id: string) =>
-  call<ListResponse<WorkflowVersion>>("GET", `/production/workflows/${encodeURIComponent(id)}/versions?limit=200`);
-export const createWorkflowVersion = (id: string, steps: WorkflowStep[], etag: string) =>
-  call<WorkflowVersion>("POST", `/production/workflows/${encodeURIComponent(id)}/versions`, { steps }, { etag });
-export const listProductionRuns = (params: { limit?: number; cursor?: string; status?: string } = {}) =>
-  call<ListResponse<ProductionRun>>("GET", `/production/runs${query(params)}`);
-export const createProductionRun = (input: { inputSetId: string; workflowVersionId: string; mode?: string }) =>
-  call<Operation>("POST", "/production/runs", input);
-export const getProductionRun = (id: string) => call<ProductionRun>("GET", `/production/runs/${encodeURIComponent(id)}`);
-export const listRunAttempts = (id: string) =>
-  call<ListResponse<Attempt>>("GET", `/production/runs/${encodeURIComponent(id)}/attempts?limit=200`);
-export const retryProductionRun = (id: string, reason?: string) =>
-  call<Operation>("POST", `/production/runs/${encodeURIComponent(id)}/retry`, { reason });
-export const listCandidates = (params: { limit?: number; cursor?: string; status?: string } = {}) =>
-  call<ListResponse<Candidate>>("GET", `/production/candidates${query(params)}`);
-export const reviewCandidate = (id: string, etag: string, input: { decision: string; comment?: string; selectedOutputIds?: string[] }) =>
-  call<Record<string, unknown>>("POST", `/production/candidates/${encodeURIComponent(id)}/reviews`, input, { etag });
-export const listDrafts = (params: { limit?: number; cursor?: string } = {}) =>
-  call<ListResponse<Draft>>("GET", `/production/drafts${query(params)}`);
-export const createDraft = (input: { candidateIds: string[]; title: string; body: string }) =>
-  call<Draft>("POST", "/production/drafts", input);
-export const getDraft = (id: string) => callWithMeta<Draft>("GET", `/production/drafts/${encodeURIComponent(id)}`);
-export const updateDraft = (id: string, input: { candidateIds: string[]; title: string; body: string }, etag: string) =>
-  call<Draft>("PATCH", `/production/drafts/${encodeURIComponent(id)}`, input, { etag });
-
-// publication
-export const listChannels = () => call<ListResponse<Channel>>("GET", "/publication/channels?limit=200");
-export const createChannel = (input: { name: string; kind: string; enabled: boolean; settings: Record<string, unknown> }) =>
-  call<Channel>("POST", "/publication/channels", input);
-export const updateChannel = (id: string, input: { name: string; kind: string; enabled: boolean; settings: Record<string, unknown> }, etag: string) =>
-  call<Channel>("PATCH", `/publication/channels/${encodeURIComponent(id)}`, input, { etag });
-export const deleteChannel = (id: string, etag: string) =>
-  call<Record<string, unknown>>("DELETE", `/publication/channels/${encodeURIComponent(id)}`, undefined, { etag });
-export const testNotification = (channelId: string) =>
-  call<Operation>("POST", "/publication/notifications/test", { channelId });
-export const listPublications = (params: { limit?: number; cursor?: string; status?: string } = {}) =>
-  call<ListResponse<Publication>>("GET", `/publications${query(params)}`);
-export const createPublication = (input: { draftId: string; channelIds: string[]; scheduledAt?: string | null }) =>
-  call<Operation>("POST", "/publications", input);
-export const getPublication = (id: string) => call<Publication>("GET", `/publications/${encodeURIComponent(id)}`);
-export const listDeliveries = (params: { limit?: number; cursor?: string; status?: string } = {}) =>
-  call<ListResponse<Delivery>>("GET", `/publication/deliveries${query(params)}`);
-export const retryDelivery = (id: string, reason?: string) =>
-  call<Operation>("POST", `/publication/deliveries/${encodeURIComponent(id)}/retry`, { reason });
-export const egressStatus = () => call<Record<string, unknown>>("GET", "/publication/egressStatus");
-export const resetEgressHost = (host: string) =>
-  call<Operation>("POST", `/publication/egressHosts/${encodeURIComponent(host)}/reset`, {});
 
 // settings
 export const getSettingsSchema = () => call<SettingsSchema>("GET", "/settings/schema");
@@ -316,6 +293,21 @@ export const rollbackSettings = (targetGeneration: number, reason: string, etag:
 export const listModels = () => call<ListResponse<ModelResource>>("GET", "/settings/models?limit=200");
 export const createModel = (input: Record<string, unknown>) =>
   call<ModelResource>("POST", "/settings/models", input);
+export const updateModel = (id: string, input: Record<string, unknown>) =>
+  call<ModelResource>("PATCH", `/settings/models/${encodeURIComponent(id)}`, input);
+export const deleteModel = (id: string) =>
+  call<{ id: string; deleted: boolean }>("DELETE", `/settings/models/${encodeURIComponent(id)}`);
+export const testModel = (input: Record<string, unknown>) =>
+  call<ModelTestResult>("POST", "/settings/models/test", input);
+export const discoverModels = (input: {
+  kind: string;
+  endpoint: string;
+  secretRef?: string | null;
+  secretValue?: string | null;
+  headers?: Record<string, string>;
+}) => call<{ items: string[]; count: number }>("POST", "/settings/models/discover", input);
+export const discoverClis = () =>
+  call<{ items: CliCandidate[] }>("GET", "/settings/models/cliCandidates");
 export const listPrompts = () => call<ListResponse<PromptResource>>("GET", "/settings/prompts?limit=200");
 export const createPrompt = (input: { name: string; content: string; description?: string }) =>
   call<PromptResource>("POST", "/settings/prompts", input);
@@ -326,6 +318,117 @@ export const createSkill = (input: { name: string; content: string; description?
   call<PromptResource>("POST", "/settings/skills", input);
 export const createSkillVersion = (id: string, etag: string, input: { name?: string; content: string; description?: string }) =>
   call<Record<string, unknown>>("POST", `/settings/skills/${encodeURIComponent(id)}/versions`, input, { etag });
+
+// delivery（内容投递）
+export const listDeliveryTargets = () =>
+  call<{ items: DeliveryTarget[]; groups: DeliveryTargetGroup[] }>("GET", "/delivery/targets");
+export const listDeliveryEndpoints = () =>
+  call<ListResponse<DeliveryEndpoint>>("GET", "/delivery/endpoints?limit=200");
+export const createDeliveryEndpoint = (input: { name: string; url: string; tokenRef?: string; enabled?: boolean }) =>
+  call<DeliveryEndpoint>("POST", "/delivery/endpoints", input);
+export const updateDeliveryEndpoint = (
+  id: string,
+  input: { name: string; url: string; tokenRef?: string; enabled?: boolean },
+  etag: string,
+) => call<DeliveryEndpoint>("PATCH", `/delivery/endpoints/${encodeURIComponent(id)}`, input, { etag });
+export const deleteDeliveryEndpoint = (id: string) =>
+  call<{ id: string; deleted: boolean }>("DELETE", `/delivery/endpoints/${encodeURIComponent(id)}`);
+export const listDeliveryRules = (params: { limit?: number; type?: string } = {}) =>
+  call<ListResponse<DeliveryRule>>("GET", `/delivery/rules${query(params)}`);
+export const createDeliveryRule = (input: {
+  name: string;
+  listener: { kind: string; id: string };
+  targets: { kind: string; id: string }[];
+  enabled?: boolean;
+}) => call<DeliveryRule>("POST", "/delivery/rules", input);
+export const updateDeliveryRule = (
+  id: string,
+  input: { name?: string; listener?: { kind: string; id: string }; targets?: { kind: string; id: string }[]; enabled?: boolean },
+  etag: string,
+) => call<DeliveryRule>("PATCH", `/delivery/rules/${encodeURIComponent(id)}`, input, { etag });
+export const deleteDeliveryRule = (id: string) =>
+  call<{ id: string; deleted: boolean }>("DELETE", `/delivery/rules/${encodeURIComponent(id)}`);
+export const listDeliveryRecords = (params: { limit?: number; type?: string; status?: string } = {}) =>
+  call<ListResponse<DeliveryRecord>>("GET", `/delivery/records${query(params)}`);
+export const getDeliveryRecord = (id: string) =>
+  call<DeliveryRecord>("GET", `/delivery/records/${encodeURIComponent(id)}`);
+export const createDeliveryJob = (input: {
+  contentIds: string[];
+  targets: { kind: string; id: string }[];
+  note?: string;
+}) => call<Operation>("POST", "/delivery/jobs", input);
+export const listDeliveryChannels = () =>
+  call<ListResponse<DeliveryChannel>>("GET", "/delivery/channels?limit=200");
+export const createDeliveryChannel = (input: {
+  name: string;
+  kind: "webhook" | "feishu";
+  enabled: boolean;
+  settings: Record<string, string>;
+}) => call<DeliveryChannel>("POST", "/delivery/channels", input);
+export const updateDeliveryChannel = (
+  id: string,
+  input: { name: string; kind: "webhook" | "feishu"; enabled: boolean; settings: Record<string, string> },
+  etag: string,
+) => call<DeliveryChannel>("PATCH", `/delivery/channels/${encodeURIComponent(id)}`, input, { etag });
+export const deleteDeliveryChannel = (id: string, etag: string) =>
+  call<{ id: string; deleted: boolean }>("DELETE", `/delivery/channels/${encodeURIComponent(id)}`, undefined, { etag });
+export const testDeliveryChannel = (id: string) =>
+  call<Operation>("POST", `/delivery/channels/${encodeURIComponent(id)}/test`, {});
+
+// notifications（通知中心 + 通知推送）
+export const listNotificationCenter = (params: { limit?: number; category?: string } = {}) =>
+  call<{ items: NotificationEntry[]; unread: number; total: number; nextCursor: string | null }>(
+    "GET",
+    `/notifications/center${query(params)}`,
+  );
+export const markNotificationsRead = (input: { ids?: string[]; all?: boolean }) =>
+  call<{ updated: number }>("POST", "/notifications/center", input);
+export const getNotificationSettings = () =>
+  call<NotificationCenterSettings>("GET", "/notifications/center/settings");
+export const updateNotificationSettings = (input: {
+  enabled?: boolean;
+  desktop?: boolean;
+  categories?: Record<string, boolean>;
+}) => call<NotificationCenterSettings>("PATCH", "/notifications/center/settings", input);
+export const getNotificationCatalog = () =>
+  call<{ categories: { id: string; label: string }[] }>("GET", "/notifications/center/catalog");
+export const listPushPlatforms = () =>
+  call<{ items: PushPlatform[]; events: { id: string; label: string }[] }>("GET", "/notifications/push/platforms");
+export const listPushChannels = () =>
+  call<ListResponse<PushChannel>>("GET", "/notifications/push/channels?limit=200");
+export const createPushChannel = (input: {
+  name: string;
+  platform: string;
+  settings: Record<string, string>;
+  events: string[];
+  enabled: boolean;
+}) => call<PushChannel>("POST", "/notifications/push/channels", input);
+export const updatePushChannel = (
+  id: string,
+  input: { name: string; platform: string; settings: Record<string, string>; events: string[]; enabled: boolean },
+  etag: string,
+) => call<PushChannel>("PATCH", `/notifications/push/channels/${encodeURIComponent(id)}`, input, { etag });
+export const deletePushChannel = (id: string) =>
+  call<{ id: string; deleted: boolean }>("DELETE", `/notifications/push/channels/${encodeURIComponent(id)}`);
+export const testPush = (input: { channelId?: string; platform?: string; settings?: Record<string, string> }) =>
+  call<PushTestResult>("POST", "/notifications/push/test", input);
+export const listPushRecords = (params: { limit?: number; status?: string; channelId?: string } = {}) =>
+  call<ListResponse<PushRecord>>("GET", `/notifications/push/records${query(params)}`);
+
+// external（外部调用）+ monitor
+export const getExternalProtocols = () => call<ExternalCatalog>("GET", "/external/protocols");
+export const getApiDocs = () => call<{ total: number; groups: ApiDocGroup[] }>("GET", "/external/apiDocs");
+export const monitorSummary = () => call<MonitorSummary>("GET", "/monitor/summary");
+export const listSearchPlatforms = () =>
+  call<{ items: SearchPlatform[] }>("GET", "/search/platforms");
+export const saveSearchPlatforms = (items: { engine: string; enabled: boolean; keyRef: string }[]) =>
+  call<{ items: SearchPlatform[] }>("PUT", "/search/platforms", { items });
+export const testSearchEngine = (input: { engine: string; keyRef?: string }) =>
+  call<{ ok: boolean; engine: string; latencyMs: number; count: number; sample: SearchHit | null }>(
+    "POST",
+    "/search/engines/test",
+    input,
+  );
 
 // operations
 export const listOperations = (params: { limit?: number; cursor?: string; status?: string } = {}) =>
@@ -340,11 +443,18 @@ export const listTasks = (params: { limit?: number; cursor?: string; status?: st
   call<ListResponse<Task>>("GET", `/operations/tasks${query(params)}`);
 export const batchTasks = (ids: string[], action: string) =>
   call<Operation>("POST", "/operations/tasks/batch", { ids, action });
+export const runTask = (taskId: string) =>
+  call<Operation>("POST", `/operations/tasks/${encodeURIComponent(taskId)}/run`);
 export const purgeTasks = (input: { status?: string; kind?: string; sourceId?: string; before?: string; dryRun?: boolean }) =>
   call<{ matched: number; deleted: number; dryRun: boolean }>("POST", "/operations/tasks/purge", input);
 export const listQueues = () => call<ListResponse<Record<string, unknown>>>("GET", "/operations/queues");
+export const pauseQueue = (queueId: string) =>
+  call<{ id: string; paused: boolean }>("POST", `/operations/queues/${encodeURIComponent(queueId)}/pause`);
+export const resumeQueue = (queueId: string) =>
+  call<{ id: string; paused: boolean }>("POST", `/operations/queues/${encodeURIComponent(queueId)}/resume`);
+export const runDerivations = () => call<Operation>("POST", "/operations/derivations/run");
 export const getHealth = () => call<Record<string, unknown>>("GET", "/operations/health");
-export const listHealthHistory = (params: { limit?: number; cursor?: string; sourceId?: string } = {}) =>
+export const listHealthHistory = (params: { limit?: number; cursor?: string; offset?: number; sourceId?: string } = {}) =>
   call<ListResponse<HealthHistory>>("GET", `/operations/healthHistory${query(params)}`);
 export const recomputeHealth = () => call<Operation>("POST", "/operations/healthRecomputations", {});
 
@@ -386,18 +496,8 @@ export const bindProjectResource = (id: string, kind: string, resourceId: string
 export const unbindProjectResource = (id: string, kind: string, resourceId: string) =>
   call<void>("DELETE", `/projects/${encodeURIComponent(id)}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(resourceId)}`, undefined, { noIdempotency: true });
 
-// wizard
+// wizard（只读起步清单，实时计算，不再阻塞任何操作）
 export const getWizard = (id: string) => call<WizardDoc>("GET", `/projects/${encodeURIComponent(id)}/wizard`);
-export const createWizard = (id: string) =>
-  call<WizardDoc>("POST", `/projects/${encodeURIComponent(id)}/wizard`, {}, { noIdempotency: true });
-export const checkWizardStep = (id: string, stepId: string) =>
-  call<WizardCheck>("POST", `/projects/${encodeURIComponent(id)}/wizard/steps/${encodeURIComponent(stepId)}/check`, {}, { noIdempotency: true });
-export const completeWizardStep = (id: string, stepId: string) =>
-  call<WizardDoc>("POST", `/projects/${encodeURIComponent(id)}/wizard/steps/${encodeURIComponent(stepId)}/complete`, {}, { noIdempotency: true });
-export const skipWizardStep = (id: string, stepId: string) =>
-  call<WizardDoc>("POST", `/projects/${encodeURIComponent(id)}/wizard/steps/${encodeURIComponent(stepId)}/skip`, {}, { noIdempotency: true });
-export const dismissWizard = (id: string) =>
-  call<WizardDoc>("POST", `/projects/${encodeURIComponent(id)}/wizard/dismiss`, {}, { noIdempotency: true });
 
 // search / surface
 export const listSearchEngines = () => call<ListResponse<SearchEngine>>("GET", "/search/engines");

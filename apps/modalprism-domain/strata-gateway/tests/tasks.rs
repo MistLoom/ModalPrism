@@ -27,6 +27,7 @@ fn task(id: &str, locator: &str) -> AccessTask {
     AccessTask {
         task_id: TaskId::new(id).unwrap(),
         source_id: SourceId::new("source_it").unwrap(),
+        plan_id: None,
         accessor: "accessor_it".into(),
         locator: Locator::Url {
             url: locator.into(),
@@ -107,6 +108,45 @@ async fn cancelled_task_frees_the_locator_slot() {
             .task_active("source_it", &serde_json::to_string(&first.locator).unwrap())
             .await
             .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn active_id_resolves_the_live_task_when_enqueue_is_deduped() {
+    let (_dir, gateway) = open().await;
+    let first = task("t_live", "https://it.example/live");
+    gateway.enqueue(std::slice::from_ref(&first)).await.unwrap();
+
+    // 同一定位键重复入队会被去重吞掉：新任务不入库，回读应为 None。
+    let dup = task("t_dup2", "https://it.example/live");
+    assert!(
+        gateway
+            .enqueue(std::slice::from_ref(&dup))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(gateway.task_row(&id("t_dup2")).await.unwrap().is_none());
+
+    // active_id 返回真正活跃的那条，供采集路径解析出可 run 的任务，避免「任务不存在」。
+    let key = serde_json::to_string(&first.locator).unwrap();
+    assert_eq!(
+        gateway
+            .active_task_id("source_it", &key)
+            .await
+            .unwrap()
+            .map(|task_id| task_id.to_string()),
+        Some("t_live".to_string())
+    );
+
+    // 取消后活跃位释放，active_id 不再返回旧任务。
+    gateway.cancel_task(&id("t_live")).await.unwrap();
+    assert!(
+        gateway
+            .active_task_id("source_it", &key)
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 

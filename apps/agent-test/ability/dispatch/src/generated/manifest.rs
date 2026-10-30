@@ -9,18 +9,7 @@ pub fn manifest() -> AbilityManifest {
         depends: vec![],
         stateful: false,
         config_schema: serde_json::json!(null),
-        methods: vec![
-            ability_support::MethodMeta::new(
-                "defs",
-                "catalog 生成 LLM tool 定义",
-                serde_json::json!({"type":"object"}),
-            ),
-            ability_support::MethodMeta::new(
-                "run",
-                "执行模型 tool_calls",
-                serde_json::json!({"properties":{"calls":{"type":"array"},"continue_on_error":{"type":"boolean"}},"required":["calls"],"type":"object"}),
-            ),
-        ],
+        methods: vec![ability_support::MethodMeta::new("defs", "catalog 生成 LLM tool 定义", serde_json::json!({"type":"object"})), ability_support::MethodMeta::new("run", "执行模型 tool_calls", serde_json::json!({"properties":{"calls":{"type":"array"},"continue_on_error":{"type":"boolean"}},"required":["calls"],"type":"object"}))],
         events: vec![],
     }
 }

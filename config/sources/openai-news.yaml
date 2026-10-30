@@ -1,18 +1,17 @@
-id: source/openai-news
-kind: source
-name: "OpenAI News"
-labels:
-  tier: T1
-  topic: "官方"
 access:
   accessor: accessor/rss
   locator:
-    url: https://openai.com/news/rss.xml
+    url: "https://openai.com/news/rss.xml"
+admission: {}
+id: source/openai-news
+kind: source
+labels:
+  tier: T1
+  topic: 官方
+name: OpenAI News
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

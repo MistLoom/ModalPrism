@@ -1,18 +1,17 @@
-id: source/berkeley-ai-research
-kind: source
-name: "Berkeley AI Research"
-labels:
-  tier: T1
-  topic: "研究"
 access:
   accessor: accessor/rss
   locator:
-    url: https://bair.berkeley.edu/blog/feed.xml
+    url: "https://bair.berkeley.edu/blog/feed.xml"
+admission: {}
+id: source/berkeley-ai-research
+kind: source
+labels:
+  tier: T1
+  topic: 研究
+name: Berkeley AI Research
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 3h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

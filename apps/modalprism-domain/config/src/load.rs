@@ -842,7 +842,7 @@ fn check_id(id: &str, kind: DocKind) -> Result<(), String> {
 ///
 /// 这些目录由专门的领域模块读取，配置加载只负责跳过，避免把它们的形状写进快照 schema。
 pub(crate) fn is_subsystem_dir(logical: &str) -> bool {
-    logical.starts_with("workflows/") || logical.starts_with("models/")
+    logical.starts_with("models/")
 }
 
 fn kind_of(logical: &str) -> Result<DocKind, String> {
@@ -862,6 +862,8 @@ fn kind_of(logical: &str) -> Result<DocKind, String> {
         Ok(DocKind::AdapterBinding)
     } else if logical.starts_with("sources/") {
         Ok(DocKind::Source)
+    } else if logical.starts_with("plans/") {
+        Ok(DocKind::Plan)
     } else if logical.starts_with("types/") {
         Ok(DocKind::Type)
     } else {
@@ -878,6 +880,7 @@ fn kind_name(kind: DocKind) -> &'static str {
         DocKind::Adapter => "adapter",
         DocKind::AdapterBinding => "binding",
         DocKind::Source => "source",
+        DocKind::Plan => "plan",
         DocKind::Type => "type",
         DocKind::Defaults => "defaults",
     }
@@ -889,6 +892,7 @@ fn kind_from_id(id: &str) -> Option<DocKind> {
         "adapter" => Some(DocKind::Adapter),
         "binding" => Some(DocKind::AdapterBinding),
         "source" => Some(DocKind::Source),
+        "plan" => Some(DocKind::Plan),
         "type" => Some(DocKind::Type),
         "profile" => Some(DocKind::Profile),
         "preset" => Some(DocKind::Preset),

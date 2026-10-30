@@ -16,6 +16,9 @@ __pycache__/
 /var
 *.log
 
+# 能力宿主的运行期反馈/事件落盘（启动即生成）
+/apps/ability-core/data/
+
 # 仅本地保留的文档、参考实现与笔记
 /docs
 /manual

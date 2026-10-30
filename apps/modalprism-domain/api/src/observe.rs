@@ -12,7 +12,7 @@ use strata_client::TaskFilter;
 
 use crate::error::ApiError;
 use crate::operations::accepted;
-use crate::util::{self, cursor, cursor_offset, page};
+use crate::util::{self, cursor, page_total};
 use crate::{AppState, Shared, new_id, now};
 
 pub fn routes() -> Router<Shared> {
@@ -97,8 +97,6 @@ pub struct Refs {
     pub content_id: Option<String>,
     pub run_id: Option<String>,
     pub attempt_id: Option<String>,
-    pub workflow_version_id: Option<String>,
-    pub publication_id: Option<String>,
     pub delivery_id: Option<String>,
 }
 
@@ -139,8 +137,6 @@ pub async fn append(
         "contentId": refs.content_id,
         "runId": refs.run_id,
         "attemptId": refs.attempt_id,
-        "workflowVersionId": refs.workflow_version_id,
-        "publicationId": refs.publication_id,
         "deliveryId": refs.delivery_id,
         "configGeneration": state.services.config_generation() as i64,
         "data": data,
@@ -206,6 +202,67 @@ pub async fn append_audit(
     .await
 }
 
+/// 观测侧守护：轮询调度器 `skipReason`，把「计划命中停止/限额」补记为追加式审计事件，恢复时补记一次。
+/// 仅在状态跃迁触发；正常信源与未设额度计划零噪声。只依赖同 crate 的 `planner_statuses` 与 `append_audit`，
+/// 不改动派发/去重链路（保持 AccessTask/队列模型不变）。
+pub async fn watch_plan_stops(state: &Shared) {
+    use std::collections::BTreeMap;
+    let mut last: BTreeMap<String, String> = BTreeMap::new();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+        if state.in_maintenance() || state.reset_in_progress() {
+            continue;
+        }
+        let Ok(statuses) = state.services.planner_statuses().await else {
+            continue;
+        };
+        let mut current: BTreeMap<String, String> = BTreeMap::new();
+        for (source, status) in statuses {
+            let Some(reason) = status.skip_reason.as_deref() else {
+                continue;
+            };
+            if !matches!(
+                reason,
+                "quota-paused" | "quota-exhausted" | "budget" | "daily-cap"
+            ) {
+                continue;
+            }
+            if last.get(&source).map(String::as_str) != Some(reason) {
+                let _ = append_audit(
+                    state,
+                    "collection.plan.stop",
+                    "succeeded",
+                    "采集计划命中停止策略，暂停派发",
+                    json!({"sourceId": source, "reason": reason}),
+                    Some(Refs {
+                        source_id: Some(source.clone()),
+                        ..Refs::default()
+                    }),
+                )
+                .await;
+            }
+            current.insert(source, reason.to_string());
+        }
+        for (source, previous) in &last {
+            if !current.contains_key(source) {
+                let _ = append_audit(
+                    state,
+                    "collection.plan.resume",
+                    "succeeded",
+                    "采集计划恢复派发",
+                    json!({"sourceId": source, "previousReason": previous}),
+                    Some(Refs {
+                        source_id: Some(source.clone()),
+                        ..Refs::default()
+                    }),
+                )
+                .await;
+            }
+        }
+        last = current;
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ListQuery {
@@ -213,6 +270,8 @@ struct ListQuery {
     limit: Option<String>,
     #[serde(default)]
     cursor: Option<String>,
+    #[serde(default)]
+    offset: Option<String>,
     #[serde(default)]
     query: Option<String>,
     #[serde(default)]
@@ -257,25 +316,22 @@ async fn list_stream(
         query.correlation_id.clone().unwrap_or_default(),
         query.query.clone().unwrap_or_default()
     );
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     // 游标是筛选快照内的偏移：先取 offset+limit+1 行，再截取，避免客户端解析 seq。
+    let record_filter = crate::store::RecordFilter {
+        level: query.level.as_deref().filter(|value| !value.is_empty()),
+        kind: query.kind.as_deref().filter(|value| !value.is_empty()),
+        correlation: query
+            .correlation_id
+            .as_deref()
+            .filter(|value| !value.is_empty()),
+        query: query.query.as_deref().filter(|value| !value.is_empty()),
+    };
     let rows = state
         .store
-        .list_records(
-            stream,
-            offset + limit + 1,
-            crate::store::RecordFilter {
-                level: query.level.as_deref().filter(|value| !value.is_empty()),
-                kind: query.kind.as_deref().filter(|value| !value.is_empty()),
-                correlation: query
-                    .correlation_id
-                    .as_deref()
-                    .filter(|value| !value.is_empty()),
-                query: query.query.as_deref().filter(|value| !value.is_empty()),
-            },
-        )
+        .list_records(stream, offset + limit + 1, record_filter)
         .await?;
-    let total = rows.len();
+    let window = rows.len();
     let items: Vec<Value> = rows
         .into_iter()
         .skip(offset)
@@ -290,12 +346,16 @@ async fn list_stream(
         .collect();
     let more = items.len() > limit;
     let items: Vec<Value> = items.into_iter().take(limit).collect();
-    let next = if more || offset + items.len() < total {
+    let next = if more || offset + items.len() < window {
         Some(cursor(&filter, offset + limit))
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    let total = state
+        .store
+        .count_records_filtered(stream, record_filter)
+        .await?;
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 async fn create_export(

@@ -51,7 +51,15 @@ async fn chat(model: &ModelSpec, prompt: &str, proxy: &ProxySetting) -> Result<S
     }
     let mut headers = model.headers.clone();
     headers.push(("content-type".into(), "application/json".into()));
-    if let Some(name) = &model.key_env {
+    // 内置密钥优先；没有才回落到环境变量引用。
+    let inline = model
+        .key_value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(key) = inline {
+        headers.push(("authorization".into(), format!("Bearer {key}")));
+    } else if let Some(name) = &model.key_env {
         let key =
             std::env::var(name).map_err(|_| Error::invalid(format!("环境变量未设置: {name}")))?;
         headers.push(("authorization".into(), format!("Bearer {key}")));

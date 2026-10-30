@@ -67,10 +67,10 @@ fn feishu_body(title: &str, payload: &Value) -> Value {
 fn summary(payload: &Value) -> String {
     let mut lines = Vec::new();
     for (label, path) in [
-        ("工作流", "/workflow"),
-        ("状态", "/status"),
         ("标题", "/title"),
         ("说明", "/message"),
+        ("来源", "/source"),
+        ("状态", "/status"),
         ("错误", "/error"),
     ] {
         if let Some(text) = payload.pointer(path).and_then(Value::as_str) {
@@ -114,22 +114,25 @@ mod tests {
 
     #[test]
     fn feishu_text_keeps_key_lines() {
-        let payload = json!({"workflow": "摘要", "status": "ok", "title": "一篇文章"});
-        let body = feishu_body("加工完成", &payload);
+        let payload = json!({"source": "openai-news", "status": "ok", "title": "一篇文章"});
+        let body = feishu_body("投递完成", &payload);
         let text = body
             .pointer("/content/text")
             .and_then(Value::as_str)
             .unwrap();
-        assert!(text.contains("加工完成"));
-        assert!(text.contains("工作流：摘要"));
+        assert!(text.contains("投递完成"));
+        assert!(text.contains("来源：openai-news"));
         assert_eq!(body.get("msg_type").and_then(Value::as_str), Some("text"));
     }
 
     #[test]
     fn webhook_keeps_payload_fields() {
-        let payload = json!({"workflow": "摘要", "status": "ok"});
+        let payload = json!({"source": "openai-news", "status": "ok"});
         let body = webhook_body("标题", &payload);
-        assert_eq!(body.get("workflow").and_then(Value::as_str), Some("摘要"));
+        assert_eq!(
+            body.get("source").and_then(Value::as_str),
+            Some("openai-news")
+        );
         assert_eq!(body.get("title").and_then(Value::as_str), Some("标题"));
     }
 

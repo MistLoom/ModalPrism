@@ -1,6 +1,8 @@
 id: adapter/page-fields
 kind: adapter
 name: 页面字段
+# 默认适配器示例：需要补全详情字段时，在列表适配器之后串联这一条。
+description: 打开条目详情页补全发布时间、正文等字段；与列表适配器串联使用，产出 page 结构化内容。
 implementation: builtin:page-fields
 role: content
 consumes:

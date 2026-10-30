@@ -81,7 +81,6 @@ async fn boot_exposes_only_the_read_surface() {
             "type_article",
             "type_hotlist",
             "web",
-            "workflow",
         ]
     );
     let catalog = running.gateway().catalog();
@@ -244,8 +243,8 @@ async fn mcp_face_opens_new_queries_and_refuses_writes() {
     for expected in [
         "catalog_admin.list",
         "catalog_admin.templates",
-        "workflow.catalog",
-        "workflow.runs",
+        "strata_read.query",
+        "web.search",
     ] {
         assert!(
             names.iter().any(|name| name == expected),
@@ -253,12 +252,10 @@ async fn mcp_face_opens_new_queries_and_refuses_writes() {
         );
     }
     for closed in [
-        "workflow.save",
-        "workflow.run",
-        "workflow.tick",
         "catalog_admin.remove",
         "catalog_admin.proxy",
         "catalog_admin.batch",
+        "strata_write.commit",
     ] {
         assert!(
             names.iter().all(|name| name != closed),

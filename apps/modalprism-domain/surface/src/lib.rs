@@ -7,6 +7,8 @@
 //!
 //! - [`Ability`]：应用**安装**了哪些能力、每个能力的完整方法集与只读方法。完整方法集必须与
 //!   `ability.yml`、`provider.manifest()`、`src/logic/*.rs` 三处一致，由契约测试守住。
+//!   运行时装载的仓颉 Guest（如 rawprism 解析引擎）不在治理表内：它们没有 logic 面，
+//!   由组合根内部接线直连 host 调用，契约测试显式豁免。
 //! - [`Exposure`]：应用**对外**只开放其中哪些方法。运维面与控制台出于安全裁剪，只暴露子集。
 //!
 //! 只读标记只影响目录投影（`stateful`），不改变调用是否被放行。
@@ -148,23 +150,6 @@ pub const COLLECTOR: &[Ability] = &[
         methods: &["on_commit", "project"],
         read_only: &["on_commit", "project"],
     },
-    Ability {
-        id: "workflow",
-        methods: &[
-            "catalog",
-            "get",
-            "notify_test",
-            "remove",
-            "remove_model",
-            "run",
-            "runs",
-            "save",
-            "save_model",
-            "tick",
-            "toggle",
-        ],
-        read_only: &["catalog", "get", "runs"],
-    },
 ];
 
 /// 采集进程的运维面。写侧留在组合根内部，不从这里出去。
@@ -239,22 +224,6 @@ pub const COLLECTOR_OPS: &[Exposure] = &[
         id: "type_article",
         methods: &["project"],
     },
-    Exposure {
-        id: "workflow",
-        methods: &[
-            "catalog",
-            "get",
-            "notify_test",
-            "remove",
-            "remove_model",
-            "run",
-            "runs",
-            "save",
-            "save_model",
-            "tick",
-            "toggle",
-        ],
-    },
 ];
 
 /// 只读进程安装的全部能力。
@@ -303,23 +272,6 @@ pub const AGENT: &[Ability] = &[
         id: "type_hotlist",
         methods: &["on_commit", "project"],
         read_only: &["on_commit", "project"],
-    },
-    Ability {
-        id: "workflow",
-        methods: &[
-            "catalog",
-            "get",
-            "notify_test",
-            "remove",
-            "remove_model",
-            "run",
-            "runs",
-            "save",
-            "save_model",
-            "tick",
-            "toggle",
-        ],
-        read_only: &["catalog", "get", "runs"],
     },
     // 对外表面的 HTTP 工具投影：search / fetch / parse 全部只读，
     // 由只读进程代理到本机回环领域 API；破坏性与设置类操作不在此面。
@@ -398,28 +350,12 @@ pub const CONSOLE: &[Exposure] = &[
         id: "type_article",
         methods: &["project"],
     },
-    Exposure {
-        id: "workflow",
-        methods: &[
-            "catalog",
-            "get",
-            "notify_test",
-            "remove",
-            "remove_model",
-            "run",
-            "runs",
-            "save",
-            "save_model",
-            "tick",
-            "toggle",
-        ],
-    },
 ];
 
 /// 只读进程的 MCP 面。
 ///
 /// 只读进程装了完整能力（好让 manifest 与其它应用一致），但对外只开查询：
-/// 信源清单与模板、工作流与运行记录都在这里，写侧一律不出去。
+/// 信源清单与模板、健康与配置溯源都在这里，写侧一律不出去。
 pub const AGENT_MCP: &[Exposure] = &[
     Exposure {
         id: "catalog_admin",
@@ -447,10 +383,6 @@ pub const AGENT_MCP: &[Exposure] = &[
     Exposure {
         id: "type_hotlist",
         methods: &["project"],
-    },
-    Exposure {
-        id: "workflow",
-        methods: &["catalog", "get", "runs"],
     },
     Exposure {
         id: "web",
@@ -529,11 +461,6 @@ mod tests {
         for (id, method) in [
             ("catalog_admin", "remove"),
             ("catalog_admin", "proxy"),
-            ("workflow", "save"),
-            ("workflow", "remove"),
-            ("workflow", "remove_model"),
-            ("workflow", "save_model"),
-            ("workflow", "tick"),
         ] {
             assert!(
                 !mcp_write_allowed(id, method),

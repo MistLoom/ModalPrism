@@ -32,14 +32,9 @@ const usage = `用法: node prism.mjs <命令> [参数] [--base http://host:port
   content [--query Q] [--source ID] [--status active|tombstoned] [--limit N]
   content-item <contentId>                  内容详情与正文
   sources [--limit N]
-  workflows                                 工作流身份列表
-  versions <workflowId>                     工作流版本
-  inputs [--limit N]                        输入集
-  input-text <name> <text>                  冻结一个文本输入集
-  runs [--limit N] [--status S]             生产运行
-  run <inputSetId> <workflowVersionId>      创建生产运行（返回 Operation）
-  candidates [--status S]                   候选
-  review <candidateId> approve|reject|returnForRegeneration [--comment C]
+  targets                                   投递目标：模型、外部 API、通知渠道
+  records [--type manual|auto] [--status S] [--limit N]
+  deliver <contentId>[,<contentId>…] --targets kind:id[,kind:id…] [--note N]
   op <operationId>                          Operation 状态
   logs [--correlation ID] [--level L] [--limit N]
 `;
@@ -109,37 +104,38 @@ async function main() {
     }
     case "sources":
       return request(`/api/v1/catalog/sources${query([["limit", flags.limit ?? "50"]])}`);
-    case "workflows":
-      return request("/api/v1/production/workflows?limit=100");
-    case "versions":
-      return request(`/api/v1/production/workflows/${encodeURIComponent(need(rest[0], "需要 workflowId"))}/versions?limit=100`);
-    case "inputs":
-      return request(`/api/v1/production/inputSets${query([["limit", flags.limit ?? "50"]])}`);
-    case "input-text":
-      return post("/api/v1/production/inputSets", {
-        name: need(rest[0], "需要输入集名称"),
-        inputs: [{ kind: "text", text: need(rest.slice(1).join(" "), "需要文本") }],
-      });
-    case "runs":
-      return request(`/api/v1/production/runs${query([["limit", flags.limit ?? "50"], ["status", flags.status]])}`);
-    case "run":
-      return post("/api/v1/production/runs", {
-        inputSetId: need(rest[0], "需要 inputSetId"),
-        workflowVersionId: need(rest[1], "需要 workflowVersionId"),
-        mode: "manual",
-      });
-    case "candidates":
-      return request(`/api/v1/production/candidates${query([["limit", flags.limit ?? "50"], ["status", flags.status]])}`);
-    case "review": {
-      const candidateId = need(rest[0], "需要 candidateId");
-      const decision = need(rest[1], "需要 decision");
-      const page = await request("/api/v1/production/candidates?limit=200");
-      const candidate = (page.items ?? []).find((item) => item.id === candidateId);
-      if (!candidate) throw new Error(`候选不存在: ${candidateId}`);
-      return request(`/api/v1/production/candidates/${encodeURIComponent(candidateId)}/reviews`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": newKey(), "if-match": candidate.etag },
-        body: JSON.stringify({ decision, comment: flags.comment ?? "" }),
+    case "targets":
+      return request("/api/v1/delivery/targets");
+    case "records":
+      return request(
+        `/api/v1/delivery/records${query([
+          ["limit", flags.limit ?? "50"],
+          ["type", flags.type],
+          ["status", flags.status],
+        ])}`,
+      );
+    case "deliver": {
+      const contentIds = (rest[0] ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (!contentIds.length) throw new Error("需要至少一个 contentId");
+      const targets = (flags.targets ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((pair) => {
+          const at = pair.indexOf(":");
+          if (at <= 0 || at === pair.length - 1) {
+            throw new Error(`目标形如 kind:id，收到: ${pair}`);
+          }
+          return { kind: pair.slice(0, at), id: pair.slice(at + 1) };
+        });
+      if (!targets.length) throw new Error("需要 --targets kind:id[,kind:id…]");
+      return post("/api/v1/delivery/jobs", {
+        contentIds,
+        targets,
+        note: flags.note,
       });
     }
     case "op":

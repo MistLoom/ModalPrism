@@ -17,6 +17,9 @@ pub struct Health {
     pub render_level: Option<String>,
     pub cost_7d: u64,
     pub alert: bool,
+    /// 连续空命中轮数（v3 R18）：某轮产出条目即清零；达 per-plan 阈值升级为告警。
+    #[serde(default)]
+    pub empty_streak: u32,
 }
 
 impl Default for Health {
@@ -34,6 +37,7 @@ impl Default for Health {
             render_level: None,
             cost_7d: 0,
             alert: false,
+            empty_streak: 0,
         }
     }
 }

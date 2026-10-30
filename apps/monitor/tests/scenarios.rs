@@ -12,6 +12,10 @@ use leaf_monitor::http::serve_if_enabled;
 use leaf_monitor::{HttpConfig, MonitorConfig, attach, fun_call};
 use serde_json::json;
 
+/// 监视器 sink 是进程级单例：并行用例会互相顶掉注册，事件落到别的队列。
+/// 依赖"本用例的 app 收到全部事件"的用例统一串行。
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn echo_provider(id: &str) -> Arc<dyn Ability> {
     let m = ability_support::AbilityManifest {
         id: ability_support::AbilityId::new(id).unwrap(),
@@ -65,6 +69,7 @@ async fn boot_with_log(
 
 #[tokio::test]
 async fn s4_cli_chains_events_log() {
+    let _serial = SERIAL.lock().await;
     let log = std::env::temp_dir().join(format!("leaf-mon-s4-{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&log);
     let (_host, app) = boot_with_log(&log, false, "127.0.0.1:0").await;
@@ -85,6 +90,7 @@ async fn s4_cli_chains_events_log() {
 
 #[tokio::test]
 async fn s6_http_default_off_and_enabled_on() {
+    let _serial = SERIAL.lock().await;
     // 默认关：serve_if_enabled 返回 None，且不占端口。
     let log = std::env::temp_dir().join(format!("leaf-mon-s6a-{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&log);
@@ -146,6 +152,7 @@ async fn reqwest_get(url: &str) -> Result<String, String> {
 
 #[tokio::test]
 async fn s7_fun_call_ok_and_unknown_error() {
+    let _serial = SERIAL.lock().await;
     let log = std::env::temp_dir().join(format!("leaf-mon-s7-{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&log);
     let (_host, app) = boot_with_log(&log, false, "127.0.0.1:0").await;
@@ -240,6 +247,7 @@ fn workspace_root() -> std::path::PathBuf {
 
 #[tokio::test]
 async fn s9_stats_dropped_and_graph_parent_edges() {
+    let _serial = SERIAL.lock().await;
     // Force queue drops
     let config = MonitorConfig {
         log_path: String::new(),

@@ -8,7 +8,7 @@ use std::time::Duration;
 use ability_support::{InstanceId, MethodId};
 use assembly::Binds;
 use config::builtin_presets;
-use frame_core::{Gateway, InvokeRequest};
+use frame_core::InvokeRequest;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -27,6 +27,23 @@ fn config_dir(dir: &Path) {
         dir,
         "system.yaml",
         "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  gateway:\n    blob_backend: dir\n",
+    );
+    // 内置访问器需在启动时就存在（访问器为重启门控：运行时新建不会进入 applied）。
+    write(
+        dir,
+        "accessors/http.yaml",
+        "id: accessor/http\nkind: accessor\nname: HTTP\nimplementation: builtin:http\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
+    );
+    // API 建信源走 rss + feed-items：整库校验要求二者作为模块存在，且访问器为重启门控，须在启动时落盘。
+    write(
+        dir,
+        "accessors/rss.yaml",
+        "id: accessor/rss\nkind: accessor\nname: rss\nimplementation: builtin:rss\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
+    );
+    write(
+        dir,
+        "adapters/feed-items.yaml",
+        "id: adapter/feed-items\nkind: adapter\nname: Feed 条目\nimplementation: builtin:feed-items\nrole: search\nconsumes:\n  - {kind: raw, part_role: document}\nproduces: [discovery]\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: exponential\n    base: 1s\n    max: 30s\n",
     );
 }
 
@@ -102,7 +119,7 @@ async fn seed_source(running: &modalprism_collector::Running, name: &str) -> Str
             json!({
                 "name": name,
                 "access": {
-                    "accessor": "accessor/probe-http",
+                    "accessor": "accessor/http",
                     "locator": {"url": "https://example.com/feed"}
                 },
                 "pipeline": [],
@@ -156,7 +173,6 @@ async fn apply_setting(boot: &Boot, key: &str, value: Value) {
     let id = started["operationId"].as_str().unwrap().to_string();
     for _ in 0..200 {
         let (_, op) = get_json(&boot.http, &format!("{}/api/v1/operations/{id}", boot.base)).await;
-        if op["status"] != json!("succeeded") && op["status"] != json!("pending") {}
         if op["status"] == json!("succeeded") {
             // 确认值真的生效，避免“应用成功但读到旧值”的假绿。
             let (_, effective) = get_json(
@@ -201,62 +217,70 @@ async fn fake_site(marker: &'static str) -> String {
     format!("http://{addr}/page")
 }
 
-// A1：默认项目承接旧数据，未归属信源在默认项目下软接展示。
+// A1：项目硬隔离——信源归属创建项目，他项目默认不可见；标记共享后跨项目只读可见。
 #[tokio::test]
-async fn a1_default_project_soft_binds_legacy_sources() {
+async fn a1_project_isolation_and_sharing() {
     let boot = boot().await;
-    let slug = seed_source(&boot.running, "软接信源").await;
+    // seed_source 经 ability 建信源，正文无 project 标注 → 视为归属默认项目。
+    let slug = seed_source(&boot.running, "隔离信源").await;
 
     let (status, projects) = get_json(&boot.http, &format!("{}/api/v1/projects", boot.base)).await;
     assert_eq!(status, 200);
-    let default_project = projects["items"]
+    let default_id = projects["items"]
         .as_array()
         .unwrap()
         .iter()
         .find(|item| item["isDefault"] == json!(true))
-        .cloned()
-        .expect("默认项目应已播种");
-    let project_id = default_project["id"].as_str().unwrap().to_string();
-
-    // 未归属信源：默认项目视角下以 legacy 软接展示。
-    let (status, resources) = get_json(
-        &boot.http,
-        &format!("{}/api/v1/projects/{project_id}/resources", boot.base),
-    )
-    .await;
-    assert_eq!(status, 200);
-    let legacy = resources["items"]
-        .as_array()
+        .unwrap()["id"]
+        .as_str()
         .unwrap()
-        .iter()
-        .find(|item| item["id"] == json!(slug))
-        .cloned()
-        .expect("旧信源应出现在默认项目资源清单");
-    assert_eq!(legacy["legacy"], json!(true));
+        .to_string();
 
-    // 显式归属到新项目后，默认项目不再软接它。
+    // 新建一个私有项目。
     let (status, created) = post_json(
         &boot.http,
         &format!("{}/api/v1/projects", boot.base),
-        &json!({"name": "独立项目"}),
+        &json!({"name": "私有项目"}),
     )
     .await;
     assert_eq!(status, 201);
     let other_id = created["id"].as_str().unwrap().to_string();
-    let response = boot
-        .http
-        .post(format!(
-            "{}/api/v1/projects/{other_id}/resources",
-            boot.base
-        ))
-        .json(&json!({"kind": "source", "id": slug}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 204);
+
+    // 列出某项目可见的信源 id（信源列表由后端按 x-project-id 过滤）。
+    let visible = |project: String| {
+        let http = boot.http.clone();
+        let base = boot.base.clone();
+        async move {
+            let response = http
+                .get(format!("{base}/api/v1/catalog/sources?limit=200"))
+                .header("x-project-id", &project)
+                .send()
+                .await
+                .unwrap();
+            let body: Value = response.json().await.unwrap();
+            body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item["id"].as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // 默认项目看得见自己的信源；私有项目看不见（硬隔离）。
+    assert!(
+        visible(default_id.clone()).await.contains(&slug),
+        "默认项目应看到归属它的信源"
+    );
+    assert!(
+        !visible(other_id.clone()).await.contains(&slug),
+        "私有项目不应看到未共享的信源"
+    );
+
+    // 私有项目资源清单也不含该信源（按 project/shared 派生）。
     let (_, resources) = get_json(
         &boot.http,
-        &format!("{}/api/v1/projects/{project_id}/resources", boot.base),
+        &format!("{}/api/v1/projects/{other_id}/resources?kind=source", boot.base),
     )
     .await;
     assert!(
@@ -265,16 +289,155 @@ async fn a1_default_project_soft_binds_legacy_sources() {
             .unwrap()
             .iter()
             .any(|item| item["id"] == json!(slug)),
-        "已被归属的信源不应再以 legacy 展示在默认项目"
+        "未共享信源不应出现在私有项目清单"
     );
+
+    // 共享可见性：在默认项目下新建一个共享信源（创建即写入 project/shared）。
+    let response = boot
+        .http
+        .post(format!("{}/api/v1/catalog/sources", boot.base))
+        .header("x-project-id", &default_id)
+        .header("idempotency-key", "a1-shared-src")
+        .json(&json!({
+            "name": "共享信源",
+            "accessMethodId": "rss",
+            "adapterIds": ["feed-items"],
+            "enabled": true,
+            "endpoint": "https://example.com/shared",
+            "schedule": {"mode": "fixed", "intervalMs": 3600000},
+            "shared": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let created_src: Value = response.json().await.unwrap();
+    assert_eq!(status, 201, "创建共享信源应成功: {created_src}");
+    assert_eq!(created_src["shared"], json!(true));
+    assert_eq!(created_src["project"], json!(default_id));
+    let shared_slug = created_src["id"].as_str().unwrap().to_string();
+    let shared_etag = created_src["etag"].as_str().unwrap().to_string();
+
+    // 私有项目可见该共享信源，且带 shared 标记。
+    let response = boot
+        .http
+        .get(format!("{}/api/v1/catalog/sources?limit=200", boot.base))
+        .header("x-project-id", &other_id)
+        .send()
+        .await
+        .unwrap();
+    let body: Value = response.json().await.unwrap();
+    let shared = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == json!(shared_slug))
+        .cloned()
+        .expect("私有项目应看到被共享的信源");
+    assert_eq!(shared["shared"], json!(true));
+
+    // 跨项目对共享信源只读：私有项目删除 → 404。
+    let response = boot
+        .http
+        .delete(format!(
+            "{}/api/v1/catalog/sources/{shared_slug}",
+            boot.base
+        ))
+        .header("x-project-id", &other_id)
+        .header("if-match", &shared_etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404, "他项目对共享信源只读，删除应 404");
+
+    // 计划同样按项目隔离：默认项目的计划不出现在私有项目，且跨项目不可改、不可引用。
+    let response = boot
+        .http
+        .post(format!("{}/api/v1/collection/plans", boot.base))
+        .header("x-project-id", &default_id)
+        .header("idempotency-key", "a1-plan-isolation")
+        .json(&json!({
+            "name": "隔离计划",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let plan: Value = response.json().await.unwrap();
+    assert_eq!(status, 200, "默认项目建计划应成功: {plan}");
+    assert_eq!(plan["project"], json!(default_id));
+    let plan_id = plan["id"].as_str().unwrap().to_string();
+    let plan_etag = plan["etag"].as_str().unwrap().to_string();
+
+    let response = boot
+        .http
+        .get(format!("{}/api/v1/collection/plans?limit=200", boot.base))
+        .header("x-project-id", &other_id)
+        .send()
+        .await
+        .unwrap();
+    let plans: Value = response.json().await.unwrap();
+    assert!(
+        !plans["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == json!(plan_id)),
+        "他项目不应看到默认项目的计划: {plans}"
+    );
+
+    let response = boot
+        .http
+        .patch(format!("{}/api/v1/collection/plans/{plan_id}", boot.base))
+        .header("x-project-id", &other_id)
+        .header("if-match", &plan_etag)
+        .json(&json!({"name": "越权改名"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404, "他项目改计划应 404");
+
+    let response = boot
+        .http
+        .post(format!("{}/api/v1/collection/plans", boot.base))
+        .header("x-project-id", &other_id)
+        .header("idempotency-key", "a1-plan-cross-project")
+        .json(&json!({
+            "name": "越权计划",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        400,
+        "他项目不能把别家信源写进自己的计划"
+    );
+
+    // 归属项目（默认）仍可删除该共享信源。
+    let response = boot
+        .http
+        .delete(format!(
+            "{}/api/v1/catalog/sources/{shared_slug}",
+            boot.base
+        ))
+        .header("x-project-id", &default_id)
+        .header("if-match", &shared_etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202, "归属项目删除共享信源应受理");
     boot.running.shutdown().await.unwrap();
 }
 
-// A2：向导 —— 建档、check（缺信源/有信源）、手动完成、跳过、dismiss。
+// A2：起步清单为只读、实时计算；写端点已移除，不再阻塞任何操作。
 #[tokio::test]
-async fn a2_wizard_check_bind_and_dismiss() {
+async fn a2_wizard_is_readonly_and_computed() {
     let boot = boot().await;
-    let slug = seed_source(&boot.running, "向导信源").await;
     let (status, created) = post_json(
         &boot.http,
         &format!("{}/api/v1/projects", boot.base),
@@ -284,22 +447,13 @@ async fn a2_wizard_check_bind_and_dismiss() {
     assert_eq!(status, 201);
     let project_id = created["id"].as_str().unwrap().to_string();
 
-    // 初始：无向导文档时返回待开始视图。
+    // GET 只读清单：建项目环节已完成，新项目尚无归属信源 → 配置信源为待办。
     let (status, wizard) = get_json(
         &boot.http,
         &format!("{}/api/v1/projects/{project_id}/wizard", boot.base),
     )
     .await;
     assert_eq!(status, 200);
-
-    // 建档：第一步立即完成。
-    let (status, wizard) = post_json(
-        &boot.http,
-        &format!("{}/api/v1/projects/{project_id}/wizard", boot.base),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 201);
     let step = |value: &Value, id: &str| {
         value["steps"]
             .as_array()
@@ -310,191 +464,52 @@ async fn a2_wizard_check_bind_and_dismiss() {
             .unwrap()
     };
     assert_eq!(step(&wizard, "create_project")["status"], json!("done"));
-
-    // check：未归属信源 → configure_sources 未满足，且不改状态。
-    let (status, check) = post_json(
-        &boot.http,
-        &format!(
-            "{}/api/v1/projects/{project_id}/wizard/steps/configure_sources/check",
-            boot.base
-        ),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 200);
-    assert_eq!(check["met"], json!(false));
-    assert_eq!(check["detail"]["reason"], json!("need_source"));
+    assert_eq!(step(&wizard, "create_project")["met"], json!(true));
     assert_eq!(
-        step(&check["wizard"], "configure_sources")["status"],
+        step(&wizard, "configure_sources")["status"],
         json!("pending")
     );
+    assert!(!step(&wizard, "configure_sources")["met"].as_bool().unwrap());
+    // 未满足环节给出「去哪儿做」。
+    assert!(!step(&wizard, "configure_sources")["hint"].as_str().unwrap().is_empty());
 
-    // bind：把信源归属到本项目后再 check → 满足并自动置 done。
-    let response = boot
-        .http
-        .post(format!(
-            "{}/api/v1/projects/{project_id}/resources",
-            boot.base
-        ))
-        .json(&json!({"kind": "source", "id": slug}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 204);
-    let (status, check) = post_json(
-        &boot.http,
-        &format!(
-            "{}/api/v1/projects/{project_id}/wizard/steps/configure_sources/check",
-            boot.base
+    // 写端点已移除：建档/校验/完成/跳过/收口全部 404。
+    for (method, path) in [
+        ("POST", format!("/api/v1/projects/{project_id}/wizard")),
+        (
+            "POST",
+            format!("/api/v1/projects/{project_id}/wizard/steps/configure_sources/check"),
         ),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 200);
-    assert_eq!(check["met"], json!(true));
-    assert_eq!(
-        step(&check["wizard"], "configure_sources")["status"],
-        json!("done")
-    );
-
-    // 手动完成与跳过：顺序门闩下按步推进，中间可选步骤逐个跳过。
-    let (status, _) = post_json(
-        &boot.http,
-        &format!(
-            "{}/api/v1/projects/{project_id}/wizard/steps/scenario_template/complete",
-            boot.base
+        (
+            "POST",
+            format!("/api/v1/projects/{project_id}/wizard/dismiss"),
         ),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 200);
-    for step_id in [
-        "verify_collection",
-        "model_gate",
-        "processing_output",
-        "api_surface",
     ] {
-        let (status, wizard) = post_json(
-            &boot.http,
-            &format!(
-                "{}/api/v1/projects/{project_id}/wizard/steps/{step_id}/skip",
-                boot.base
-            ),
-            &json!({}),
-        )
-        .await;
-        assert_eq!(status, 200);
-        assert_eq!(step(&wizard, step_id)["status"], json!("skipped"));
+        let request = match method {
+            "GET" => boot.http.get(format!("{}{path}", boot.base)),
+            _ => boot.http.post(format!("{}{path}", boot.base)).json(&json!({})),
+        };
+        let status = request.send().await.unwrap().status().as_u16();
+        assert!(
+            status == 404 || status == 405,
+            "{method} {path} 应已下线（实际 {status}）"
+        );
     }
-    let (_, wizard) = get_json(
-        &boot.http,
-        &format!("{}/api/v1/projects/{project_id}/wizard", boot.base),
-    )
-    .await;
-    assert_eq!(step(&wizard, "scenario_template")["status"], json!("done"));
-    assert_eq!(step(&wizard, "api_surface")["status"], json!("skipped"));
-    assert_eq!(wizard["status"], json!("completed"));
-
-    // dismiss：收口后向导不再打扰。
-    let (status, dismissed) = post_json(
-        &boot.http,
-        &format!("{}/api/v1/projects/{project_id}/wizard/dismiss", boot.base),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 200);
-    assert_eq!(dismissed["status"], json!("dismissed"));
     boot.running.shutdown().await.unwrap();
 }
 
-// A11：向导顺序门闩 —— 乱序 complete/skip 必须 412，状态不被改动；按序则放行。
+
+// A3：缺搜索密钥 → HTTP 412（结构化 precondition，不是裸 409/428）；缺模型则在就绪检查里报出。
 #[tokio::test]
-async fn a11_wizard_order_gate_rejects_out_of_order() {
-    let boot = boot().await;
-    let (status, created) = post_json(
-        &boot.http,
-        &format!("{}/api/v1/projects", boot.base),
-        &json!({"name": "乱序项目"}),
-    )
-    .await;
-    assert_eq!(status, 201);
-    let project_id = created["id"].as_str().unwrap().to_string();
-    let (status, _) = post_json(
-        &boot.http,
-        &format!("{}/api/v1/projects/{project_id}/wizard", boot.base),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 201);
-    let step = |value: &Value, id: &str| {
-        value["steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|step| step["id"] == json!(id))
-            .cloned()
-            .unwrap()
-    };
-
-    // 乱序：scenario_template 尚 pending 时跳过 verify_collection → 412 且状态不变。
-    let (status, body) = post_json(
-        &boot.http,
-        &format!(
-            "{}/api/v1/projects/{project_id}/wizard/steps/verify_collection/skip",
-            boot.base
-        ),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 412);
-    assert_eq!(body["error"]["code"], json!("preconditionFailed"));
-    let (_, wizard) = get_json(
-        &boot.http,
-        &format!("{}/api/v1/projects/{project_id}/wizard", boot.base),
-    )
-    .await;
-    assert_eq!(
-        step(&wizard, "verify_collection")["status"],
-        json!("pending")
-    );
-
-    // 乱序：直接完成最后一步 → 同样 412。
-    let (status, _) = post_json(
-        &boot.http,
-        &format!(
-            "{}/api/v1/projects/{project_id}/wizard/steps/api_surface/complete",
-            boot.base
-        ),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 412);
-
-    // 按序：依次完成 create_project（已 done）→ scenario_template → 放行。
-    let (status, wizard) = post_json(
-        &boot.http,
-        &format!(
-            "{}/api/v1/projects/{project_id}/wizard/steps/scenario_template/complete",
-            boot.base
-        ),
-        &json!({}),
-    )
-    .await;
-    assert_eq!(status, 200);
-    assert_eq!(step(&wizard, "scenario_template")["status"], json!("done"));
-    boot.running.shutdown().await.unwrap();
-}
-
-// A3：缺搜索密钥 / 缺模型 → HTTP 412（结构化 precondition，不是裸 409/428）。
-#[tokio::test]
-async fn a3_missing_search_key_or_model_returns_412() {
+async fn a3_missing_search_key_returns_412() {
     let boot = boot().await;
     let base = &boot.base;
 
     // 缺搜索密钥：默认引擎切到 bing 但未配引用名 → 试搜 412。
     apply_setting(&boot, "search.defaultEngine", json!("bing")).await;
-    let (_, eff) = get_json(&boot.http, &format!("{base}/api/v1/settings/effective")).await;
-    let (_, rep) = get_json(
+    // 端点可达性预热（结果不参与断言）。
+    let _ = get_json(&boot.http, &format!("{base}/api/v1/settings/effective")).await;
+    let _ = get_json(
         &boot.http,
         &format!("{base}/api/v1/preconditions?scope=search"),
     )
@@ -529,61 +544,14 @@ async fn a3_missing_search_key_or_model_returns_412() {
     );
     apply_setting(&boot, "search.defaultEngine", json!("ddg")).await;
 
-    // 缺模型：工作流含模型步骤而未配置默认模型 → 建运行即 412。
-    let (status, input_set) = post_json(
-        &boot.http,
-        &format!("{base}/api/v1/production/inputSets"),
-        &json!({"name": "412输入", "inputs": [{"kind": "text", "text": "素材"}]}),
-    )
-    .await;
-    assert_eq!(status, 201, "{input_set}");
-    let (status, workflow) = post_json(
-        &boot.http,
-        &format!("{base}/api/v1/production/workflows"),
-        &json!({"name": "模型直出", "description": "缺模型前置校验"}),
-    )
-    .await;
-    assert_eq!(status, 201, "{workflow}");
-    let workflow_id = workflow["id"].as_str().unwrap().to_string();
-    // 工作流 ETag 在列表行里（与既有契约一致）。
-    let (status, workflows) =
-        get_json(&boot.http, &format!("{base}/api/v1/production/workflows")).await;
-    assert_eq!(status, 200, "{workflows}");
-    let etag = workflows["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["id"] == json!(workflow_id))
-        .and_then(|item| item["etag"].as_str())
-        .expect("工作流行应带 ETag")
-        .to_string();
-    let response = boot
-        .http
-        .post(format!("{base}/api/v1/production/workflows/{workflow_id}/versions"))
-        .header("if-match", &etag)
-        .json(&json!({"steps": [{"id": "改写", "kind": "model", "parameters": {"prompt": "改写 {{input.text}}"}}]}))
-        .send()
-        .await
-        .unwrap();
-    let status = response.status().as_u16();
-    let version: Value = response.json().await.unwrap();
-    assert_eq!(status, 201, "{version}");
-    let version_id = version["id"].as_str().unwrap().to_string();
-    let (status, error) = post_json(
-        &boot.http,
-        &format!("{base}/api/v1/production/runs"),
-        &json!({"inputSetId": input_set["id"], "workflowVersionId": version_id, "mode": "manual"}),
-    )
-    .await;
-    assert_eq!(status, 412, "{error}");
-    assert_eq!(error["error"]["code"], json!("preconditionFailed"));
-    let field_errors = error["error"]["fieldErrors"].as_array().unwrap();
-    assert!(
-        field_errors
-            .iter()
-            .any(|item| item["code"] == json!("model")
-                && item["field"] == json!("ai.defaultModelId")),
-        "{error}"
+    // 缺模型：llm 就绪项报告未配置，并给出配置入口。
+    let (status, report) =
+        get_json(&boot.http, &format!("{base}/api/v1/preconditions?scope=llm")).await;
+    assert_eq!(status, 200);
+    assert_eq!(report["scopes"][0]["met"], json!(false));
+    assert_eq!(
+        report["scopes"][0]["requirements"][0]["type"],
+        json!("model")
     );
     boot.running.shutdown().await.unwrap();
 }
@@ -748,10 +716,22 @@ async fn a9_parse_negative_paths() {
     running.shutdown().await.unwrap();
 }
 
-// A9b：parse 正向 —— rawprism Guest 已装配：text 直解与假站 URL fetch→scan 均返回区域。
+// A9b：parse 正向 —— 依赖 rawprism 仓颉 Guest。Host 的 RuntimeKind 已支持 Cangjie，装载需
+// 现场构建(cjpm)或预构建产物；环境缺二者时 boot 的 install_parse_guest 返回 false，
+// /system/status.capabilities.parse=false，此时按前置不满足 skip（负向契约见 a9），避免环境噪声。
 #[tokio::test]
 async fn a9b_parse_positive_with_rawprism_guest() {
     let boot = boot().await;
+
+    // 就绪探针：rawprism 未装载则 skip，而不是断言失败（框架支持 ≠ 本机已构建产物）。
+    let (probe_status, sys) =
+        get_json(&boot.http, &format!("{}/api/v1/system/status", boot.base)).await;
+    assert_eq!(probe_status, 200, "{sys}");
+    if sys["capabilities"]["parse"].as_bool() != Some(true) {
+        eprintln!("skip a9b: rawprism 仓颉 Guest 未装载（缺 cjpm 工具链或预构建产物）");
+        boot.running.shutdown().await.unwrap();
+        return;
+    }
 
     // ① text 直解：JSON 内嵌文本应被识别出至少一个区域。
     let (status, result) = post_json(
@@ -912,5 +892,367 @@ async fn a12_search_project_id_validation_and_binding() {
     )
     .await;
     assert_eq!(resources["items"].as_array().unwrap().len(), 1);
+    boot.running.shutdown().await.unwrap();
+}
+
+// P1：采集计划一等实体的 CRUD + pause/resume，以及批量作业即时派发。
+#[tokio::test]
+async fn p1_collection_plan_crud_and_job() {
+    let boot = boot().await;
+    let slug = seed_source(&boot.running, "计划信源").await;
+
+    let (status, plan) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/plans", boot.base),
+        &json!({
+            "name": "计划信源 · 采集计划",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"},
+            "quota": {"perRunItems": 10, "totalItems": 100}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{plan}");
+    let plan_id = plan["id"].as_str().unwrap().to_string();
+    let etag = plan["etag"].as_str().unwrap().to_string();
+    assert_eq!(plan["status"], json!("active"), "{plan}");
+    assert_eq!(plan["targets"].as_array().unwrap().len(), 1, "{plan}");
+
+    let (status, list) = get_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/plans?limit=200", boot.base),
+    )
+    .await;
+    assert_eq!(status, 200, "{list}");
+    assert!(
+        list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == json!(plan_id)),
+        "{list}"
+    );
+
+    let response = boot
+        .http
+        .post(format!(
+            "{}/api/v1/collection/plans/{plan_id}/pause",
+            boot.base
+        ))
+        .header("if-match", &etag)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let paused: Value = response.json().await.unwrap();
+    assert_eq!(status, 200, "{paused}");
+    assert_eq!(paused["status"], json!("paused"), "{paused}");
+
+    let resume_etag = paused["etag"].as_str().unwrap().to_string();
+    let response = boot
+        .http
+        .post(format!(
+            "{}/api/v1/collection/plans/{plan_id}/resume",
+            boot.base
+        ))
+        .header("if-match", &resume_etag)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let resumed: Value = response.json().await.unwrap();
+    assert_eq!(status, 200, "{resumed}");
+    assert_eq!(resumed["status"], json!("active"), "{resumed}");
+
+    let (status, job) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/jobs", boot.base),
+        &json!({"targets": [format!("source/{slug}")], "name": "一次性作业"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{job}");
+    assert_eq!(job["failed"].as_array().unwrap().len(), 0, "{job}");
+    assert_eq!(job["dispatched"].as_array().unwrap().len(), 1, "{job}");
+
+    let response = boot
+        .http
+        .delete(format!("{}/api/v1/collection/plans/{plan_id}", boot.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "删除计划应返回 200");
+    let (_, list) = get_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/plans?limit=200", boot.base),
+    )
+    .await;
+    assert!(
+        !list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == json!(plan_id)),
+        "{list}"
+    );
+
+    boot.running.shutdown().await.unwrap();
+}
+
+// P2：计划的额度与停止策略随实体读写；PATCH 整份替换 quota/stopPolicy（清空即移除）。
+#[tokio::test]
+async fn p2_plan_quota_and_edit() {
+    let boot = boot().await;
+    let slug = seed_source(&boot.running, "额度信源").await;
+
+    let (status, plan) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/plans", boot.base),
+        &json!({
+            "name": "额度计划",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"},
+            "quota": {"perRunItems": 5, "totalItems": 50, "maxAge": "30d"},
+            "stopPolicy": {"onBudgetExhausted": "pause", "onFailureThreshold": 3}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{plan}");
+    let plan_id = plan["id"].as_str().unwrap().to_string();
+    let etag = plan["etag"].as_str().unwrap().to_string();
+    assert_eq!(plan["quota"]["totalItems"], json!(50), "{plan}");
+    assert_eq!(plan["quota"]["perRunItems"], json!(5), "{plan}");
+    assert_eq!(plan["quota"]["maxAge"], json!("30d"), "{plan}");
+    assert_eq!(
+        plan["stopPolicy"]["onBudgetExhausted"],
+        json!("pause"),
+        "{plan}"
+    );
+    assert_eq!(plan["stopPolicy"]["onFailureThreshold"], json!(3), "{plan}");
+
+    // 编辑：改间隔、整份替换 quota（去掉 perRunItems/maxAge）、stopPolicy 改 skip、改名。
+    let response = boot
+        .http
+        .patch(format!("{}/api/v1/collection/plans/{plan_id}", boot.base))
+        .header("if-match", &etag)
+        .json(&json!({
+            "name": "额度计划·改",
+            "trigger": {"kind": "recurring", "interval": "2h"},
+            "quota": {"totalItems": 80},
+            "stopPolicy": {"onBudgetExhausted": "skip"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let edited: Value = response.json().await.unwrap();
+    assert_eq!(status, 200, "{edited}");
+    assert_eq!(edited["name"], json!("额度计划·改"), "{edited}");
+    assert_eq!(edited["trigger"]["interval"], json!("2h"), "{edited}");
+    assert_eq!(edited["quota"]["totalItems"], json!(80), "{edited}");
+    assert!(
+        edited["quota"].get("perRunItems").is_none(),
+        "整份替换应移除 perRunItems: {edited}"
+    );
+    assert!(
+        edited["quota"].get("maxAge").is_none(),
+        "整份替换应移除 maxAge: {edited}"
+    );
+    assert_eq!(
+        edited["stopPolicy"]["onBudgetExhausted"],
+        json!("skip"),
+        "{edited}"
+    );
+    assert!(
+        edited["stopPolicy"].get("onFailureThreshold").is_none(),
+        "应移除 onFailureThreshold: {edited}"
+    );
+
+    boot.running.shutdown().await.unwrap();
+}
+
+// P3：页码式分页契约——列表响应带 total、offset 与游标同义可跳转、越界页返回空页、非法 offset 拒绝。
+#[tokio::test]
+async fn p3_list_offset_and_total() {
+    let boot = boot().await;
+    let slug = seed_source(&boot.running, "分页信源").await;
+    for name in ["分页计划A", "分页计划B", "分页计划C"] {
+        let (status, created) = post_json(
+            &boot.http,
+            &format!("{}/api/v1/collection/plans", boot.base),
+            &json!({
+                "name": name,
+                "targets": [format!("source/{slug}")],
+                "trigger": {"kind": "recurring", "interval": "1h"}
+            }),
+        )
+        .await;
+        assert_eq!(status, 200, "{created}");
+    }
+
+    // 全量基准：total 应等于全量条数。
+    let (status, all) = get_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/plans?limit=200", boot.base),
+    )
+    .await;
+    assert_eq!(status, 200, "{all}");
+    let total = all["total"].as_u64().expect("plans 应返回 total");
+    assert_eq!(
+        total as usize,
+        all["items"].as_array().unwrap().len(),
+        "{all}"
+    );
+    assert!(total >= 3, "至少三个计划: {all}");
+
+    // offset 翻页与全量序列一致（第 2 页首条 == 全量第 2 条）。
+    let (_, page2) = get_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/plans?limit=1&offset=1", boot.base),
+    )
+    .await;
+    assert_eq!(
+        page2["items"][0]["id"], all["items"][1]["id"],
+        "offset 页应与全量切片一致: {page2}"
+    );
+    assert_eq!(page2["total"], json!(total), "{page2}");
+
+    // 越界页：空 items、total 不变。
+    let (_, beyond) = get_json(
+        &boot.http,
+        &format!(
+            "{}/api/v1/collection/plans?limit=1&offset={}",
+            boot.base, total
+        ),
+    )
+    .await;
+    assert!(beyond["items"].as_array().unwrap().is_empty(), "{beyond}");
+
+    // 非法 offset → 400。
+    let (status, body) = get_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/plans?limit=1&offset=abc", boot.base),
+    )
+    .await;
+    assert_eq!(status, 400, "{body}");
+
+    // 其它列表口径：sources / content / logs 均须返回数值 total。
+    for path in [
+        "/api/v1/catalog/sources?limit=1",
+        "/api/v1/content/items?limit=1",
+        "/api/v1/observability/logs?limit=1",
+    ] {
+        let (status, page) = get_json(&boot.http, &format!("{}{path}", boot.base)).await;
+        assert_eq!(status, 200, "{page}");
+        assert!(page["total"].is_number(), "{path} 应返回数值 total: {page}");
+    }
+
+    boot.running.shutdown().await.unwrap();
+}
+
+// M7：模型密钥值只写不读、PATCH 编辑、连通测试与 CLI 发现的契约。
+#[tokio::test]
+async fn m7_model_secret_and_probe() {
+    let boot = boot().await;
+
+    // 登记内置密钥模型：投影标记来源，但绝不回传值。
+    let (status, created) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/settings/models", boot.base),
+        &json!({
+            "name": "内置密钥模型",
+            "kind": "remoteApi",
+            "endpoint": "http://127.0.0.1:9/v1",
+            "secretValue": "sk-test-inline",
+            "enabled": true,
+            "model": "gpt-6-astra"
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "{created}");
+    let id = created["id"].as_str().unwrap_or_default().to_string();
+    assert_eq!(created["secretInline"], json!(true), "应标记存在内置密钥");
+    assert_eq!(created["secretPresent"], json!(true));
+    assert!(created.get("secretValue").is_none(), "投影不得回传密钥值");
+
+    // 列表同样不泄露密钥值。
+    let (status, listed) = get_json(
+        &boot.http,
+        &format!("{}/api/v1/settings/models?limit=200", boot.base),
+    )
+    .await;
+    assert_eq!(status, 200, "{listed}");
+    assert!(
+        !listed.to_string().contains("sk-test-inline"),
+        "列表泄露了密钥值"
+    );
+
+    // 含控制字符的密钥被拒绝。
+    let (status, rejected) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/settings/models", boot.base),
+        &json!({"name": "坏密钥", "kind": "remoteApi", "endpoint": "http://127.0.0.1:9/v1", "secretValue": "sk\nx", "enabled": true}),
+    )
+    .await;
+    assert_eq!(status, 400, "{rejected}");
+
+    // PATCH：更新端点并清除内置密钥（secretValue 空串）。
+    let patched = boot
+        .http
+        .patch(format!("{}/api/v1/settings/models/{id}", boot.base))
+        .json(&json!({"endpoint": "http://127.0.0.1:9/v1", "secretValue": ""}))
+        .send()
+        .await
+        .unwrap();
+    let patch_status = patched.status().as_u16();
+    let patched: Value = patched.json().await.unwrap();
+    assert_eq!(patch_status, 200, "{patched}");
+    assert_eq!(patched["secretInline"], json!(false), "空串应清除内置密钥");
+
+    // 连通测试（草稿配置、不可达端点）：结构化 503，而非崩溃。
+    let (status, failed) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/settings/models/test", boot.base),
+        &json!({"kind": "remoteApi", "endpoint": "http://127.0.0.1:9/v1", "model": "x", "secretValue": "sk"}),
+    )
+    .await;
+    assert_eq!(status, 503, "{failed}");
+    assert_eq!(
+        failed["error"]["code"].as_str(),
+        Some("dependencyUnavailable")
+    );
+
+    // 连通测试（CLI 草稿、不存在的命令）：同样给出可解释失败。
+    let (status, cli_failed) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/settings/models/test", boot.base),
+        &json!({"kind": "localCli", "endpoint": "definitely-not-a-real-cli-xyz --json"}),
+    )
+    .await;
+    assert_eq!(status, 503, "{cli_failed}");
+
+    // CLI 发现：返回全部候选与命中状态。
+    let (status, found) = get_json(
+        &boot.http,
+        &format!("{}/api/v1/settings/models/cliCandidates", boot.base),
+    )
+    .await;
+    assert_eq!(status, 200, "{found}");
+    let items = found["items"].as_array().cloned().unwrap_or_default();
+    assert!(
+        items.iter().any(|item| item["id"] == json!("claude")),
+        "候选应包含 Claude Code: {found}"
+    );
+
+    // 清理：删除测试模型。
+    let deleted = boot
+        .http
+        .delete(format!("{}/api/v1/settings/models/{id}", boot.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(deleted.status().as_u16(), 200);
+
     boot.running.shutdown().await.unwrap();
 }

@@ -252,6 +252,7 @@ pub(crate) async fn inbound_ops(
         task_id: TaskId::new(format!("push-{source_id}"))
             .map_err(|_| classified(ErrorClass::Config, "config"))?,
         source_id,
+        plan_id: None,
         accessor,
         locator: Locator::PushChannel { channel },
         spec: Value::Object(Map::new()),
@@ -268,7 +269,9 @@ pub(crate) async fn inbound_ops(
         .cloned()
         .unwrap_or_else(|| Value::Array(Vec::new()));
     if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
-        raw_ops(envelopes)
+        let mut ops = raw_ops(envelopes)?;
+        stamp_source(&mut ops, task.source_id.as_str());
+        Ok(ops)
     } else {
         adapted_ops(state, &task, module, envelopes, &pipeline, false, None)
             .await
@@ -420,7 +423,7 @@ async fn adapted_ops(
             }
         }
     }
-    let admission = Admission::from_value(module.get("admission").unwrap_or(&Value::Null))
+    let admission = Admission::from_value(&merged_admission(&state.snapshot, task, module))
         .map_err(|error| classified(error.class(), error.to_string()))?;
     let output = run(
         &Registry::builtins(),
@@ -448,7 +451,24 @@ async fn adapted_ops(
     )
     .await
     .map_err(|error| classified(error.class(), error.to_string()))?;
-    Ok((output.changeset.ops, output.follows))
+    let mut ops = output.changeset.ops;
+    stamp_source(&mut ops, task.source_id.as_str());
+    Ok((ops, output.follows))
+}
+
+/// 给 `Ensure` 补 `source` 标签。
+///
+/// 内容身份用 url/ext，跨信源去重，来源因此不属于身份键；网关把该标签落成
+/// `resources.source_id`，内容库才能按项目可见信源过滤。已有标签不覆盖：同一 URL
+/// 被多个信源采集时归属首个写入者。
+fn stamp_source(ops: &mut [Op], source: &str) {
+    for op in ops {
+        if let Op::Ensure { labels, .. } = op {
+            labels
+                .entry("source".to_string())
+                .or_insert_with(|| source.to_string());
+        }
+    }
 }
 
 fn accessor_of(task: &AccessTask, module: &Value) -> String {
@@ -460,6 +480,49 @@ fn accessor_of(task: &AccessTask, module: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or(task.accessor.as_str())
         .to_string()
+}
+
+/// 找到任务所属计划的 `quota`（计划化后额度不再写在信源上）。
+fn plan_quota(snapshot: &Snapshot, task: &AccessTask) -> Option<Value> {
+    let plan_id = task.plan_id.as_deref()?;
+    snapshot
+        .modules
+        .get(plan_id)?
+        .get("quota")
+        .cloned()
+        .filter(|value| !value.is_null())
+}
+
+/// 回灌计划额度到 `Admission` 输入：`quota.perRunItems → initialBackfill.limit`、
+/// `quota.maxAge → initialBackfill.maxAge`，使迁出信源的回填/时间窗治理仍在执行侧生效。
+/// 信源若仍自带 `initialBackfill`（未迁移），保持不变。
+fn merged_admission(snapshot: &Snapshot, task: &AccessTask, module: &Value) -> Value {
+    let mut admission = module
+        .get("admission")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    let Some(map) = admission.as_object_mut() else {
+        return admission;
+    };
+    if map.contains_key("initialBackfill") {
+        return admission;
+    }
+    let Some(quota) = plan_quota(snapshot, task) else {
+        return admission;
+    };
+    let per_run = quota.get("perRunItems").cloned().filter(|v| !v.is_null());
+    let max_age = quota.get("maxAge").cloned().filter(|v| !v.is_null());
+    if per_run.is_some() || max_age.is_some() {
+        let mut backfill = Map::new();
+        if let Some(limit) = per_run {
+            backfill.insert("limit".into(), limit);
+        }
+        if let Some(age) = max_age {
+            backfill.insert("maxAge".into(), age);
+        }
+        map.insert("initialBackfill".into(), Value::Object(backfill));
+    }
+    admission
 }
 
 fn detail_budget(module: &Value) -> usize {
@@ -496,6 +559,7 @@ fn follow_tasks(
             task: AccessTask {
                 task_id,
                 source_id: task.source_id.clone(),
+                plan_id: task.plan_id.clone(),
                 accessor: follow.accessor.clone(),
                 locator: follow.locator.clone(),
                 spec: follow.spec.clone(),

@@ -57,7 +57,6 @@ members = [
     "abilitys/data/config_inspect",
     "abilitys/data/catalog_admin",
     "abilitys/ops/health",
-    "abilitys/ops/workflow",
     "apps/modalprism-collector/ability/accessor_probe",
     "apps/modalprism-collector/ability/committer",
     "apps/modalprism-collector/ability/config_admin",
@@ -162,3 +161,11 @@ unsafe_code = "forbid"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# 开发/测试构建产物瘦身：Windows MSVC 的全量 debuginfo 会让每个 crate 的 .pdb 达数 GB。
+# 仅为本仓库代码保留行表（栈回溯/断点仍可用），依赖一律去调试信息（体积大头）。
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

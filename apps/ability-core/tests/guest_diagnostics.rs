@@ -21,8 +21,11 @@ struct TempGuest {
 
 impl TempGuest {
     fn cangjie(tag: &str, binary: Option<&[u8]>) -> Self {
-        let root =
-            std::env::temp_dir().join(format!("leaf-guest-diag-{}-{}", tag, std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "leaf-guest-diag-{}-{}",
+            tag,
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(
@@ -150,10 +153,7 @@ async fn cangjie_source_mode_uses_prebuilt_binary() {
     if let Ok(_) = result {
         panic!("伪产物装载不应成功");
     }
-    assert!(!matches!(
-        host.readiness(&iid("diag.ready")),
-        Readiness::Ready
-    ));
+    assert!(!matches!(host.readiness(&iid("diag.ready")), Readiness::Ready));
     assert!(matches!(
         host.load_failures().first().map(|f| f.code),
         Some("io") | Some("toolchain_missing") | Some("handshake_failed")

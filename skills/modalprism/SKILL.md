@@ -1,23 +1,23 @@
 ---
 name: modalprism
-description: 查询 ModalPrism 的内容、信源、生产运行与日志，并触发一次生产运行或审核候选。当用户需要「看最近入库的内容」「按关键词检索」「读一篇内容」「列出信源与工作流」「围绕素材生成内容」「查看失败原因」时使用。走公共 HTTP（默认 127.0.0.1:17880）或附带脚本，不直接读数据库。
+description: 查询 ModalPrism 已采集的内容与信源，发起内容投递并追踪投递记录与日志。当用户需要「看最近入库的内容」「按关键词检索」「读一篇内容」「列出信源」「把内容投给模型或接口」「查看失败原因」时使用。
 ---
 
 # ModalPrism
 
-ModalPrism 把信源采集、内容生产、发布与治理收敛到同一个领域 API。这个 Skill 只做三件事：查业务资源、冻结输入并创建生产运行、审核候选。信源、适配器、工作流版本、提示词、Skill 与设置都在控制台修改，不通过这个脚本改配置。
+这个 Skill 做三件事：查业务资源、发起内容投递、追踪投递结果。信源、模型、外部接口、通知渠道与设置的修改在控制台完成，不通过这个 Skill 改配置。
 
 ## 前置
 
-采集进程在跑（`cargo run -p modalprism-collector`）。先确认：
+collector 在运行（仓库根目录 `cargo run -p modalprism-collector`）。先确认：
 
 ```sh
 node scripts/prism.mjs status
 ```
 
-返回 `status`、`version` 与 `generation` 才继续。`generation` 每次设置应用会递增，可用来判断配置是否生效。
+返回 `status` 与 `version` 才继续。
 
-基址默认 `http://127.0.0.1:17880`，用 `--base http://host:port` 或 `MODALPRISM_BASE` 覆盖；也可以指向 Node 控制台 `http://127.0.0.1:17890`，代理不改变响应。
+基址默认 `http://127.0.0.1:17880`，用 `--base http://host:port` 或 `MODALPRISM_BASE` 覆盖；控制台地址同样是有效入口，代理不改变响应。命令一览：`node scripts/prism.mjs help`。
 
 ## 任务配方
 
@@ -27,7 +27,7 @@ node scripts/prism.mjs status
 node scripts/prism.mjs sources --limit 20
 ```
 
-每项含 `id`、`name`、`enabled`、`accessMethodId`、`adapterIds`、`endpoint`、`schedule`、`health`、`nextRunAt` 与 `etag`。健康只用于筛选，不替代任务详情。
+每项含 `id`、`name`、`enabled`、`endpoint`、`schedule`、`health`、`nextRunAt` 与 `etag`。健康只用于筛选，不替代任务详情。
 
 ### 查内容
 
@@ -39,69 +39,47 @@ node scripts/prism.mjs content-item r_01ARZ3NDEKTSV4RRFFQ69G5FAV
 
 列表只返回业务字段：`id`（即 RID）、`title`、`sourceId`、`status`、`tags`、`publishedAt`、`createdAt` 与 `etag`。正文、版本、血缘与关系在详情与独立子资源里。
 
-### 生产一个候选
+### 投递内容
 
 ```sh
-# 1. 冻结输入（文本；也可以是 content / contentList / querySnapshot / url / structured / file）
-node scripts/prism.mjs input-text "今日素材" "需要改写的原文…"
+# 1. 看可选目标：模型、外部 API、通知渠道，键为 kind:id
+node scripts/prism.mjs targets
 
-# 2. 选一个工作流版本
-node scripts/prism.mjs workflows
-node scripts/prism.mjs versions wf_...
-
-# 3. 创建运行，随后轮询 Operation
-node scripts/prism.mjs run iset_... wfver_...
+# 2. 发起投递，随后轮询 Operation
+node scripts/prism.mjs deliver r_01ARZ...,r_02BQC... --targets model:model/atomcode,endpoint:endpoint_...
 node scripts/prism.mjs op op_...
 ```
 
-运行结束后结果里带 `candidateId`。候选默认 `awaitingReview`；未审核的候选不会进入草稿或发布。
+投递按目标顺序逐条提交，单个目标失败不回滚已成功的其他目标；结果里每个目标都带状态、耗时与输出摘要。内容页与计划表单做的是同一件事，区别只在入口。
 
-### 审核候选
+### 查投递记录
 
 ```sh
-node scripts/prism.mjs candidates --status awaitingReview
-node scripts/prism.mjs review cand_... approve --comment "可以采用"
-node scripts/prism.mjs review cand_... reject --comment "事实不足"
+node scripts/prism.mjs records --limit 20
+node scripts/prism.mjs records --type auto --status failed
 ```
 
-审核需要资源的 `etag`；脚本会先读列表再带 `If-Match`，冲突时返回 412，必须重新读取后重试。
+记录区分手动与自动：自动投递由计划表单里的投递目标驱动，`trigger.ruleName` 指出是哪条规则。
 
 ### 查失败原因
 
 ```sh
-node scripts/prism.mjs runs --status failed
+node scripts/prism.mjs records --status failed
 node scripts/prism.mjs logs --correlation op_... --level error
 node scripts/prism.mjs logs --correlation run_... --limit 50
 ```
 
-`requestId`、`operationId`、`taskId`、`runId` 可以互相追踪。日志与事件分开保存；审计不随普通日志清理。
+`requestId`、`operationId`、`taskId`、`runId`、`deliveryId` 可以互相追踪。
 
 ## 直接调 HTTP
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| `GET` | `/api/v1/system/status` | 服务状态与配置代际 |
-| `GET` | `/api/v1/catalog/sources` | 信源领域资源 |
-| `GET` | `/api/v1/content/items?query=&sourceId=&status=` | 内容列表 |
-| `GET` | `/api/v1/content/items/{id}`、`/body` | 内容详情与正文 |
-| `GET` | `/api/v1/production/workflows`、`/{id}/versions` | 工作流与不可变版本 |
-| `GET` | `/api/v1/production/inputSets` | 冻结输入集 |
-| `POST` | `/api/v1/production/inputSets` | 冻结新输入集合 |
-| `POST` | `/api/v1/production/runs` | `{"inputSetId":"…","workflowVersionId":"…","mode":"manual"}` |
-| `GET` | `/api/v1/production/candidates` | 候选 |
-| `POST` | `/api/v1/production/candidates/{id}/reviews` | `{"decision":"approve"}` + `If-Match` |
-| `GET` | `/api/v1/operations/{id}` | 异步动作状态与结果摘要 |
-| `GET` | `/api/v1/observability/logs` | 日志与关联筛选 |
+脚本未覆盖的请求走公共 HTTP，前缀 `/api/v1`：`GET /system/status`、`GET /catalog/sources`、`GET /content/items`（含 `/{id}` 与 `/{id}/body`）、`GET /delivery/targets`、`POST /delivery/jobs`、`GET /delivery/records`、`GET|POST /delivery/rules`、`GET /delivery/channels`、`GET /operations/{id}`、`GET /observability/logs`。全部方法与参数见控制台「外部调用」页。
 
-写请求需要 `Idempotency-Key`；所有资源读取带 `ETag`。列表统一返回 `{"items":[],"nextCursor":null}`；错误统一返回 `{"error":{"code","message","fieldErrors","requestId","retryable"}}`。
-
-## 有 MCP 客户端时
-
-`cargo run -p modalprism-agent -- --data var --config config` 起只读 MCP 服务，工具名形如 `strata_read.query`、`type_article.project`、`catalog_admin.list`、`workflow.catalog`。MCP 只读；写入仍走公共 HTTP。
+契约约定：写请求需要 `Idempotency-Key`；资源读取带 `ETag`；列表统一返回 `{"items":[],"nextCursor":null}`；错误统一返回 `{"error":{"code","message","fieldErrors","requestId","retryable"}}`；异步动作返回 `202` 与 Operation。
 
 ## 边界
 
-- 不通过 API 改信源、适配器、工作流、提示词或设置；这些在控制台的对应页面完成。
-- 不把 `seq` 当作稳定标识；用 `id`（RID）、`operationId`、`runId` 与 `candidateId`。
-- 生成结果永远是候选；批准不触发发布，发布是另一个显式动作。
+- 不通过 API 改信源、模型、外部接口、通知渠道或设置；这些在控制台的对应页面完成。
+- 不把 `seq` 当作稳定标识；用 `id`（RID）、`operationId`、`runId` 与 `deliveryId`。
+- 投递会产生真实的对外请求（模型计费、接口调用、消息推送）；确认目标后再发起。
 - 报告结果时给出 `id`、`sourceId` 与 requestId，便于在日志页追踪。

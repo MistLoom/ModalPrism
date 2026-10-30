@@ -1,23 +1,25 @@
-id: source/inbound-items
-kind: source
-name: 外部推送
 access:
   accessor: accessor/push
   locator:
     channel: items
   spec:
-    token: local-inbound-token
-    ratePerSec: 5
     burst: 10
+    ratePerSec: 5
+    token: local-inbound-token
+admission: {}
+id: source/inbound-items
+kind: source
+name: 外部推送
 pipeline:
-  - run: [adapter/json-list]
+  - run:
+      - adapter/json-list
     spec:
       adapter/json-list:
         items: /items
-        url: url
-        title: title
-        summary: summary
         publishedAt: publishedAt
-schedule:
-  interval: 1h
-admission: {}
+        summary: summary
+        title: title
+        url: url
+project: proj_default
+shared: true
+sourceType: push

@@ -18,11 +18,7 @@ impl Gateway for Fake {
     fn catalog(&self) -> Vec<frame_core::CatalogEntry> {
         Vec::new()
     }
-    fn get_entry(
-        &self,
-        _i: &frame_core::InstanceId,
-        _m: &frame_core::MethodId,
-    ) -> Option<frame_core::CatalogEntry> {
+    fn get_entry(&self, _i: &frame_core::InstanceId, _m: &frame_core::MethodId) -> Option<frame_core::CatalogEntry> {
         None
     }
 }
@@ -35,10 +31,7 @@ async fn route_extension_serves_app_routes_alongside_default() {
     let base = format!("http://{addr}");
 
     let port = Box::new(HttpPort::new(addr).with_route_extension(|router| {
-        router.route(
-            "/app/summary",
-            get(|| async { Json(json!({"area": "app"})) }),
-        )
+        router.route("/app/summary", get(|| async { Json(json!({"area": "app"})) }))
     }));
     tokio::spawn(async move { port.serve(Arc::new(Fake)).await.unwrap() });
 

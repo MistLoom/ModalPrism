@@ -455,9 +455,7 @@ async fn finish_handshake(
         }
     };
     if let Err(e) = bridge.request(Body::Create { config }).await {
-        return Err(Error::handshake_failed(format!(
-            "Guest Create 应答失败: {e}"
-        )));
+        return Err(Error::handshake_failed(format!("Guest Create 应答失败: {e}")));
     }
     if let Some(ref c) = child {
         ProcSupervisor::register(c.id());
@@ -600,10 +598,7 @@ impl AbilityProvider for ProcProvider {
         }
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                Error::toolchain_missing(format!(
-                    "Guest 运行程序不可用 {}: {e}",
-                    self.program.display()
-                ))
+                Error::toolchain_missing(format!("Guest 运行程序不可用 {}: {e}", self.program.display()))
             } else {
                 Error::io(e.to_string())
             }

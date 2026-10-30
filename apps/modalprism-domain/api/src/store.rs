@@ -121,8 +121,6 @@ impl Store {
                 content_id TEXT,
                 run_id TEXT,
                 attempt_id TEXT,
-                workflow_version_id TEXT,
-                publication_id TEXT,
                 delivery_id TEXT,
                 config_generation INTEGER
             )",
@@ -445,8 +443,8 @@ impl Store {
 
     pub async fn append_record(&self, record: &Value, stream: &str) -> Result<i64, ApiError> {
         let result = sqlx::query(
-            "INSERT INTO records(stream, at, level, kind, message, data, request_id, operation_id, task_id, source_id, content_id, run_id, attempt_id, workflow_version_id, publication_id, delivery_id, config_generation)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO records(stream, at, level, kind, message, data, request_id, operation_id, task_id, source_id, content_id, run_id, attempt_id, delivery_id, config_generation)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(stream)
         .bind(text(record, "timestamp"))
@@ -461,8 +459,6 @@ impl Store {
         .bind(optional_text(record, "contentId"))
         .bind(optional_text(record, "runId"))
         .bind(optional_text(record, "attemptId"))
-        .bind(optional_text(record, "workflowVersionId"))
-        .bind(optional_text(record, "publicationId"))
         .bind(optional_text(record, "deliveryId"))
         .bind(record.get("configGeneration").and_then(Value::as_i64))
         .execute(&self.pool)
@@ -485,12 +481,12 @@ impl Store {
         } = filter;
         let needle = query.map(|value| format!("%{value}%"));
         let rows = sqlx::query(
-            "SELECT seq, at, level, kind, message, data, request_id, operation_id, task_id, source_id, content_id, run_id, attempt_id, workflow_version_id, publication_id, delivery_id, config_generation
+            "SELECT seq, at, level, kind, message, data, request_id, operation_id, task_id, source_id, content_id, run_id, attempt_id, delivery_id, config_generation
              FROM records
              WHERE stream = ?
                AND (? IS NULL OR level = ?)
                AND (? IS NULL OR kind = ?)
-               AND (? IS NULL OR request_id = ? OR operation_id = ? OR task_id = ? OR run_id = ? OR content_id = ? OR publication_id = ? OR delivery_id = ?)
+               AND (? IS NULL OR request_id = ? OR operation_id = ? OR task_id = ? OR run_id = ? OR content_id = ? OR delivery_id = ?)
                AND (? IS NULL OR message LIKE ?)
              ORDER BY seq DESC LIMIT ?",
         )
@@ -499,7 +495,6 @@ impl Store {
         .bind(level)
         .bind(kind)
         .bind(kind)
-        .bind(correlation)
         .bind(correlation)
         .bind(correlation)
         .bind(correlation)
@@ -529,8 +524,6 @@ impl Store {
                     "contentId": row.try_get::<Option<String>, _>("content_id").ok().flatten(),
                     "runId": row.try_get::<Option<String>, _>("run_id").ok().flatten(),
                     "attemptId": row.try_get::<Option<String>, _>("attempt_id").ok().flatten(),
-                    "workflowVersionId": row.try_get::<Option<String>, _>("workflow_version_id").ok().flatten(),
-                    "publicationId": row.try_get::<Option<String>, _>("publication_id").ok().flatten(),
                     "deliveryId": row.try_get::<Option<String>, _>("delivery_id").ok().flatten(),
                     "configGeneration": row.try_get::<Option<i64>, _>("config_generation").ok().flatten(),
                     "data": row.try_get::<Option<String>, _>("data").ok().flatten().and_then(|text| serde_json::from_str::<Value>(&text).ok()),
@@ -556,6 +549,47 @@ impl Store {
             .await
             .map_err(db)?;
         Ok(row.try_get::<i64, _>("n").unwrap_or(0).max(0) as u64)
+    }
+
+    /// 与 list_records 同筛选口径的总数：页码分页的 total 用它，避免整窗拉取。
+    pub async fn count_records_filtered(
+        &self,
+        stream: &str,
+        filter: RecordFilter<'_>,
+    ) -> Result<usize, ApiError> {
+        let RecordFilter {
+            level,
+            kind,
+            correlation,
+            query,
+        } = filter;
+        let needle = query.map(|value| format!("%{value}%"));
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM records
+             WHERE stream = ?
+               AND (? IS NULL OR level = ?)
+               AND (? IS NULL OR kind = ?)
+               AND (? IS NULL OR request_id = ? OR operation_id = ? OR task_id = ? OR run_id = ? OR content_id = ? OR delivery_id = ?)
+               AND (? IS NULL OR message LIKE ?)",
+        )
+        .bind(stream)
+        .bind(level)
+        .bind(level)
+        .bind(kind)
+        .bind(kind)
+        .bind(correlation)
+        .bind(correlation)
+        .bind(correlation)
+        .bind(correlation)
+        .bind(correlation)
+        .bind(correlation)
+        .bind(correlation)
+        .bind(&needle)
+        .bind(&needle)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(row.try_get::<i64, _>("n").unwrap_or(0).max(0) as usize)
     }
 
     pub async fn prune_records_before(&self, stream: &str, before: &str) -> Result<u64, ApiError> {

@@ -9,13 +9,11 @@ pub struct Bridge;
 
 #[async_trait]
 impl Handlers for Bridge {
-    async fn build(
-        &self,
-        ctx: &dyn ability_support::AbilityCtx,
-        args: serde_json::Value,
-    ) -> ability_support::Result<serde_json::Value> {
+
+    async fn build(&self, ctx: &dyn ability_support::AbilityCtx, args: serde_json::Value) -> ability_support::Result<serde_json::Value> {
         crate::logic::build::build(ctx, args).await
     }
+
 }
 
 pub fn instance() -> Arc<dyn Handlers> {

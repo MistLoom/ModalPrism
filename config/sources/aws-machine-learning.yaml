@@ -1,18 +1,17 @@
-id: source/aws-machine-learning
-kind: source
-name: "AWS Machine Learning Blog"
-labels:
-  tier: T1
-  topic: "官方,教程"
 access:
   accessor: accessor/rss
   locator:
-    url: https://aws.amazon.com/blogs/machine-learning/feed/
+    url: "https://aws.amazon.com/blogs/machine-learning/feed/"
+admission: {}
+id: source/aws-machine-learning
+kind: source
+labels:
+  tier: T1
+  topic: "官方,教程"
+name: AWS Machine Learning Blog
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

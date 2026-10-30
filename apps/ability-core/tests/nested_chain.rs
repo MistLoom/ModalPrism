@@ -12,8 +12,13 @@ use ability_support::{
 use frame_core::InvokeRequest;
 use serde_json::json;
 
+/// 监视器 sink 是进程级单例：并行用例互相顶掉注册会让后到的 span 事件丢失。
+/// 本文件两个用例都断言完整链路，统一串行。
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn nested_call_keeps_root_chain_until_root_returns() {
+    let _serial = SERIAL.lock().await;
     let host = AbilityHost::new();
 
     // child: run 回显。
@@ -97,9 +102,11 @@ async fn nested_call_keeps_root_chain_until_root_returns() {
     );
 }
 
+
 #[cfg(feature = "monitor")]
 #[tokio::test]
 async fn nested_invoke_emits_parent_span_ids() {
+    let _serial = SERIAL.lock().await;
     use ability_support::monitor::{MonitorEvent, MonitorSink};
     use std::sync::Mutex;
 

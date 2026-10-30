@@ -5,8 +5,10 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use ability_support::{InstanceId, MethodId};
 use assembly::Binds;
 use config::builtin_presets;
+use frame_core::{Gateway, InvokeRequest};
 use serde_json::{Value, json};
 use strata_model::{ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, Target};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -79,6 +81,26 @@ async fn accepted(http: &reqwest::Client, base: &str, response: reqwest::Respons
     let value: Value = serde_json::from_str(&text).unwrap();
     let id = value["operationId"].as_str().unwrap().to_string();
     operation(http, base, &id).await
+}
+
+/// 通过运维面直接建声明，避开 HTTP 层无关细节。
+async fn ops_call(
+    running: &modalprism_collector::Running,
+    instance: &str,
+    method: &str,
+    args: Value,
+) -> Value {
+    let request = InvokeRequest::new(
+        InstanceId::new(instance).unwrap(),
+        MethodId::new(method).unwrap(),
+        args,
+    );
+    running
+        .gateway()
+        .invoke(request)
+        .await
+        .map(|response| response.data)
+        .unwrap_or_else(|error| panic!("{instance}.{method}: {error}"))
 }
 
 #[tokio::test]
@@ -181,138 +203,20 @@ async fn domain_api_is_the_only_product_surface() {
     let error: Value = conflict.json().await.unwrap();
     assert_eq!(error["error"]["code"], "idempotencyConflict");
 
-    // 生产输入：文本冻结。
-    let input_set: Value = http
-        .post(format!("{base}/api/v1/production/inputSets"))
-        .json(&json!({"name": "测试输入", "inputs": [{"kind": "text", "text": "一条测试素材"}]}))
+    // 投递目标：外部接口登记、渠道掩码与计划维度的自动投递。
+    let endpoint: Value = http
+        .post(format!("{base}/api/v1/delivery/endpoints"))
+        .json(&json!({"name": "下游 API", "url": "http://127.0.0.1:9/ingest", "enabled": true}))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    let input_set_id = input_set["id"].as_str().unwrap().to_string();
-    assert_eq!(input_set["inputs"][0]["kind"], "text");
+    let endpoint_id = endpoint["id"].as_str().unwrap().to_string();
+    assert_eq!(endpoint["enabled"], json!(true));
 
-    // 工作流与不可变版本。
-    let workflow: Value = http
-        .post(format!("{base}/api/v1/production/workflows"))
-        .json(&json!({"name": "模板直出", "description": "不依赖模型的契约测试"}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let workflow_id = workflow["id"].as_str().unwrap().to_string();
-    let workflows: Value = http
-        .get(format!("{base}/api/v1/production/workflows"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let workflow_row = workflows["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["id"] == workflow_id)
-        .unwrap();
-    let workflow_etag = workflow_row["etag"].as_str().unwrap().to_string();
-    let version: Value = http
-        .post(format!(
-            "{base}/api/v1/production/workflows/{workflow_id}/versions"
-        ))
-        .header("if-match", workflow_etag)
-        .json(&json!({"steps": [{"id": "直出", "kind": "template", "parameters": {"template": "{{input.text}}"}}]}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let version_id = version["id"].as_str().unwrap().to_string();
-
-    // 运行与候选。
-    let response = http
-        .post(format!("{base}/api/v1/production/runs"))
-        .json(
-            &json!({"inputSetId": input_set_id, "workflowVersionId": version_id, "mode": "manual"}),
-        )
-        .send()
-        .await
-        .unwrap();
-    let finished = accepted(&http, &base, response).await;
-    assert_eq!(finished["status"], "succeeded");
-    let candidate_id = finished["resultSummary"]["candidateId"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let candidates: Value = http
-        .get(format!("{base}/api/v1/production/candidates"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let candidate = candidates["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["id"] == candidate_id)
-        .unwrap();
-    assert_eq!(candidate["status"], "awaitingReview");
-    let candidate_etag = candidate["etag"].as_str().unwrap().to_string();
-
-    // 审核 -> 草稿 -> 更新，ETag 保护。
-    let review: Value = http
-        .post(format!(
-            "{base}/api/v1/production/candidates/{candidate_id}/reviews"
-        ))
-        .header("if-match", &candidate_etag)
-        .json(&json!({"decision": "approve", "comment": "可以发布"}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(review["decision"], "approve");
-    let draft: Value = http
-        .post(format!("{base}/api/v1/production/drafts"))
-        .json(&json!({"candidateIds": [candidate_id], "title": "测试草稿", "body": "一条测试素材"}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let draft_id = draft["id"].as_str().unwrap().to_string();
-    let draft_etag = draft["etag"].as_str().unwrap().to_string();
-    let response = http
-        .patch(format!("{base}/api/v1/production/drafts/{draft_id}"))
-        .header("if-match", draft_etag)
-        .json(&json!({"candidateIds": [candidate_id], "title": "测试草稿 v2", "body": "更新后的正文"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-
-    // 渠道与发布：投递失败必须记在 Delivery，Publication 不能报告成功。
-    let channel: Value = http
-        .post(format!("{base}/api/v1/publication/channels"))
-        .json(&json!({"name": "本地回调", "kind": "webhook", "enabled": true, "settings": {"url": "http://127.0.0.1:9/hook"}}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let channel_id = channel["id"].as_str().unwrap().to_string();
-
-    // 渠道地址仅回传主机，带掩码更新时保留原密钥。
+    // 渠道地址只回传主机；带掩码更新时保留原地址。
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let hook_addr = listener.local_addr().unwrap();
     let (line_tx, line_rx) = oneshot::channel();
@@ -329,19 +233,19 @@ async fn domain_api_is_the_only_product_surface() {
     });
     let hook_url = format!("http://{hook_addr}/secret-hook");
     let masked_url = format!("http://{hook_addr}/***");
-    let hook_channel: Value = http
-        .post(format!("{base}/api/v1/publication/channels"))
-        .json(&json!({"name": "掩码渠道", "kind": "webhook", "enabled": true, "settings": {"url": hook_url}}))
+    let channel: Value = http
+        .post(format!("{base}/api/v1/delivery/channels"))
+        .json(&json!({"name": "本地回调", "kind": "webhook", "enabled": true, "settings": {"url": hook_url}}))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(hook_channel["settings"]["url"], masked_url);
-    let hook_channel_id = hook_channel["id"].as_str().unwrap().to_string();
+    assert_eq!(channel["settings"]["url"], masked_url);
+    let channel_id = channel["id"].as_str().unwrap().to_string();
     let listed: Value = http
-        .get(format!("{base}/api/v1/publication/channels"))
+        .get(format!("{base}/api/v1/delivery/channels"))
         .send()
         .await
         .unwrap()
@@ -350,18 +254,18 @@ async fn domain_api_is_the_only_product_surface() {
         .unwrap();
     let text = listed.to_string();
     assert!(!text.contains("secret-hook"), "{text}");
-    let hook_etag = listed["items"]
+    let channel_etag = listed["items"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["id"] == hook_channel_id)
+        .find(|item| item["id"] == channel_id)
         .and_then(|item| item["etag"].as_str())
         .unwrap()
         .to_string();
     let updated: Value = http
-        .patch(format!("{base}/api/v1/publication/channels/{hook_channel_id}"))
-        .header("if-match", hook_etag)
-        .json(&json!({"name": "掩码渠道 v2", "kind": "webhook", "enabled": true, "settings": {"url": masked_url}}))
+        .patch(format!("{base}/api/v1/delivery/channels/{channel_id}"))
+        .header("if-match", channel_etag)
+        .json(&json!({"name": "本地回调 v2", "kind": "webhook", "enabled": true, "settings": {"url": masked_url}}))
         .send()
         .await
         .unwrap()
@@ -369,9 +273,12 @@ async fn domain_api_is_the_only_product_surface() {
         .await
         .unwrap();
     assert_eq!(updated["settings"]["url"], masked_url);
+    assert_eq!(updated["name"], json!("本地回调 v2"));
+
+    // 连通检测真的发出请求，掩码没有吞掉真实路径。
     let response = http
-        .post(format!("{base}/api/v1/publication/notifications/test"))
-        .json(&json!({"channelId": hook_channel_id}))
+        .post(format!("{base}/api/v1/delivery/channels/{channel_id}/test"))
+        .json(&json!({}))
         .send()
         .await
         .unwrap();
@@ -383,61 +290,104 @@ async fn domain_api_is_the_only_product_surface() {
         .unwrap();
     assert!(line.contains("/secret-hook"), "{line}");
 
-    let response = http
-        .post(format!("{base}/api/v1/publications"))
-        .json(&json!({"draftId": draft_id, "channelIds": [channel_id]}))
-        .send()
-        .await
-        .unwrap();
-    let finished = accepted(&http, &base, response).await;
-    assert!(matches!(
-        finished["resultSummary"]["status"].as_str().unwrap(),
-        "failed" | "partiallyPublished"
-    ));
-    let deliveries: Value = http
-        .get(format!("{base}/api/v1/publication/deliveries"))
+    // 目标目录同时给出外部接口与通知渠道。
+    let targets: Value = http
+        .get(format!("{base}/api/v1/delivery/targets"))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert!(!deliveries["items"].as_array().unwrap().is_empty());
-    let failed_delivery = deliveries["items"]
+    let kinds: Vec<&str> = targets["items"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["status"] == "failed")
-        .cloned()
-        .unwrap();
-    let response = http
-        .post(format!(
-            "{base}/api/v1/publication/deliveries/{}/retry",
-            failed_delivery["id"].as_str().unwrap()
-        ))
-        .json(&json!({"reason": "契约测试"}))
-        .send()
-        .await
-        .unwrap();
-    let finished = accepted(&http, &base, response).await;
-    assert_eq!(finished["status"], "succeeded");
+        .filter_map(|item| item["kind"].as_str())
+        .collect();
+    assert!(kinds.contains(&"channel"), "{targets}");
+    assert!(kinds.contains(&"endpoint"), "{targets}");
 
-    // 定时发布：到点前保持 scheduled，到点后自动执行。
-    let scheduled = time::OffsetDateTime::now_utc() + time::Duration::seconds(2);
-    let scheduled_text = scheduled
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap();
+    // 计划行里声明投递目标：底层落成监听该计划的规则，清空即删除规则。
+    // 计划校验会核对目标信源是否存在，先用运维面建一个访问器与信源。
+    let templates = ops_call(&running, "catalog_admin", "templates", json!({})).await;
+    let accessor = templates
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["slug"] == json!("accessor-http"))
+        })
+        .cloned()
+        .expect("缺少 accessor-http 模板");
+    ops_call(
+        &running,
+        "catalog_admin",
+        "create",
+        json!({"kind": "accessor", "slug": "demo-http", "doc": accessor["doc"]}),
+    )
+    .await;
+    ops_call(
+        &running,
+        "catalog_admin",
+        "create",
+        json!({
+            "kind": "source",
+            "slug": "demo-feed",
+            "doc": {
+                "name": "示例信源",
+                "access": {"accessor": "accessor/demo-http", "locator": {"url": "https://example.com/feed"}},
+                "pipeline": [],
+                "schedule": {"interval": "6h"},
+                "admission": {}
+            }
+        }),
+    )
+    .await;
+
     let response = http
-        .post(format!("{base}/api/v1/publications"))
-        .json(&json!({"draftId": draft_id, "channelIds": [channel_id], "scheduledAt": scheduled_text}))
+        .post(format!("{base}/api/v1/collection/plans"))
+        .json(&json!({
+            "name": "投递计划",
+            "targets": ["source/demo-feed"],
+            "trigger": {"kind": "recurring", "interval": "2h"},
+            "deliveryTargets": [{"kind": "endpoint", "id": endpoint_id}],
+            "deliveryEnabled": true,
+        }))
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 202);
-    let value: Value = response.json().await.unwrap();
-    let scheduled_op = value["operationId"].as_str().unwrap().to_string();
-    let publications: Value = http
-        .get(format!("{base}/api/v1/publications?limit=20"))
+    let status = response.status();
+    let plan: Value = response.json().await.unwrap();
+    assert!(status.is_success(), "{status} {plan}");
+    let plan_id = plan["id"].as_str().unwrap().to_string();
+    assert_eq!(plan["deliveryTargets"][0]["id"], json!(endpoint_id));
+    assert_eq!(plan["deliveryTargets"][0]["kind"], json!("endpoint"));
+    let rule_id = plan["deliveryRuleId"].as_str().unwrap().to_string();
+
+    let plan_etag = http
+        .get(format!("{base}/api/v1/collection/plans/{plan_id}"))
+        .send()
+        .await
+        .unwrap()
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .unwrap()
+        .to_string();
+    let cleared: Value = http
+        .patch(format!("{base}/api/v1/collection/plans/{plan_id}"))
+        .header("if-match", plan_etag)
+        .json(&json!({"deliveryTargets": []}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["deliveryTargets"], json!(null));
+    let rules: Value = http
+        .get(format!("{base}/api/v1/delivery/rules"))
         .send()
         .await
         .unwrap()
@@ -445,14 +395,14 @@ async fn domain_api_is_the_only_product_surface() {
         .await
         .unwrap();
     assert!(
-        publications["items"]
+        !rules["items"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|item| item["status"] == "scheduled")
+            .any(|item| item["id"] == json!(rule_id)),
+        "{rules}"
     );
-    let finished = operation(&http, &base, &scheduled_op).await;
-    assert_eq!(finished["status"], "succeeded");
+
 
     // 批量内容动作同样使用 `:action` 路径。
     let response = http
@@ -673,7 +623,7 @@ async fn factory_reset_rebuilds_settings_and_clears_user_data() {
         .unwrap();
     running.services().strata().flush().await.unwrap();
     let channel: Value = http
-        .post(format!("{base}/api/v1/publication/channels"))
+        .post(format!("{base}/api/v1/delivery/channels"))
         .json(&json!({"name": "出厂前渠道", "kind": "webhook", "enabled": true, "settings": {"url": "http://127.0.0.1:9/hook"}}))
         .send()
         .await
@@ -712,7 +662,7 @@ async fn factory_reset_rebuilds_settings_and_clears_user_data() {
         0
     );
     let channels: Value = http
-        .get(format!("{base}/api/v1/publication/channels"))
+        .get(format!("{base}/api/v1/delivery/channels"))
         .send()
         .await
         .unwrap()

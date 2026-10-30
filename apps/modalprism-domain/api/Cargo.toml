@@ -12,6 +12,7 @@ assembly = { path = "../../modalprism-collector/subsystems/assembly" }
 axum = { version = "0.8", features = ["multipart"] }
 config = { path = "../config" }
 egress = { path = "../../modalprism-collector/subsystems/egress" }
+encoding_rs.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -21,6 +22,7 @@ sha2.workspace = true
 sqlx.workspace = true
 strata-client = { path = "../strata-client" }
 strata-model = { path = "../strata-model" }
+surface = { path = "../surface" }
 thiserror.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }
 tokio.workspace = true

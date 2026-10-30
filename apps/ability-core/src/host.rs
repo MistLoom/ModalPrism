@@ -437,13 +437,17 @@ impl HostInner {
             .map(|s| s.phase)
     }
 
-    async fn transition_lifecycle(&self, instance: &InstanceId, to: Lifecycle) {
+    async fn transition_lifecycle(
+        &self,
+        instance: &InstanceId,
+        to: Lifecycle,
+    ) {
         let from = self.phase_of(instance);
         let aid = self.ability_id_of(instance);
         self.set_phase(instance, to);
-        self.emit_lifecycle(instance, from, to, aid.as_deref())
-            .await;
+        self.emit_lifecycle(instance, from, to, aid.as_deref()).await;
     }
+
 
     fn resolve_bindings(
         &self,
@@ -615,16 +619,9 @@ impl HostInner {
             );
         }
         self.copy_grant(manifest.id.as_str(), spec.as_name.as_str());
-        self.emit_lifecycle(
-            &spec.as_name,
-            None,
-            Lifecycle::Loaded,
-            self.ability_id_of(&spec.as_name).as_deref(),
-        )
-        .await;
+        self.emit_lifecycle(&spec.as_name, None, Lifecycle::Loaded, self.ability_id_of(&spec.as_name).as_deref()).await;
 
-        self.transition_lifecycle(&spec.as_name, Lifecycle::Bound)
-            .await;
+        self.transition_lifecycle(&spec.as_name, Lifecycle::Bound).await;
 
         let ctx = self.make_ctx(
             spec.as_name.clone(),
@@ -632,8 +629,7 @@ impl HostInner {
             bindings.clone(),
             LocalsScope::new(),
             Uuid::new_v4().to_string(),
-            0,
-            Uuid::new_v4().to_string(),
+            0, Uuid::new_v4().to_string(),
             false,
             InvokeMask::default(),
         );
@@ -643,19 +639,16 @@ impl HostInner {
         };
         if let Err(e) = with_scope(life_scope, ability.on_lifecycle(Lifecycle::Started, &ctx)).await
         {
-            self.transition_lifecycle(&spec.as_name, Lifecycle::Failed)
-                .await;
+            self.transition_lifecycle(&spec.as_name, Lifecycle::Failed).await;
             self.instances
                 .write()
                 .expect("instances")
                 .remove(&spec.as_name);
             return Err(e);
         }
-        self.transition_lifecycle(&spec.as_name, Lifecycle::Started)
-            .await;
+        self.transition_lifecycle(&spec.as_name, Lifecycle::Started).await;
 
-        self.transition_lifecycle(&spec.as_name, Lifecycle::Ready)
-            .await;
+        self.transition_lifecycle(&spec.as_name, Lifecycle::Ready).await;
         ability_support::monitor_emit!(
             ability_support::monitor::MonitorEvent::new("host", now_ms())
                 .phase("load")
@@ -713,8 +706,7 @@ impl HostInner {
             bindings,
             LocalsScope::new(),
             Uuid::new_v4().to_string(),
-            0,
-            Uuid::new_v4().to_string(),
+            0, Uuid::new_v4().to_string(),
             false,
             InvokeMask::default(),
         );
@@ -723,8 +715,7 @@ impl HostInner {
             span: ctx.span,
         };
         let _ = with_scope(life_scope, ability.on_lifecycle(Lifecycle::Stopped, &ctx)).await;
-        self.transition_lifecycle(instance, Lifecycle::Stopped)
-            .await;
+        self.transition_lifecycle(instance, Lifecycle::Stopped).await;
         self.drop_event_ids(instance);
 
         self.instances.write().expect("instances").remove(instance);
@@ -855,7 +846,7 @@ impl HostInner {
                 );
             }
         }
-        let aspects = self.aspects.read().expect("aspects").clone();
+let aspects = self.aspects.read().expect("aspects").clone();
         let scope = FeedbackScope {
             chain_id: chain_id.clone(),
             span,
@@ -1138,7 +1129,7 @@ impl AbilityHost {
         self.inner.authorize_event(caller, filter, mode)
     }
 
-    /// 读取某能力实例登记的协议集合（用于 surface 一致性校验）。
+    /// 读取某能力实例登记的协议集合（只读列举，供一致性校验）。
     pub fn protocol_support(&self, instance: &str) -> Vec<AccessKind> {
         self.inner
             .protocol_support

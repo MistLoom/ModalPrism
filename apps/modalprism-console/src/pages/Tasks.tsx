@@ -1,21 +1,32 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { IconAlert, IconPause, IconPlay, IconRefresh, IconTrash } from "../components/icons";
-import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, useUi } from "../components/ui";
-import { batchTasks, listQueues, listTasks, purgeTasks } from "../lib/api";
+import { Pager, slicePage } from "../components/Pager";
+import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, StructuredValue, useUi } from "../components/ui";
+import { batchTasks, listPlans, listQueues, listSources, listSourceTypes, listTasks, pauseQueue, purgeTasks, resumeQueue, runDerivations, runTask } from "../lib/api";
 import { count, kindLabel, relative, stamp, statusLabel } from "../lib/format";
 import { ProjectScopeBadge } from "../lib/project";
 import { navigate, useRoute } from "../lib/router";
-import type { Queue, Task } from "../lib/types";
+import type { Plan, Queue, SourceTypeRecord, Task } from "../lib/types";
+
+// 任务扫描窗口：与后端队列扫描口径一致，超出部分提示「N+」。
+const TASK_WINDOW = 200;
 
 export function TasksPage() {
   const { params } = useRoute();
   const { notify, run } = useUi();
   const [tasks, setTasks] = useState<Task[] | null>(null);
-  const [next, setNext] = useState<string | null>(null);
+  const [capped, setCapped] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [queues, setQueues] = useState<Queue[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [planFilter, setPlanFilter] = useState("all");
   const [status, setStatus] = useState(params.get("status") ?? "all");
   const [kind, setKind] = useState(params.get("kind") ?? "all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeRecords, setTypeRecords] = useState<SourceTypeRecord[]>([]);
+  const [sourceTypes, setSourceTypes] = useState<Map<string, string>>(new Map());
   const [search, setSearch] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
@@ -25,21 +36,27 @@ export function TasksPage() {
   const [purgeOpen, setPurgeOpen] = useState(false);
 
   const load = useCallback(
-    async (cursor?: string) => {
+    async () => {
       setLoading(true);
       try {
-        const [page, queuePage] = await Promise.all([
+        const [pageResult, queuePage, planPage, sourcePage, typePage] = await Promise.all([
           listTasks({
-            limit: 100,
-            cursor,
+            limit: TASK_WINDOW,
             status: status === "all" ? undefined : status,
             kind: kind === "all" ? undefined : kind,
           }),
           listQueues(),
+          listPlans({ limit: 200 }),
+          listSources({ limit: 200 }),
+          listSourceTypes(),
         ]);
-        setTasks((current) => (cursor ? [...(current ?? []), ...page.items] : page.items));
-        setNext(page.nextCursor);
+        setTasks(pageResult.items);
+        setCapped((pageResult.total ?? pageResult.items.length) >= TASK_WINDOW || pageResult.items.length >= TASK_WINDOW);
         setQueues(queuePage.items as unknown as Queue[]);
+        setPlans(planPage.items);
+        // 信源类型经 sourceId 派生（不落库）：构建 id → 类型映射供筛选与徽标。
+        setSourceTypes(new Map(sourcePage.items.map((source) => [source.id, source.sourceType])));
+        setTypeRecords(typePage.items);
         setError(null);
       } catch (problem) {
         setError(problem);
@@ -55,13 +72,58 @@ export function TasksPage() {
     void load();
   }, [load]);
 
+  const planBySource = useMemo(() => {
+    const map = new Map<string, Plan>();
+    for (const plan of plans) {
+      for (const target of plan.targets ?? []) {
+        map.set(target.replace(/^source\//, ""), plan);
+      }
+      if (!map.has(plan.id)) map.set(plan.id, plan);
+    }
+    return map;
+  }, [plans]);
+
+  const planOfTask = (task: Task): Plan | undefined => {
+    if (task.planId) {
+      const key = task.planId.replace(/^plan\//, "");
+      const byId = plans.find((plan) => plan.id === key || plan.id === task.planId);
+      if (byId) return byId;
+    }
+    const source = (task.sourceId ?? "").replace(/^source\//, "");
+    return source ? planBySource.get(source) : undefined;
+  };
+
+  const typeOfTask = (task: Task): string => {
+    const id = (task.sourceId ?? "").replace(/^source\//, "");
+    return sourceTypes.get(id) ?? "";
+  };
+  const typeLabelOf = (typeId: string): string => typeRecords.find((item) => item.id === typeId)?.label ?? typeId;
+
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return tasks ?? [];
-    return (tasks ?? []).filter((task) =>
+    let list = tasks ?? [];
+    if (typeFilter !== "all") {
+      list = list.filter((task) => {
+        const id = (task.sourceId ?? "").replace(/^source\//, "");
+        return sourceTypes.get(id) === typeFilter;
+      });
+    }
+    if (planFilter !== "all") {
+      list = list.filter((task) => planOfTask(task)?.id === planFilter);
+    }
+    if (!needle) return list;
+    return list.filter((task) =>
       `${task.id} ${task.kind} ${task.title ?? ""} ${task.sourceId ?? ""} ${task.error ?? ""}`.toLowerCase().includes(needle),
     );
-  }, [tasks, search]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, search, planFilter, planBySource, typeFilter, sourceTypes]);
+
+  const pagedRows = useMemo(() => slicePage(rows, page, pageSize), [rows, page, pageSize]);
+
+  // 筛选集变化后当前页可能越界，回到第一页。
+  useEffect(() => {
+    setPage(1);
+  }, [search, planFilter, status, kind, typeFilter, tasks?.length]);
 
   async function action(label: string, ids: string[], decision: string) {
     if (!ids.length) return;
@@ -76,6 +138,57 @@ export function TasksPage() {
     } catch (problem) {
       if (!started) {
         notify("bad", `${label}失败`, problem instanceof Error ? problem.message : undefined);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 立即执行：绕开调度闸门，直接按任务号补跑一条排队/失败的任务。
+  async function runNow(id: string) {
+    setBusy(true);
+    let started = false;
+    try {
+      const operation = await runTask(id);
+      started = true;
+      await run(operation, "立即执行");
+      await load();
+    } catch (problem) {
+      if (!started) {
+        notify("bad", "立即执行失败", problem instanceof Error ? problem.message : undefined);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 暂停/恢复队列派发：能力此前只读不写，这里补上控制入口。
+  async function toggleQueue(queue: Queue) {
+    setBusy(true);
+    try {
+      if (queue.paused) await resumeQueue(queue.id);
+      else await pauseQueue(queue.id);
+      notify("ok", queue.paused ? `恢复 ${queue.id}` : `暂停 ${queue.id}`);
+      await load();
+    } catch (problem) {
+      notify("bad", "队列操作失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // 立即派生：手动跑一轮声明式派生（否则只由 30s 后台循环触发）。
+  async function deriveNow() {
+    setBusy(true);
+    let started = false;
+    try {
+      const operation = await runDerivations();
+      started = true;
+      await run(operation, "立即派生");
+      await load();
+    } catch (problem) {
+      if (!started) {
+        notify("bad", "派生失败", problem instanceof Error ? problem.message : undefined);
       }
     } finally {
       setBusy(false);
@@ -101,6 +214,9 @@ export function TasksPage() {
           <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
             <IconRefresh size={14} /> 刷新
           </button>
+          <button type="button" className="btn" onClick={() => void deriveNow()} disabled={busy}>
+            <IconPlay size={14} /> 立即派生
+          </button>
           <button type="button" className="btn btn-danger" onClick={() => setPurgeOpen(true)}>
             <IconTrash size={14} /> 清空任务
           </button>
@@ -114,9 +230,20 @@ export function TasksPage() {
           <div className={`queue-card${queue.paused ? " is-paused" : ""}`} key={queue.id}>
             <div className="queue-head">
               <span className="queue-name mono">{queue.id}</span>
-              <span className={`badge ${queue.paused ? "warn" : "ok"}`}>{queue.paused ? "暂停" : "派发中"}</span>
+              <span className={`badge ${queue.paused || queue.stalled ? "warn" : "ok"}`}>
+                {queue.paused ? "暂停" : queue.stalled ? queue.reason || "排队受阻" : "运行中"}
+              </span>
               <span className="fill" />
               <span className="small muted">{queue.running}/{queue.capacity}</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void toggleQueue(queue)}
+                disabled={busy}
+                title={queue.paused ? "恢复队列" : "暂停队列"}
+              >
+                {queue.paused ? <IconPlay size={12} /> : <IconPause size={12} />}
+              </button>
             </div>
             <div className="queue-nums">
               <span>排队 <strong>{count(queue.queued)}</strong></span>
@@ -150,8 +277,18 @@ export function TasksPage() {
         <select className="select" value={kind} onChange={(event) => setKind(event.target.value)} aria-label="任务类型">
           <option value="all">全部类型</option>
           <option value="collection">采集</option>
-          <option value="production">生产</option>
-          <option value="publication">发布</option>
+        </select>
+        <select className="select" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} aria-label="信源类型">
+          <option value="all">全部信源类型</option>
+          {typeRecords.map((item) => (
+            <option key={item.id} value={item.id}>{item.label}</option>
+          ))}
+        </select>
+        <select className="select" value={planFilter} onChange={(event) => setPlanFilter(event.target.value)} aria-label="采集计划">
+          <option value="all">全部计划</option>
+          {plans.map((plan) => (
+            <option key={plan.id} value={plan.id}>{plan.name ?? plan.id}</option>
+          ))}
         </select>
         <span className="fill" />
         <span className="small muted">{rows.length} 条</span>
@@ -195,6 +332,7 @@ export function TasksPage() {
                   </th>
                   <th>任务</th>
                   <th>类型</th>
+                  <th>计划</th>
                   <th>状态</th>
                   <th>队列</th>
                   <th>创建</th>
@@ -203,7 +341,7 @@ export function TasksPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((task) => (
+                {pagedRows.map((task) => (
                   <tr key={task.id} className={selection.includes(task.id) ? "is-selected" : ""}>
                     <td>
                       <input
@@ -217,11 +355,17 @@ export function TasksPage() {
                     </td>
                     <td>
                       <div className="cell-main">
-                        <span className="source-name">{task.title || task.sourceId || task.id}</span>
+                        <span className="source-name">
+                          {task.title || task.sourceId || task.id}
+                          {typeOfTask(task) ? (
+                            <span className="badge neutral" style={{ marginLeft: 6 }}>{typeLabelOf(typeOfTask(task))}</span>
+                          ) : null}
+                        </span>
                         <span className="source-sub mono">{task.id}</span>
                       </div>
                     </td>
                     <td><span className="tag">{kindLabel(task.kind)}</span></td>
+                    <td className="small">{planOfTask(task)?.name ?? planOfTask(task)?.id ?? "—"}</td>
                     <td>
                       <div className="cell-main">
                         <StatusBadge status={task.status} />
@@ -238,6 +382,11 @@ export function TasksPage() {
                       )}
                     </td>
                     <td className="actions">
+                      {["queued", "failed"].includes(task.status) ? (
+                        <button type="button" className="btn btn-sm" onClick={() => void runNow(task.id)} disabled={busy}>
+                          <IconPlay size={12} /> 立即执行
+                        </button>
+                      ) : null}
                       <button type="button" className="btn btn-sm" onClick={() => setDetail(task)}>详情</button>
                     </td>
                   </tr>
@@ -246,15 +395,28 @@ export function TasksPage() {
             </table>
           </div>
         )}
-        {next ? (
-          <div className="pager">
-            <span>还有更多任务</span>
-            <button type="button" className="btn btn-sm" onClick={() => void load(next)} disabled={loading}>加载更多</button>
-          </div>
+        {rows.length > 0 ? (
+          <Pager
+            page={page}
+            pageSize={pageSize}
+            total={rows.length}
+            capped={capped}
+            onPage={setPage}
+            onPageSize={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+          />
         ) : null}
       </Card>
 
-      {detail ? <TaskDrawer task={detail} onClose={() => setDetail(null)} /> : null}
+      {detail ? (
+        <TaskDrawer
+          task={detail}
+          planLabel={planOfTask(detail)?.name ?? planOfTask(detail)?.id ?? detail.planId ?? null}
+          onClose={() => setDetail(null)}
+        />
+      ) : null}
       {purgeOpen ? (
         <TaskPurgeModal
           status={status}
@@ -347,8 +509,8 @@ function TaskPurgeModal({ status, kind, onClose, onDone }: { status: string; kin
   );
 }
 
-function TaskDrawer({ task, onClose }: { task: Task; onClose: () => void }) {
-  const correlation = task.runId || task.publicationId || task.id;
+function TaskDrawer({ task, planLabel, onClose }: { task: Task; planLabel: string | null; onClose: () => void }) {
+  const correlation = task.runId || task.id;
   return (
     <Drawer
       title={task.title || task.id}
@@ -369,24 +531,24 @@ function TaskDrawer({ task, onClose }: { task: Task; onClose: () => void }) {
           <div className="detail-meta">
             <StatusBadge status={task.status} />
             <span className="mono">{task.id}</span>
-            <span>{task.kind}</span>
+            <span>{kindLabel(task.kind)}</span>
             {task.queue ? <span>队列 {task.queue}</span> : null}
           </div>
         </div>
         <dl className="kv">
-          <dt>来源</dt><dd className="mono">{task.sourceId || "—"}</dd>
+          <dt>来源</dt><dd className="mono">{task.sourceId ? task.sourceId.replace(/^source\//, "") : "—"}</dd>
+          <dt>采集计划</dt><dd>{planLabel || "—"}</dd>
           <dt>原因</dt><dd>{task.reason || "—"}</dd>
           <dt>创建</dt><dd>{stamp(task.createdAt)}</dd>
           <dt>更新</dt><dd>{stamp(task.updatedAt)}</dd>
           <dt>重试时间</dt><dd>{stamp(task.retryAt)}</dd>
-          <dt>生产运行</dt><dd className="mono">{task.runId || "—"}</dd>
-          <dt>发布</dt><dd className="mono">{task.publicationId || "—"}</dd>
+          <dt>采集运行</dt><dd className="mono">{task.runId || "—"}</dd>
           <dt>错误</dt><dd style={{ color: task.error ? "var(--danger)" : undefined }}>{task.error || "—"}</dd>
         </dl>
         {task.locator ? (
           <div className="drawer-section">
             <h3>定位</h3>
-            <div className="code">{JSON.stringify(task.locator, null, 2)}</div>
+            <StructuredValue value={task.locator} />
           </div>
         ) : null}
         {task.error ? (

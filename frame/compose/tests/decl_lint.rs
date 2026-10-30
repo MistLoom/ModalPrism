@@ -1,6 +1,8 @@
 //! 全仓库能力声明规范校验。
 
-use ability_support::{LintOptions, assert_clean_reports, discover_ability_roots, lint_workspace};
+use ability_support::{
+    LintOptions, assert_clean_reports, discover_ability_roots, lint_workspace,
+};
 use frame_compose::workspace_root;
 
 #[test]

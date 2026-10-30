@@ -216,6 +216,7 @@ async fn storage_roundtrip_matches_phase_exit() {
     let task = AccessTask {
         task_id: TaskId::new("task-1").unwrap(),
         source_id: SourceId::new("src").unwrap(),
+        plan_id: None,
         accessor: "http".into(),
         locator: Locator::Url {
             url: "https://example.com/a".into(),

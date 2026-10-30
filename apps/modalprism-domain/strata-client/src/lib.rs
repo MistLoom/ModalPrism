@@ -724,6 +724,15 @@ impl Strata {
         Ok(self.gateway.task_active(source, locator_key).await?)
     }
 
+    /// 同定位键上活跃任务的 id（不加租约），供入队去重后解析真正活跃的任务。
+    pub async fn active_task_id(
+        &self,
+        source: &str,
+        locator_key: &str,
+    ) -> Result<Option<TaskId>, Error> {
+        Ok(self.gateway.active_task_id(source, locator_key).await?)
+    }
+
     pub async fn lease_ready(
         &self,
         source: &str,

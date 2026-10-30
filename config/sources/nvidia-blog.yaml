@@ -1,18 +1,17 @@
-id: source/nvidia-blog
-kind: source
-name: "NVIDIA Blog"
-labels:
-  tier: T1
-  topic: "官方"
 access:
   accessor: accessor/rss
   locator:
-    url: https://blogs.nvidia.com/feed/
+    url: "https://blogs.nvidia.com/feed/"
+admission: {}
+id: source/nvidia-blog
+kind: source
+labels:
+  tier: T1
+  topic: 官方
+name: NVIDIA Blog
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

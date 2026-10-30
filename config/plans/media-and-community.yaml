@@ -1,0 +1,27 @@
+id: plan/media-and-community
+kind: plan
+name: 媒体与社区 · 采集计划
+# 示例：多信源共用一个节律；单个信源出问题时先看健康列，不必拆计划。
+enabled: false
+project: proj_default
+quota:
+  maxAge: 180d
+  perRunItems: 6
+stopPolicy:
+  onBudgetExhausted: skip
+  onFailureThreshold: 5
+targets:
+  - source/techcrunch-ai
+  - source/the-verge-ai
+  - source/mit-technology-review-ai
+  - source/the-decoder
+  - source/ars-technica-ai
+  - source/simon-willison
+  - source/latent-space
+  - source/import-ai
+  - source/mimo-blog
+  - source/berkeley-ai-research
+  - source/github-ai
+trigger:
+  interval: 4h
+  kind: recurring

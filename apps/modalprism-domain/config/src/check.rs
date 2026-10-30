@@ -16,6 +16,8 @@ const RESERVED_SPEC: &[&str] = &[
     "description",
     "enabled",
     "labels",
+    "project",
+    "shared",
     "extends",
     "policy",
     "spec",
@@ -30,6 +32,7 @@ const RESERVED_SPEC: &[&str] = &[
     "pipeline",
     "schedule",
     "admission",
+    "sourceType",
     "strata",
     "raw",
     "media",
@@ -80,6 +83,7 @@ pub fn check_modules(
             "accessor" => check_accessor(id, module, &mut diags),
             "adapter" => check_adapter(id, module, &mut diags),
             "binding" => check_binding(id, module, modules, &mut diags),
+            "plan" => check_plan(id, module, modules, &mut diags),
             "preset" | "profile" | "type" => {}
             _ => diags.push(bare(format!("未知 kind: {kind}"))),
         }
@@ -148,12 +152,12 @@ fn check_source(
             }
         }
     }
-    check_schedule(id, module.get("schedule"), diags);
-    if module.get("admission").is_none() {
-        diags.push(of(id, "信源缺少 admission"));
-    }
     check_robots(id, module.get("policy"), system_policy, diags);
     check_source_budget(id, module, diags);
+    // R12/R14：类型闭集、声明一致性与 accessor/adapter/paid 组合矩阵。
+    for issue in crate::source_type::validate(module) {
+        diags.push(of(id, issue));
+    }
     if lookup(module, "policy.raw.store").and_then(Value::as_str) == Some("sampled")
         && lookup(module, "policy.raw.sample_rate").is_none()
     {
@@ -161,19 +165,45 @@ fn check_source(
     }
 }
 
-fn check_schedule(id: &str, schedule: Option<&Value>, diags: &mut Vec<Diagnostic>) {
-    let Some(schedule) = schedule else {
-        diags.push(of(id, "信源缺少 schedule"));
+// 采集节律已迁出信源，改由计划的 trigger 承载；信源若仍写 schedule 也不再校验其形态。
+// 保留此说明以对照旧 `check_schedule` 的去留。
+
+/// 采集计划：targets 必须都存在且是信源；trigger 形态合法（recurring 带节律，oneShot 允许一次性）。
+fn check_plan(
+    id: &str,
+    module: &Value,
+    modules: &BTreeMap<String, Value>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let targets = string_array(module.get("targets"));
+    if targets.is_empty() {
+        diags.push(of(id, "计划缺少 targets"));
+    }
+    for target in &targets {
+        match modules.get(target) {
+            Some(source) if source.get("kind").and_then(Value::as_str) == Some("source") => {}
+            Some(_) => diags.push(of(id, format!("计划 target 不是信源: {target}"))),
+            None => diags.push(of(id, format!("计划引用不存在的信源: {target}"))),
+        }
+    }
+    let Some(trigger) = module.get("trigger") else {
+        diags.push(of(id, "计划缺少 trigger"));
         return;
     };
-    if schedule.get("adaptive").and_then(Value::as_bool) == Some(true) {
-        for key in ["floor", "ceiling", "expectedPeriod"] {
-            if schedule.get(key).is_none() {
-                diags.push(of(id, format!("adaptive 为 true 时缺少 schedule.{key}")));
+    match trigger.get("kind").and_then(Value::as_str) {
+        Some("oneShot") => {}
+        Some("recurring") | None => {
+            if trigger.get("adaptive").and_then(Value::as_bool) == Some(true) {
+                for key in ["floor", "ceiling", "expectedPeriod"] {
+                    if trigger.get(key).is_none() {
+                        diags.push(of(id, format!("adaptive 为 true 时缺少 trigger.{key}")));
+                    }
+                }
+            } else if trigger.get("interval").is_none() {
+                diags.push(of(id, "recurring 计划 trigger 缺少 interval"));
             }
         }
-    } else if schedule.get("interval").is_none() {
-        diags.push(of(id, "schedule 缺少 interval"));
+        Some(other) => diags.push(of(id, format!("未知 trigger.kind: {other}"))),
     }
 }
 

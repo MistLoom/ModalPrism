@@ -10,7 +10,6 @@ publish = false
 [dependencies]
 ability-core.workspace = true
 ability-support.workspace = true
-ability-workflow = { path = "../../abilitys/ops/workflow" }
 accessor_probe = { path = "ability/accessor_probe" }
 assembly = { path = "subsystems/assembly" }
 async-trait.workspace = true
@@ -27,6 +26,7 @@ domain-api = { path = "../modalprism-domain/api" }
 frame-core.workspace = true
 health = { path = "../../abilitys/ops/health" }
 health_record = { path = "ability/health_record" }
+leaf-monitor = { path = "../monitor" }
 paid_gateway = { path = "ability/paid_gateway" }
 reqwest.workspace = true
 runner = { path = "ability/runner" }

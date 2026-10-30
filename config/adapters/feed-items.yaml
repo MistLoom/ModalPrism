@@ -1,6 +1,8 @@
 id: adapter/feed-items
 kind: adapter
 name: Feed 条目
+# 默认适配器示例：订阅源信源用这一条把 RSS/Atom 原文解析成条目（discovery）。
+description: 解析 RSS/Atom 原文，逐条产出标题、链接与发布时间；订阅类信源默认使用。
 implementation: builtin:feed-items
 role: search
 consumes:

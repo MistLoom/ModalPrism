@@ -1,37 +1,45 @@
-id: source/status-search
-kind: source
-name: 状态搜索
-enabled: false
-description: 查询最新公开状态。声明不含密钥。
 access:
   accessor: accessor/paid-api
   locator:
-    endpoint: https://api.socialdata.tools/twitter/search
+    endpoint: "https://api.socialdata.tools/twitter/search"
   spec:
-    service: socialdata
-    method: GET
     headers:
-      - ["Authorization", "Bearer ${env:SOCIALDATA_API_KEY}"]
+      - - Authorization
+        - "Bearer ${env:SOCIALDATA_API_KEY}"
+    method: GET
     params:
       query: "from:example -filter:replies"
       type: Latest
-pipeline:
-  - run: [adapter/json-list]
-    spec:
-      adapter/json-list:
-        items: /tweets
-        urlTemplate: "https://x.com/{user.screen_name}/status/{id_str}"
-        titlePaths: [full_text, text]
-        summaryPaths: [full_text, text]
-        authorPaths: [user.screen_name]
-        publishedAtPath: tweet_created_at
-        externalIdPath: id_str
-        decodeEntities: true
-        summaryIsBody: true
+    service: socialdata
+admission: {}
+description: 查询最新公开状态。声明不含密钥。
+enabled: false
+id: source/status-search
+kind: source
+name: 状态搜索
 paid:
   budget:
     requests: 48
     window: 1d
-schedule:
-  interval: 30m
-admission: {}
+pipeline:
+  - run:
+      - adapter/json-list
+    spec:
+      adapter/json-list:
+        authorPaths:
+          - user.screen_name
+        decodeEntities: true
+        externalIdPath: id_str
+        items: /tweets
+        publishedAtPath: tweet_created_at
+        summaryIsBody: true
+        summaryPaths:
+          - full_text
+          - text
+        titlePaths:
+          - full_text
+          - text
+        urlTemplate: "https://x.com/{user.screen_name}/status/{id_str}"
+project: proj_default
+shared: true
+sourceType: search

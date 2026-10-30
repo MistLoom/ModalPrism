@@ -2,41 +2,49 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   IconAlert,
+  IconBell,
   IconChevronRight,
   IconContent,
+  IconDelivery,
   IconLogs,
   IconMenu,
-  IconOutbound,
   IconOverview,
-  IconProduction,
+  IconPlus,
+  IconPlug,
   IconSearch,
   IconSettings,
   IconSources,
   IconTasks,
 } from "./components/icons";
-import { Loading } from "./components/ui";
-import { systemOverview, systemStatus } from "./lib/api";
+import { Field, Loading, Modal, useUi } from "./components/ui";
+import { createProject, systemOverview, systemStatus } from "./lib/api";
 import { ProjectProvider, useCurrentProject } from "./lib/project";
 import { navigate, pageLabel, ROUTES, useRoute, type PageId } from "./lib/router";
 import { ContentPage } from "./pages/Content";
+import { DeliveryPage } from "./pages/Delivery";
+import { ExternalPage } from "./pages/External";
 import { LogsPage } from "./pages/Logs";
-import { OutboundPage } from "./pages/Outbound";
+import { NotificationsPage, useDesktopNotifications } from "./pages/Notifications";
 import { OverviewPage } from "./pages/Overview";
-import { ProductionPage } from "./pages/Production";
+import { PlansPage } from "./pages/Plans";
 import { ProjectsPage } from "./pages/Projects";
 import { SettingsPage } from "./pages/Settings";
 import { SourcesPage } from "./pages/Sources";
 import { TasksPage } from "./pages/Tasks";
+import { ToolsPage } from "./pages/Tools";
 
 const NAV_ICONS: Record<PageId, React.ReactNode> = {
   overview: <IconOverview />,
   projects: <IconSources />,
   sources: <IconSources />,
+  plans: <IconTasks />,
   tasks: <IconTasks />,
   content: <IconContent />,
-  production: <IconProduction />,
-  outbound: <IconOutbound />,
+  delivery: <IconDelivery />,
+  notifications: <IconBell />,
+  external: <IconPlug />,
   logs: <IconLogs />,
+  tools: <IconSearch />,
   settings: <IconSettings />,
 };
 
@@ -47,14 +55,24 @@ interface Badges {
 }
 
 export default function App() {
+  return (
+    <ProjectProvider>
+      <Shell />
+    </ProjectProvider>
+  );
+}
+
+/// 外壳：项目上下文就绪后再渲染，切项目时以 key 重挂载页面，确保各页数据随之刷新。
+function Shell() {
   const { page } = useRoute();
+  const { currentProjectId } = useCurrentProject();
+  useDesktopNotifications();
   const [online, setOnline] = useState<boolean | null>(null);
   const [generation, setGeneration] = useState<number | null>(null);
   const [badges, setBadges] = useState<Badges>({ sources: 0, attention: 0, tasks: 0 });
   const [palette, setPalette] = useState(false);
   const [menu, setMenu] = useState(false);
   const view = useRef<HTMLDivElement | null>(null);
-
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -87,7 +105,7 @@ export default function App() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [currentProjectId]);
 
   useEffect(() => {
     view.current?.scrollTo({ top: 0 });
@@ -106,89 +124,88 @@ export default function App() {
   }, []);
 
   return (
-    <ProjectProvider>
-      <div className="shell">
-        <aside className={`sidebar${menu ? " is-open" : ""}`} aria-label="主导航">
-          <div className="brand">
-            <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-              <path d="M16 3.5 28 26H4L16 3.5Z" fill="none" stroke="currentColor" strokeWidth={1.2} />
-              <path d="M16 3.5v22.5M10 14.8h12M7 21h18" fill="none" stroke="currentColor" strokeWidth={0.8} opacity={0.4} />
-              <path d="M16 3.5 22 26" stroke="var(--accent)" strokeWidth={1.3} fill="none" />
-            </svg>
-            <div className="brand-text">
-              <span className="brand-name">ModalPrism</span>
-              <span className="brand-sub">Content desk</span>
-            </div>
-          </div>
-          <nav className="nav">
-            <span className="nav-label">工作区</span>
-            {ROUTES.slice(0, 6).map((route) => (
-              <NavItem
-                key={route.id}
-                id={route.id}
-                active={page === route.id}
-                badge={
-                  route.id === "sources" && badges.sources ? (
-                    <span className={`nav-badge${badges.attention ? " is-alert" : ""}`}>{badges.attention || badges.sources}</span>
-                  ) : route.id === "tasks" && badges.tasks ? (
-                    <span className="nav-badge">{badges.tasks}</span>
-                  ) : null
-                }
-              />
-            ))}
-            <span className="nav-label">诊断</span>
-            {ROUTES.slice(6).map((route) => (
-              <NavItem key={route.id} id={route.id} active={page === route.id} />
-            ))}
-          </nav>
-          <div className="rail-foot">
-            <span>
-              配置代际 <strong>{generation === null ? "—" : `G-${generation}`}</strong>
-            </span>
-            <span>仅本机访问 · 无远程认证</span>
-          </div>
-        </aside>
-
-        <div className="main">
-          <header className="topbar">
-            <button type="button" className="icon-btn mobile-toggle" onClick={() => setMenu((open) => !open)} aria-label="打开导航">
-              <IconMenu />
-            </button>
-            <div className="crumbs">
-              <span>控制台</span>
-              <IconChevronRight size={12} />
-              <strong>{pageLabel(page)}</strong>
-            </div>
-            <button type="button" className="search-trigger" onClick={() => setPalette(true)}>
-              <IconSearch size={15} />
-              <span>搜索信源、内容、任务、运行与动作</span>
-              <kbd>Ctrl K</kbd>
-            </button>
-            <div className="topbar-meta">
-              <CurrentProjectPicker />
-              <span className="conn">
-                <span className={`dot ${online === false ? "bad" : online ? "ok" : "warn"}`} />
-                {online === false ? "collector 不可达" : online ? "在线" : "连接中"}
-              </span>
-              <span className="hide-small mono">G-{generation ?? "—"}</span>
-            </div>
-          </header>
-          <div className="view" ref={view}>
-            {online === false ? (
-              <div className="offline-bar" role="status">
-                <IconAlert size={16} />
-                <span>
-                  collector 不可达。只读外壳仍可打开，但不会伪造业务数据；确认 <code>modalprism-collector</code> 已启动后会自动恢复。
-                </span>
-              </div>
-            ) : null}
-            <Page page={page} online={online} />
+    <div className="shell">
+      <aside className={`sidebar${menu ? " is-open" : ""}`} aria-label="主导航">
+        <div className="brand">
+          <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M16 3.5 28 26H4L16 3.5Z" fill="none" stroke="currentColor" strokeWidth={1.2} />
+            <path d="M16 3.5v22.5M10 14.8h12M7 21h18" fill="none" stroke="currentColor" strokeWidth={0.8} opacity={0.4} />
+            <path d="M16 3.5 22 26" stroke="var(--accent)" strokeWidth={1.3} fill="none" />
+          </svg>
+          <div className="brand-text">
+            <span className="brand-name">ModalPrism</span>
+            <span className="brand-sub">Content desk</span>
           </div>
         </div>
+        <nav className="nav">
+          <span className="nav-label">工作区</span>
+          {ROUTES.filter((route) => route.group === "workspace").map((route) => (
+            <NavItem
+              key={route.id}
+              id={route.id}
+              active={page === route.id}
+              badge={
+                route.id === "sources" && badges.sources ? (
+                  <span className={`nav-badge${badges.attention ? " is-alert" : ""}`}>{badges.attention || badges.sources}</span>
+                ) : route.id === "tasks" && badges.tasks ? (
+                  <span className="nav-badge">{badges.tasks}</span>
+                ) : null
+              }
+            />
+          ))}
+          <span className="nav-label">诊断与接入</span>
+          {ROUTES.filter((route) => route.group === "diagnostics").map((route) => (
+            <NavItem key={route.id} id={route.id} active={page === route.id} />
+          ))}
+        </nav>
+        <div className="rail-foot">
+          <span>
+            配置代际 <strong>{generation === null ? "—" : `G-${generation}`}</strong>
+          </span>
+          <span>仅本机访问 · 无远程认证</span>
+        </div>
+      </aside>
 
-        {palette ? <Palette onClose={() => setPalette(false)} /> : null}
+      <div className="main">
+        <header className="topbar">
+          <button type="button" className="icon-btn mobile-toggle" onClick={() => setMenu((open) => !open)} aria-label="打开导航">
+            <IconMenu />
+          </button>
+          <div className="crumbs">
+            <span>控制台</span>
+            <IconChevronRight size={12} />
+            <strong>{pageLabel(page)}</strong>
+          </div>
+          <button type="button" className="search-trigger" onClick={() => setPalette(true)}>
+            <IconSearch size={15} />
+            <span>搜索信源、内容、任务、运行与动作</span>
+            <kbd>Ctrl K</kbd>
+          </button>
+          <div className="topbar-meta">
+            <CurrentProjectPicker />
+            <QuickProjectButton />
+            <span className="conn">
+              <span className={`dot ${online === false ? "bad" : online ? "ok" : "warn"}`} />
+              {online === false ? "collector 不可达" : online ? "在线" : "连接中"}
+            </span>
+            <span className="hide-small mono">G-{generation ?? "—"}</span>
+          </div>
+        </header>
+        <div className="view" ref={view}>
+          {online === false ? (
+            <div className="offline-bar" role="status">
+              <IconAlert size={16} />
+              <span>
+                collector 不可达。只读外壳仍可打开，但不会伪造业务数据；确认 <code>modalprism-collector</code> 已启动后会自动恢复。
+              </span>
+            </div>
+          ) : null}
+          <Page key={currentProjectId ?? "pending"} page={page} online={online} />
+        </div>
       </div>
-    </ProjectProvider>
+
+      {palette ? <Palette onClose={() => setPalette(false)} /> : null}
+    </div>
   );
 }
 
@@ -212,6 +229,69 @@ function CurrentProjectPicker() {
         </option>
       ))}
     </select>
+  );
+}
+
+/// 顶栏快速新建项目：建完即切换为当前项目，页面随项目切换重挂载刷新。
+function QuickProjectButton() {
+  const { notify } = useUi();
+  const { reload, setCurrentProjectId } = useCurrentProject();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    const trimmed = name.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      const project = await createProject({ name: trimmed });
+      await reload();
+      setCurrentProjectId(project.id);
+      notify("ok", "项目已创建并切换", `${project.name} · 新建的信源与运行数据自动归入本项目`);
+      setName("");
+      setOpen(false);
+    } catch (problem) {
+      notify("bad", "创建项目失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button type="button" className="btn btn-sm" onClick={() => setOpen(true)} title="新建项目">
+        <IconPlus size={13} /> 项目
+      </button>
+      {open ? (
+        <Modal
+          title="新建项目"
+          sub="只填项目名即可；之后新建的信源、计划与内容自动归入本项目。"
+          onClose={() => setOpen(false)}
+          footer={
+            <>
+              <button type="button" className="btn" onClick={() => setOpen(false)}>取消</button>
+              <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={busy || !name.trim()}>
+                {busy ? "创建中…" : "创建并切换"}
+              </button>
+            </>
+          }
+        >
+          <Field label="项目名" htmlFor="quick-project-name">
+            <input
+              id="quick-project-name"
+              className="input"
+              value={name}
+              placeholder="例如：科技快讯"
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submit();
+              }}
+            />
+          </Field>
+        </Modal>
+      ) : null}
+    </>
   );
 }
 
@@ -258,16 +338,22 @@ function Page({ page, online }: { page: PageId; online: boolean | null }) {
       return <ProjectsPage />;
     case "sources":
       return <SourcesPage />;
+    case "plans":
+      return <PlansPage />;
     case "tasks":
       return <TasksPage />;
     case "content":
       return <ContentPage />;
-    case "production":
-      return <ProductionPage />;
-    case "outbound":
-      return <OutboundPage />;
+    case "delivery":
+      return <DeliveryPage />;
+    case "notifications":
+      return <NotificationsPage />;
+    case "external":
+      return <ExternalPage />;
     case "logs":
       return <LogsPage />;
+    case "tools":
+      return <ToolsPage />;
     case "settings":
       return <SettingsPage />;
   }
@@ -283,8 +369,9 @@ function Palette({ onClose }: { onClose: () => void }) {
       ...ROUTES.map((route) => ({ label: `打开${route.label}`, hint: route.kicker, action: () => navigate(route.id) })),
       { label: "查看失败任务", hint: "过滤任务", action: () => navigate("tasks?status=failed") },
       { label: "打开内容库", hint: "检索与删除", action: () => navigate("content") },
-      { label: "查看待审核候选", hint: "过滤生产", action: () => navigate("production?tab=candidates&status=awaitingReview") },
-      { label: "查看失败投递", hint: "过滤出站", action: () => navigate("outbound?tab=deliveries&status=failed") },
+      { label: "手动投递内容", hint: "选择目标并提交", action: () => navigate("delivery") },
+      { label: "查看投递记录", hint: "内容投递", action: () => navigate("delivery?tab=records") },
+      { label: "查看通知记录", hint: "通知管理", action: () => navigate("notifications?tab=records") },
       { label: "查看最近错误日志", hint: "过滤日志", action: () => navigate("logs?level=error") },
       { label: "打开系统设置", hint: "设置", action: () => navigate("settings") },
     ],

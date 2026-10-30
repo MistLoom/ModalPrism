@@ -179,6 +179,7 @@ async fn shutdown_releases_leases() {
     let task = AccessTask {
         task_id: task_id.clone(),
         source_id: SourceId::new("src").unwrap(),
+        plan_id: None,
         accessor: "accessor/http".into(),
         locator: Locator::Url {
             url: "https://example.com/a".into(),
@@ -304,6 +305,7 @@ async fn standard_preset_redacts_headers_before_they_reach_staging() {
     let task = AccessTask {
         task_id: TaskId::new("task-redact").unwrap(),
         source_id: SourceId::new("source/demo").unwrap(),
+        plan_id: None,
         accessor: "accessor/browser".into(),
         locator: Locator::Url {
             url: format!("http://{addr}/page"),

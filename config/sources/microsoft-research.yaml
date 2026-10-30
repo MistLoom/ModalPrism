@@ -1,18 +1,17 @@
-id: source/microsoft-research
-kind: source
-name: "Microsoft Research"
-labels:
-  tier: T1
-  topic: "官方,研究"
 access:
   accessor: accessor/rss
   locator:
-    url: https://www.microsoft.com/en-us/research/feed/
+    url: "https://www.microsoft.com/en-us/research/feed/"
+admission: {}
+id: source/microsoft-research
+kind: source
+labels:
+  tier: T1
+  topic: "官方,研究"
+name: Microsoft Research
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

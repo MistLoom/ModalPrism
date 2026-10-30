@@ -9,6 +9,10 @@ methods:
     description: external probe ping
     input:
       type: object
+  - id: slow
+    description: long-task probe
+    input:
+      type: object
 events:
   - name: pong
     dir: emit

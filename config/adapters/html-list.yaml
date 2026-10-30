@@ -1,6 +1,8 @@
 id: adapter/html-list
 kind: adapter
 name: 网页列表
+# 默认适配器示例：列表页（新闻、博客首页）用这一条抽取条目链接。
+description: 从网页正文抽取列表条目链接与标题；列表页、博客首页等 HTML 信源默认使用。
 implementation: builtin:html-list
 role: search
 consumes:

@@ -18,7 +18,7 @@ use strata_model::{
 
 use crate::error::ApiError;
 use crate::operations::accepted;
-use crate::util::{self, cursor, cursor_offset, page};
+use crate::util::{self, cursor, page_total};
 use crate::{AppState, Shared, new_id};
 
 pub fn routes() -> Router<Shared> {
@@ -46,17 +46,58 @@ struct ListQuery {
     #[serde(default)]
     cursor: Option<String>,
     #[serde(default)]
+    offset: Option<String>,
+    #[serde(default)]
     query: Option<String>,
     #[serde(default)]
     source_id: Option<String>,
+    /// 信源类型（feed/search/web/api/push/custom）；缺省或 `all` 不按类型过滤。
+    #[serde(default, rename = "sourceType")]
+    source_type: Option<String>,
     #[serde(default)]
     status: Option<String>,
+    /// `all` 取消项目隔离过滤（管理与迁移用）。
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+/// 筛选条件的公共构造：列表窗口与计数查询必须共享同一语义。
+/// `allowed_sources` 为 Some 时按项目可见信源集合过滤（内容项目归属由其信源派生）。
+fn content_where(
+    source_id: Option<&str>,
+    status: Option<&str>,
+    allowed_sources: Option<&[String]>,
+) -> Option<Expr> {
+    let mut predicates = Vec::new();
+    if let Some(source) = source_id {
+        predicates.push(json!({"eq": ["sourceId", source]}));
+    }
+    if let Some(status) = status {
+        predicates.push(json!({"eq": ["tombstone", status == "tombstoned"]}));
+    }
+    if let Some(sources) = allowed_sources {
+        predicates.push(json!({"in": ["sourceId", sources]}));
+    }
+    let mut map = serde_json::Map::new();
+    if predicates.len() == 1 {
+        if let Value::Object(predicate) = &predicates[0] {
+            map = predicate.clone();
+        }
+    } else if predicates.len() > 1 {
+        map.insert("all".into(), Value::Array(predicates));
+    }
+    if map.is_empty() {
+        None
+    } else {
+        serde_json::from_value(Value::Object(map)).ok()
+    }
 }
 
 fn content_query(
     search: Option<&str>,
     source_id: Option<&str>,
     status: Option<&str>,
+    allowed_sources: Option<&[String]>,
     limit: usize,
 ) -> StrataQuery {
     let mut has_facets = Vec::new();
@@ -84,26 +125,7 @@ fn content_query(
         fields: Vec::new(),
     }));
 
-    let mut predicates = Vec::new();
-    if let Some(source) = source_id {
-        predicates.push(json!({"eq": ["sourceId", source]}));
-    }
-    if let Some(status) = status {
-        predicates.push(json!({"eq": ["tombstone", status == "tombstoned"]}));
-    }
-    let mut map = serde_json::Map::new();
-    if predicates.len() == 1 {
-        if let Value::Object(predicate) = &predicates[0] {
-            map = predicate.clone();
-        }
-    } else if predicates.len() > 1 {
-        map.insert("all".into(), Value::Array(predicates));
-    }
-    let r#where = if map.is_empty() {
-        None
-    } else {
-        serde_json::from_value(Value::Object(map)).ok()
-    };
+    let r#where = content_where(source_id, status, allowed_sources);
 
     if let Some(text) = search {
         return StrataQuery {
@@ -148,6 +170,118 @@ fn content_query(
         cursor: None,
         include_tombstoned: status == Some("tombstoned"),
     }
+}
+
+/// 总数计数上限：本地单机规模内精确；达到上限按上限返回（前端显示为封顶值）。
+const COUNT_CAP: usize = 5_000;
+
+/// 计数专用查询：与内容列表共享 where 语义，但只取 rid 并按单一 struct 变体过滤。
+fn content_count_query(
+    search: Option<&str>,
+    source_id: Option<&str>,
+    status: Option<&str>,
+    allowed_sources: Option<&[String]>,
+    variant: &str,
+) -> StrataQuery {
+    let select = vec![SelectItem::Field("rid".into())];
+    let r#where = content_where(source_id, status, allowed_sources);
+    if let Some(text) = search {
+        return StrataQuery {
+            from: QueryFrom::Resources,
+            r#where,
+            has_facets: Vec::new(),
+            select,
+            expand: Vec::new(),
+            search: Some(Search {
+                text: Some(text.to_string()),
+                vector: None,
+                variant: Some(variant.to_string()),
+                k: COUNT_CAP as u32,
+            }),
+            as_of: None,
+            order_by: Vec::new(),
+            limit: Some(COUNT_CAP as u32),
+            cursor: None,
+            include_tombstoned: status == Some("tombstoned"),
+        };
+    }
+    StrataQuery {
+        from: QueryFrom::Resources,
+        r#where,
+        has_facets: vec![FacetSelector {
+            kind: FacetKind::Struct,
+            variant: Some(variant.into()),
+            fields: Vec::new(),
+        }],
+        select,
+        expand: Vec::new(),
+        search: None,
+        as_of: None,
+        order_by: Vec::new(),
+        limit: Some(COUNT_CAP as u32),
+        cursor: None,
+        include_tombstoned: status == Some("tombstoned"),
+    }
+}
+
+/// 内容总数：文章 / 热榜 / 发现三种变体分别计数后按 rid 去重合并（与列表的事后过滤同语义）。
+pub(crate) async fn item_count(
+    state: &AppState,
+    search: Option<&str>,
+    source: Option<&str>,
+    status: Option<&str>,
+    allowed_sources: Option<&[String]>,
+) -> Result<usize, ApiError> {
+    let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for variant in ["article", "hotlist", "discovery"] {
+        let result = state
+            .services
+            .strata()
+            .query(content_count_query(
+                search,
+                source,
+                status,
+                allowed_sources,
+                variant,
+            ))
+            .await
+            .map_err(ApiError::from)?;
+        for row in result.rows {
+            if let Some(rid) = row.get("rid").and_then(Value::as_str) {
+                ids.insert(rid.to_string());
+            }
+        }
+        if ids.len() >= COUNT_CAP {
+            return Ok(COUNT_CAP);
+        }
+    }
+    Ok(ids.len())
+}
+
+/// 按内容形态分别计数（不做跨形态去重），供项目范围的概览展示。
+pub(crate) async fn variant_counts(
+    state: &AppState,
+    allowed_sources: Option<&[String]>,
+) -> Result<Vec<Value>, ApiError> {
+    let mut items = Vec::new();
+    for variant in ["article", "hotlist", "discovery"] {
+        let result = state
+            .services
+            .strata()
+            .query(content_count_query(None, None, None, allowed_sources, variant))
+            .await
+            .map_err(ApiError::from)?;
+        let mut ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for row in &result.rows {
+            if let Some(rid) = row.get("rid").and_then(Value::as_str) {
+                ids.insert(rid);
+            }
+        }
+        if !ids.is_empty() {
+            items.push(json!({"variant": variant, "total": ids.len()}));
+        }
+    }
+    Ok(items)
 }
 
 async fn source_names(state: &AppState) -> Result<BTreeMap<String, String>, ApiError> {
@@ -301,16 +435,72 @@ fn item_view(row: &Value, names: &BTreeMap<String, String>) -> Value {
 
 async fn list_items(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let limit = util::limit(query.limit.as_deref())?;
+    // 类型过滤：把类型解析为信源集合，再与项目可见集合取交；内容归属只能经信源派生。
+    let type_ids = match query
+        .source_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all")
+    {
+        Some(kind) => {
+            if config::source_type::SourceType::parse(kind).is_none() {
+                return Err(ApiError::validation(
+                    "sourceType",
+                    "closedSet",
+                    format!(
+                        "未知类型: {kind}（应为 {}）",
+                        config::source_type::SourceType::closed_set_text()
+                    ),
+                ));
+            }
+            Some(crate::catalog::source_ids_of_type(&state, kind).await?)
+        }
+        None => None,
+    };
+    // 项目隔离：内容归属由自有信源派生；共享信源只放开信源声明，不把内容带到其他项目。
+    let allowed_sources: Option<Vec<String>> = if query.scope.as_deref() == Some("all") {
+        None
+    } else {
+        let mut ids: Vec<String> = crate::catalog::owned_source_ids(&state, project.id())
+            .await?
+            .into_iter()
+            .collect();
+        ids.sort();
+        Some(ids)
+    };
+    let allowed_sources = match (allowed_sources, type_ids) {
+        (Some(visible), Some(typed)) => Some(
+            visible
+                .into_iter()
+                .filter(|id| typed.contains(id))
+                .collect::<Vec<_>>(),
+        ),
+        (None, Some(typed)) => {
+            let mut ids: Vec<String> = typed.into_iter().collect();
+            ids.sort();
+            Some(ids)
+        }
+        (allowed, None) => allowed,
+    };
+    if allowed_sources.as_ref().is_some_and(|ids| ids.is_empty()) {
+        return Ok(util::ok(&page_total(vec![], None, 0)));
+    }
     let filter = format!(
-        "content:{}:{}:{}",
+        "content:{}:{}:{}:{}:{}",
         query.query.clone().unwrap_or_default(),
         query.source_id.clone().unwrap_or_default(),
         query.status.clone().unwrap_or_default(),
+        query.scope.clone().unwrap_or_default(),
+        allowed_sources
+            .as_ref()
+            .map(|v| v.join(","))
+            .unwrap_or_default(),
     );
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     let search = query
         .query
         .as_deref()
@@ -320,8 +510,25 @@ async fn list_items(
         .status
         .as_deref()
         .filter(|value| !value.is_empty() && *value != "all");
-    let source = query.source_id.as_deref().filter(|value| !value.is_empty());
-    let spec = content_query(search, source, status, limit + offset + 1);
+    // 内容行按 `source/<slug>` 存归属；接口同时接受裸 slug 与带前缀两种写法。
+    let source = query
+        .source_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if value.starts_with("source/") {
+                value.to_string()
+            } else {
+                format!("source/{value}")
+            }
+        });
+    let spec = content_query(
+        search,
+        source.as_deref(),
+        status,
+        allowed_sources.as_deref(),
+        limit + offset + 1,
+    );
     let result = state
         .services
         .strata()
@@ -339,16 +546,17 @@ async fn list_items(
         })
         .map(|row| item_view(row, &names))
         .collect();
-    let total = rows.len();
+    let window = rows.len();
     rows = rows.into_iter().skip(offset).take(limit + 1).collect();
     let more = rows.len() > limit;
     let items: Vec<Value> = rows.into_iter().take(limit).collect();
-    let next = if more || offset + items.len() < total {
+    let next = if more || offset + items.len() < window {
         Some(cursor(&filter, offset + limit))
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    let total = item_count(&state, search, source.as_deref(), status, allowed_sources.as_deref()).await?;
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 fn rid_of(content_id: &str) -> Result<Rid, ApiError> {
@@ -364,7 +572,16 @@ fn facet_ref(rid: &Rid, kind: FacetKind, variant: Option<&str>) -> FacetRef {
     }
 }
 
-async fn read_row(state: &AppState, rid: &Rid) -> Result<Value, ApiError> {
+async fn read_row(state: &AppState, rid: &Rid, project_id: &str) -> Result<Value, ApiError> {
+    let row = row_of(state, rid)
+        .await?
+        .ok_or_else(|| ApiError::not_found(rid.as_str()))?;
+    assert_content_visible(state, &row, project_id).await?;
+    Ok(row)
+}
+
+/// 按 rid 取内容行，不做项目过滤；不存在返回 None。
+async fn row_of(state: &AppState, rid: &Rid) -> Result<Option<Value>, ApiError> {
     let spec = StrataQuery {
         from: QueryFrom::Resources,
         r#where: serde_json::from_value::<Expr>(json!({"eq": ["rid", rid.as_str()]})).ok(),
@@ -406,22 +623,60 @@ async fn read_row(state: &AppState, rid: &Rid) -> Result<Value, ApiError> {
         .query(spec)
         .await
         .map_err(ApiError::from)?;
-    page.rows
+    let row = page
+        .rows
         .into_iter()
         .find(|row| {
             row.get("struct:article").is_some()
                 || row.get("struct:hotlist").is_some()
                 || row.get("struct:discovery").is_some()
-        })
-        .ok_or_else(|| ApiError::not_found(rid.as_str()))
+        });
+    Ok(row)
+}
+
+/// 内容可见性门禁：项目隔离下，仅归属可见信源（本项目或共享）的内容可读；
+/// 无法归属（无 sourceId 或信源已删）的历史内容仅默认项目可见。
+async fn assert_content_visible(
+    state: &AppState,
+    row: &Value,
+    project_id: &str,
+) -> Result<(), ApiError> {
+    let source_id = row["sourceId"].as_str().unwrap_or("");
+    if source_id.is_empty() {
+        return if project_id == crate::projects::DEFAULT_PROJECT_ID {
+            Ok(())
+        } else {
+            Err(ApiError::not_found("内容"))
+        };
+    }
+    // 内容行里的 sourceId 可能是 collect 侧的 source/<slug> 形式，信源清单用裸 slug，
+    // 两侧归一再比较，否则跨项目切换后详情会被误判为不可见。
+    let slug = source_id.strip_prefix("source/").unwrap_or(source_id);
+    let rows = crate::catalog::source_rows(state).await?;
+    match rows
+        .iter()
+        .find(|item| item["id"].as_str() == Some(slug))
+    {
+        Some(source) if crate::catalog::source_editable(source, project_id) => Ok(()),
+        Some(_) => Err(ApiError::not_found("内容")),
+        // 信源已删除：视为历史内容，仅默认项目可见。
+        None => {
+            if project_id == crate::projects::DEFAULT_PROJECT_ID {
+                Ok(())
+            } else {
+                Err(ApiError::not_found("内容"))
+            }
+        }
+    }
 }
 
 async fn get_item(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Path(content_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let rid = rid_of(&content_id)?;
-    let row = read_row(&state, &rid).await?;
+    let row = read_row(&state, &rid, project.id()).await?;
     let names = source_names(&state).await?;
     let mut item = item_view(&row, &names);
     let body = body_of(&state, &rid).await?;
@@ -492,23 +747,57 @@ async fn body_of(state: &AppState, rid: &Rid) -> Result<Value, ApiError> {
     Ok(Value::Null)
 }
 
+/// 投递用的内容快照：标题、摘要、来源与正文摘录。项目可见性沿用详情同一门禁。
+pub(crate) async fn delivery_snapshot(
+    state: &AppState,
+    content_id: &str,
+    project_id: &str,
+) -> Result<Value, ApiError> {
+    let rid = rid_of(content_id)?;
+    let row = read_row(state, &rid, project_id).await?;
+    let names = source_names(state).await?;
+    let item = item_view(&row, &names);
+    let body = body_of(state, &rid).await?;
+    let text = body
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            body.get("value")
+                .filter(|value| !value.is_null())
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_default();
+    Ok(json!({
+        "contentId": content_id,
+        "title": item["title"],
+        "summary": item["summary"],
+        "sourceId": item["sourceId"],
+        "sourceName": item["sourceName"],
+        "url": item.pointer("/struct/url").cloned().unwrap_or(Value::Null),
+        "text": text.chars().take(8000).collect::<String>(),
+    }))
+}
+
 async fn get_body(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Path(content_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let rid = rid_of(&content_id)?;
-    read_row(&state, &rid).await?;
+    read_row(&state, &rid, project.id()).await?;
     let body = body_of(&state, &rid).await?;
     Ok(util::ok(&json!({"contentId": content_id, "body": body})))
 }
 
 async fn list_versions(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Path(content_id): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let rid = rid_of(&content_id)?;
-    read_row(&state, &rid).await?;
+    read_row(&state, &rid, project.id()).await?;
     let kinds = state
         .services
         .strata()
@@ -548,7 +837,7 @@ async fn list_versions(
     });
     let limit = util::limit(query.limit.as_deref())?;
     let filter = format!("versions:{content_id}");
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     let total = items.len();
     let items: Vec<Value> = items.into_iter().skip(offset).take(limit + 1).collect();
     let more = items.len() > limit;
@@ -558,15 +847,16 @@ async fn list_versions(
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 async fn get_lineage(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Path(content_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let rid = rid_of(&content_id)?;
-    read_row(&state, &rid).await?;
+    read_row(&state, &rid, project.id()).await?;
     let reference = facet_ref(&rid, FacetKind::Struct, Some("article"));
     let graph = match state
         .services
@@ -616,11 +906,12 @@ async fn get_lineage(
 
 async fn list_relations(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Path(content_id): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let rid = rid_of(&content_id)?;
-    read_row(&state, &rid).await?;
+    read_row(&state, &rid, project.id()).await?;
     let mut items = Vec::new();
     for direction in [EdgeDir::Out, EdgeDir::In] {
         let edges = state
@@ -642,7 +933,7 @@ async fn list_relations(
     }
     let limit = util::limit(query.limit.as_deref())?;
     let filter = format!("relations:{content_id}");
-    let offset = cursor_offset(query.cursor.as_deref(), &filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     let total = items.len();
     let items: Vec<Value> = items.into_iter().skip(offset).take(limit + 1).collect();
     let more = items.len() > limit;
@@ -652,11 +943,12 @@ async fn list_relations(
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 async fn patch_item(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Path(content_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<Value>,
@@ -664,7 +956,7 @@ async fn patch_item(
     let map = util::object(&body)?;
     util::unknown(map, &["tags", "title"])?;
     let rid = rid_of(&content_id)?;
-    let row = read_row(&state, &rid).await?;
+    let row = read_row(&state, &rid, project.id()).await?;
     let names = source_names(&state).await?;
     let current = item_view(&row, &names);
     util::if_match(&headers, current["etag"].as_str().unwrap_or(""))?;
@@ -739,7 +1031,7 @@ async fn patch_item(
         Some(crate::observe::Refs::content(&content_id)),
     )
     .await?;
-    let row = read_row(&state, &rid).await?;
+    let row = read_row(&state, &rid, project.id()).await?;
     let item = item_view(&row, &names);
     let mut response = util::ok(&item);
     if let Ok(value) = item["etag"].as_str().unwrap_or("").parse() {
@@ -752,11 +1044,12 @@ async fn patch_item(
 
 async fn delete_item(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Path(content_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let rid = rid_of(&content_id)?;
-    let row = read_row(&state, &rid).await?;
+    let row = read_row(&state, &rid, project.id()).await?;
     let names = source_names(&state).await?;
     let current = item_view(&row, &names);
     util::if_match(&headers, current["etag"].as_str().unwrap_or(""))?;
@@ -785,21 +1078,48 @@ fn content_time(
 /// 按筛选物理删除内容；单批上限由存储层控制，`truncated` 为真时继续调用。
 async fn purge_items(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let map = util::object(&body)?;
     util::unknown(map, &["source", "before", "after", "dryRun"])?;
-    let filter = assembly::ContentFilter {
-        source: util::optional_text(map, "source")?.filter(|value| !value.trim().is_empty()),
-        before: content_time(util::optional_text(map, "before")?, "before")?,
-        after: content_time(util::optional_text(map, "after")?, "after")?,
-    };
+    let requested = util::optional_text(map, "source")?.filter(|value| !value.trim().is_empty());
+    let before = content_time(util::optional_text(map, "before")?, "before")?;
+    let after = content_time(util::optional_text(map, "after")?, "after")?;
     let dry_run = matches!(map.get("dryRun"), Some(Value::Bool(true)));
-    let report = state
-        .services
-        .content_delete(&filter, dry_run)
-        .await
-        .map_err(ApiError::from)?;
+    // 项目隔离：不传来源时按当前项目自有信源逐个清空，绝不跨项目删除。
+    let mut visible: Vec<String> = crate::catalog::owned_source_ids(&state, project.id())
+        .await?
+        .into_iter()
+        .collect();
+    visible.sort();
+    let scopes: Vec<String> = match requested.clone() {
+        Some(source) => {
+            if !visible.iter().any(|id| id == &source) {
+                return Err(ApiError::not_found(format!("信源 {source}")));
+            }
+            vec![source]
+        }
+        None => visible,
+    };
+    let mut matched = 0u64;
+    let mut deleted = 0u64;
+    let mut truncated = false;
+    for source in scopes {
+        let filter = assembly::ContentFilter {
+            source: Some(source),
+            before,
+            after,
+        };
+        let report = state
+            .services
+            .content_delete(&filter, dry_run)
+            .await
+            .map_err(ApiError::from)?;
+        matched = matched.saturating_add(report.matched);
+        deleted = deleted.saturating_add(report.deleted);
+        truncated |= report.truncated;
+    }
     if !dry_run {
         crate::observe::append_audit(
             &state,
@@ -807,25 +1127,26 @@ async fn purge_items(
             "succeeded",
             "按筛选删除内容",
             json!({
-                "source": filter.source,
-                "matched": report.matched,
-                "deleted": report.deleted,
-                "truncated": report.truncated,
+                "source": requested,
+                "matched": matched,
+                "deleted": deleted,
+                "truncated": truncated,
             }),
             None,
         )
         .await?;
     }
     Ok(util::ok(&json!({
-        "matched": report.matched,
-        "deleted": report.deleted,
-        "truncated": report.truncated,
-        "dryRun": report.dry_run,
+        "matched": matched,
+        "deleted": deleted,
+        "truncated": truncated,
+        "dryRun": dry_run,
     })))
 }
 
 async fn batch_items(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let map = util::object(&body)?;
@@ -838,8 +1159,18 @@ async fn batch_items(
             "数量需要在 1 到 1000 之间",
         ));
     }
+    // 项目隔离：已存在的内容必须当前项目可见；不存在的 rid 交给作业层按无匹配处理。
+    for id in &ids {
+        let rid = rid_of(id)?;
+        if let Some(row) = row_of(&state, &rid).await? {
+            assert_content_visible(&state, &row, project.id()).await?;
+        }
+    }
     let action = util::text(map, "action")?;
-    if !matches!(action.as_str(), "delete" | "addTags" | "removeTags") {
+    if !matches!(
+        action.as_str(),
+        "delete" | "addTags" | "removeTags"
+    ) {
         return Err(ApiError::validation(
             "action",
             "enum",
@@ -944,17 +1275,22 @@ pub async fn execute_batch(
     }))
 }
 
+/// 已发布快照列表。
+///
+/// 快照是存储层的库级版本（整个数据集的一次提交），不属于任何项目的资源：
+/// 项目层级是「项目 → 信源 → 内容/任务/计划」，快照在这条链之上。
+/// 因此这里如实列出库快照，只读元数据；真正会写数据的是重放，重放必须在项目范围内封口。
 async fn list_snapshots(
     State(state): State<Shared>,
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let limit = util::limit(query.limit.as_deref())?;
     let filter = "snapshots";
-    let offset = cursor_offset(query.cursor.as_deref(), filter)?;
+    let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), filter)?;
     let changes = state
         .services
         .strata()
-        .changes(0, Some(200))
+        .changes(0, Some(2_000))
         .await
         .map_err(ApiError::from)?;
     let mut items: Vec<Value> = changes
@@ -979,11 +1315,12 @@ async fn list_snapshots(
     } else {
         None
     };
-    Ok(util::ok(&page(items, next)))
+    Ok(util::ok(&page_total(items, next, total)))
 }
 
 async fn create_replay(
     State(state): State<Shared>,
+    project: crate::ActiveProject,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let map = util::object(&body)?;
@@ -1008,12 +1345,25 @@ async fn create_replay(
     let snapshot_value = snapshot
         .parse::<u64>()
         .map_err(|_| ApiError::validation("snapshotId", "format", "快照标识无效"))?;
+    // 快照不存在就没有可回放的版本，直接拒掉，避免后台任务空跑。
+    let exists = state
+        .services
+        .strata()
+        .changes(0, Some(2_000))
+        .await
+        .map_err(ApiError::from)?
+        .iter()
+        .any(|change| change.snapshot == snapshot_value);
+    if !exists {
+        return Err(ApiError::not_found(format!("快照 {snapshot_value}")));
+    }
     let operation = crate::operations::start(
         &state,
         "content.replay",
         vec![json!({"kind": "snapshot", "id": snapshot})],
         json!({
             "kind": "content.replay",
+            "project": project.id(),
             "snapshot": snapshot_value,
             "scope": scope,
             "contentIds": content_ids,
@@ -1037,12 +1387,34 @@ pub async fn execute_replay(
         .into_iter()
         .filter_map(|value| value.as_str().map(str::to_string))
         .collect();
+    // 项目隔离：重放只作用于本项目自有信源产出的内容。
+    // 项目 → 信源 → 内容 是唯一的归属链，共享信源的内容仍归它所属的那个项目，
+    // 所以这里不能用“可见信源”口径，必须用自有口径，否则会跨项目回写。
+    let project_id = action["project"]
+        .as_str()
+        .unwrap_or(crate::projects::DEFAULT_PROJECT_ID);
+    let mut allowed: Vec<String> = crate::catalog::owned_source_ids(state, project_id)
+        .await?
+        .into_iter()
+        .collect();
+    allowed.sort();
+    if allowed.is_empty() {
+        return Ok(json!({
+            "partial": false,
+            "snapshot": snapshot,
+            "scope": scope,
+            "applied": 0,
+            "skipped": 0,
+            "note": "当前项目没有自有信源，未重放任何内容。",
+        }));
+    }
     let spec = StrataQuery {
         from: QueryFrom::Resources,
-        r#where: None,
+        r#where: content_where(None, None, Some(&allowed)),
         has_facets: Vec::new(),
         select: vec![
             SelectItem::Field("rid".into()),
+            SelectItem::Field("sourceId".into()),
             SelectItem::Facet(FacetSelector {
                 kind: FacetKind::Struct,
                 variant: Some("article".into()),
@@ -1076,6 +1448,11 @@ pub async fn execute_replay(
     let mut applied = 0usize;
     let mut skipped = 0usize;
     for row in page.rows {
+        // 双保险：即便查询层没跟上，也不会把其他项目的内容写回去。
+        let row_source = row["sourceId"].as_str().unwrap_or("");
+        if !allowed.iter().any(|id| id == row_source) {
+            continue;
+        }
         let Some(rid) = row["rid"].as_str().and_then(|value| Rid::parse(value).ok()) else {
             skipped += 1;
             continue;
@@ -1136,7 +1513,7 @@ pub async fn execute_replay(
         state,
         "content.replay",
         "快照重放完成",
-        json!({"snapshot": snapshot, "applied": applied, "skipped": skipped}),
+        json!({"snapshot": snapshot, "project": project_id, "applied": applied, "skipped": skipped}),
         crate::observe::Refs::op(operation_id),
     )
     .await?;
@@ -1146,6 +1523,6 @@ pub async fn execute_replay(
         "scope": scope,
         "applied": applied,
         "skipped": skipped,
-        "note": "按快照重放结构化字段；未通过的项保留原版本。",
+        "note": "按快照重放当前项目自有信源的结构化字段；未通过的项保留原版本。",
     }))
 }

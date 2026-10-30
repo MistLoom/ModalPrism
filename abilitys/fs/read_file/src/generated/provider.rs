@@ -10,7 +10,9 @@ macro_rules! handler_impl {
     ($method:ident) => {
         move |ctx: &dyn ability_support::AbilityCtx, args: serde_json::Value| {
             let handlers = instance();
-            ability_support::box_fut(async move { handlers.$method(ctx, args).await })
+            ability_support::box_fut(async move {
+                handlers.$method(ctx, args).await
+            })
         }
     };
 }

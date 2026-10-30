@@ -305,16 +305,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ability-workflow"
-version = "0.1.0"
-dependencies = [
- "ability-support",
- "serde_json",
- "types",
- "workflow",
-]
-
-[[package]]
 name = "ability-write-file"
 version = "0.1.0"
 dependencies = [
@@ -4214,6 +4204,7 @@ dependencies = [
  "axum 0.8.9",
  "config",
  "egress",
+ "encoding_rs 0.8.42",
  "jsonschema",
  "reqwest 0.12.28",
  "serde",
@@ -4223,6 +4214,7 @@ dependencies = [
  "sqlx",
  "strata-client",
  "strata-model",
+ "surface",
  "tempfile",
  "thiserror 2.0.21",
  "time",
@@ -6639,7 +6631,6 @@ version = "0.1.0"
 dependencies = [
  "ability-core",
  "ability-support",
- "ability-workflow",
  "async-trait",
  "catalog_admin",
  "config",
@@ -6669,7 +6660,6 @@ dependencies = [
  "ability-egress",
  "ability-planner",
  "ability-support",
- "ability-workflow",
  "accessor_probe",
  "assembly",
  "async-trait",
@@ -6683,6 +6673,7 @@ dependencies = [
  "frame-core",
  "health",
  "health_record",
+ "leaf-monitor",
  "modalprism-agent",
  "paid_gateway",
  "reqwest 0.12.28",
@@ -14018,13 +14009,10 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "strata-client",
- "strata-model",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "types",
  "url",
 ]
 

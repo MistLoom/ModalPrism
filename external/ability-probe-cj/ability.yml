@@ -1,0 +1,21 @@
+framework_version: "cangjie@1"
+id: probe
+open: false
+protocols: [fun]
+depends: []
+stateful: false
+methods:
+  - id: ping
+    description: external probe ping
+    input:
+      type: object
+  - id: slow
+    description: long-task probe
+    input:
+      type: object
+events:
+  - name: pong
+    dir: emit
+    description: pong
+    payload_schema:
+      type: object

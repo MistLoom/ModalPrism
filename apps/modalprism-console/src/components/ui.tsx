@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { IconAlert, IconCheck, IconClose } from "./icons";
 import { ApiError, runOperation } from "../lib/api";
@@ -206,7 +207,8 @@ export function Drawer({
   wide?: boolean;
 }) {
   const ref = useOverlay(onClose, true);
-  return (
+  // 挂到 body：顶栏/卡片带 backdrop-filter 或 transform 时，fixed 浮层会被困在祖先盒子里。
+  return createPortal(
     <>
       <div className="scrim" onClick={onClose} aria-hidden="true" />
       <aside ref={ref} className={`drawer${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : "详情"}>
@@ -222,7 +224,8 @@ export function Drawer({
         <div className="drawer-body">{children}</div>
         {footer ? <footer className="drawer-foot">{footer}</footer> : null}
       </aside>
-    </>
+    </>,
+    document.body,
   );
 }
 
@@ -242,7 +245,7 @@ export function Modal({
   wide?: boolean;
 }) {
   const ref = useOverlay(onClose, true);
-  return (
+  return createPortal(
     <>
       <div className="scrim" onClick={onClose} aria-hidden="true" />
       <div ref={ref} className={`modal${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : "对话框"}>
@@ -258,8 +261,145 @@ export function Modal({
         <div className="modal-body">{children}</div>
         {footer ? <footer className="modal-foot">{footer}</footer> : null}
       </div>
-    </>
+    </>,
+    document.body,
   );
+}
+
+/// 常见字段名的中文标注：详情类页面用结构化字段而非原始 JSON 暴露技术键。
+const FIELD_LABELS: Record<string, string> = {
+  id: "标识",
+  ref: "引用",
+  rid: "内容",
+  kind: "类型",
+  name: "名称",
+  title: "标题",
+  text: "文本",
+  body: "正文",
+  summary: "摘要",
+  description: "说明",
+  url: "地址",
+  uri: "地址",
+  channel: "频道",
+  query: "查询",
+  cursor: "游标",
+  mode: "模式",
+  status: "状态",
+  state: "状态",
+  error: "错误",
+  reason: "原因",
+  message: "消息",
+  type: "类型",
+  variant: "变体",
+  version: "版本",
+  tags: "标签",
+  labels: "标签",
+  sourceId: "来源",
+  sourceSlug: "来源标识",
+  sourceName: "来源名称",
+  taskId: "任务",
+  planId: "计划",
+  runId: "运行",
+  contentId: "内容",
+  operationId: "操作",
+  requestId: "请求",
+  attemptId: "尝试",
+  deliveryId: "投递",
+  targetId: "目标",
+  targetKind: "目标类型",
+  latencyMs: "耗时（毫秒）",
+  createdAt: "创建时间",
+  updatedAt: "更新时间",
+  publishedAt: "发布时间",
+  retryAt: "重试时间",
+  lastOkAt: "最近成功",
+  count: "数量",
+  total: "总数",
+  items: "条目",
+  nodes: "节点",
+  edges: "边",
+  from: "起点",
+  to: "终点",
+  relation: "关系",
+  direction: "方向",
+  attrs: "属性",
+  output: "输出",
+  locator: "定位",
+  params: "参数",
+  headers: "请求头",
+};
+
+function fieldLabel(key: string): string {
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  // 兜底：驼峰拆成可读词组，避免原样抛出技术键。
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, (char) => char.toUpperCase());
+}
+
+const URL_PATTERN = /^https?:\/\//i;
+
+/// 结构化值：对象按字段名值、数组按列表、长文本按段落、链接可点；不向用户抛原始 JSON。
+export function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  if (value === null || value === undefined) return <span className="muted">—</span>;
+  if (typeof value === "boolean") return <span>{value ? "是" : "否"}</span>;
+  if (typeof value === "number") return <span className="mono">{value.toLocaleString("zh-CN")}</span>;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return <span className="muted">—</span>;
+    if (URL_PATTERN.test(text)) {
+      return <a className="value-link" href={text} target="_blank" rel="noreferrer">{text}</a>;
+    }
+    if (text.length > 120 || text.includes("\n")) {
+      return (
+        <div className="value-text">
+          {text.split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+        </div>
+      );
+    }
+    return <span>{text}</span>;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="muted">无</span>;
+    if (value.every((item) => item === null || typeof item !== "object")) {
+      return (
+        <span className="row wrap" style={{ gap: 6 }}>
+          {value.map((item, index) => <span className="tag" key={index}>{inlineValue(item)}</span>)}
+        </span>
+      );
+    }
+    return (
+      <div className="value-list">
+        {value.map((item, index) => (
+          <div className="value-item" key={index}>
+            <StructuredValue value={item} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  const entries = Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined);
+  if (entries.length === 0) return <span className="muted">无</span>;
+  return (
+    <dl className={`kv${depth > 0 ? " is-nested" : ""}`}>
+      {entries.map(([key, item]) => (
+        <div key={key} style={{ display: "contents" }}>
+          <dt>{fieldLabel(key)}</dt>
+          <dd><StructuredValue value={item} depth={depth + 1} /></dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** 单行结构化摘要：用于差异对比、表格内联展示等不能展开的场景。 */
+export function inlineValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value || "（空）";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.length ? value.map(inlineValue).join("、") : "无";
+  const entries = Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined);
+  if (entries.length === 0) return "无";
+  return entries.map(([key, item]) => `${fieldLabel(key)} ${inlineValue(item)}`).join("；");
 }
 
 export function Pager({ next, onNext, onReset }: { next: string | null; onNext: () => void; onReset: () => void }) {

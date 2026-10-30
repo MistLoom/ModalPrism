@@ -41,23 +41,64 @@ async fn status(State(state): State<Shared>) -> Result<Response, ApiError> {
             .unwrap_or("ModalPrism"),
         "generation": state.services.config_generation(),
         "startedAt": state.started_at,
+        // 宿主注入能力就绪度：rawprism 解析钩子未接入时，前端据此前置降级而非点击报错。
+        "capabilities": {
+            "parse": state.parse_hook.get().is_some(),
+        },
     })))
 }
 
-async fn overview(State(state): State<Shared>) -> Result<Response, ApiError> {
-    let sources = crate::catalog::source_rows(&state).await?;
-    let summary = state
-        .services
-        .strata()
-        .summary()
-        .await
-        .map_err(ApiError::from)?;
-    let stats = state.services.queue_stats().await.map_err(ApiError::from)?;
+async fn overview(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+) -> Result<Response, ApiError> {
+    // 项目隔离：计数与列表都只算当前项目可见的信源及其内容。
+    let active = project.id().to_string();
+    let mut sources = crate::catalog::source_rows(&state).await?;
+    sources.retain(|source| crate::catalog::source_visible(source, &active));
     let queues = state
         .services
         .queue_states()
         .await
         .map_err(ApiError::from)?;
+    // 信源列表按“可见”口径（含共享），内容/任务等派生资源按“自有”口径：
+    // 共享只放开信源声明，不把其他项目的采集产物与运行数据算进本项目。
+    let mut owned: Vec<String> = crate::catalog::owned_source_ids(&state, &active)
+        .await?
+        .into_iter()
+        .collect();
+    owned.sort();
+    let (content_total, content_tombstoned, content_kinds) = if owned.is_empty() {
+        (0usize, 0usize, Vec::new())
+    } else {
+        let allowed = owned.as_slice();
+        let total = crate::content::item_count(&state, None, None, None, Some(allowed)).await?;
+        let tombstoned =
+            crate::content::item_count(&state, None, None, Some("tombstoned"), Some(allowed)).await?;
+        let kinds = crate::content::variant_counts(&state, Some(allowed)).await?;
+        (total, tombstoned, kinds)
+    };
+    // 任务计数也按自有信源封口：全局 queue_stats 会把其他项目的排队/失败算进来。
+    let queue_rows = state
+        .services
+        .queue_list(&strata_client::TaskFilter::default(), None, 1_000)
+        .await
+        .map_err(ApiError::from)?
+        .rows;
+    let mut tasks_queued = 0usize;
+    let mut tasks_running = 0usize;
+    let mut tasks_failed = 0usize;
+    for row in &queue_rows {
+        if !owned.iter().any(|id| id == &row.source_id) {
+            continue;
+        }
+        match row.status.as_str() {
+            "queued" => tasks_queued += 1,
+            "leased" => tasks_running += 1,
+            "failed" => tasks_failed += 1,
+            _ => {}
+        }
+    }
     let mut healthy = 0usize;
     let mut attention = Vec::new();
     for source in &sources {
@@ -79,30 +120,18 @@ async fn overview(State(state): State<Shared>) -> Result<Response, ApiError> {
             }));
         }
     }
-    for row in &stats.by_status {
-        if row.0 == "failed" {
-            // 失败任务数由 stats 汇总，具体条目在任务页按状态过滤。
-        }
-    }
-    let publications = state.store.list_documents("publication").await?;
-    let failed_publications = publications
+    // 投递失败：这里只给计数，按记录归属封口；旧记录无 project 时回落默认项目。
+    let delivery_records = state.store.list_documents("delivery_record").await?;
+    let failed_deliveries = delivery_records
         .iter()
-        .filter(|doc| doc.body["status"] == "failed")
+        .filter(|doc| {
+            doc.body["status"] == "failed"
+                && doc.body["project"]
+                    .as_str()
+                    .unwrap_or(crate::projects::DEFAULT_PROJECT_ID)
+                    == active
+        })
         .count();
-    for doc in publications
-        .iter()
-        .filter(|doc| doc.body["status"] == "failed")
-        .take(5)
-    {
-        attention.push(json!({
-            "kind": "publication",
-            "id": doc.body["id"],
-            "title": doc.body["title"],
-            "status": "failed",
-            "message": "发布存在失败渠道",
-            "filter": {"status": "failed"},
-        }));
-    }
     let recent = state.store.list_operations(None, 8).await?;
     let overview = json!({
         "generatedAt": crate::now(),
@@ -117,12 +146,12 @@ async fn overview(State(state): State<Shared>) -> Result<Response, ApiError> {
             "enabledSources": sources.iter().filter(|source| source["enabled"].as_bool().unwrap_or(false)).count(),
             "healthySources": healthy,
             "attention": attention.len(),
-            "content": summary.total,
-            "tombstoned": summary.tombstoned,
-            "tasksQueued": stats.by_status.get("queued").copied().unwrap_or(0),
-            "tasksRunning": stats.by_status.get("leased").copied().unwrap_or(0),
-            "tasksFailed": stats.by_status.get("failed").copied().unwrap_or(0),
-            "failedPublications": failed_publications,
+            "content": content_total,
+            "tombstoned": content_tombstoned,
+            "tasksQueued": tasks_queued,
+            "tasksRunning": tasks_running,
+            "tasksFailed": tasks_failed,
+            "failedDeliveries": failed_deliveries,
         },
         "queues": queues.iter().map(|queue| json!({
             "id": queue.queue,
@@ -140,7 +169,7 @@ async fn overview(State(state): State<Shared>) -> Result<Response, ApiError> {
             "todayYield": source["todayYield"],
             "nextRunAt": source["nextRunAt"],
         })).collect::<Vec<_>>(),
-        "contentKinds": summary.variants,
+        "contentKinds": content_kinds,
         "links": {
             "sources": "/#/sources",
             "tasks": "/#/tasks",

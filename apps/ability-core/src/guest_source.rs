@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use ability_support::load_ability_package;
 use ability_support::{
-    Ability, AbilityManifest, AbilityProvider, Error, GUEST_CJPM_TOML, Result, RuntimeKind,
-    guest_entry_path,
+    Ability, AbilityManifest, AbilityProvider, Error, Result, RuntimeKind, guest_entry_path,
+    GUEST_CJPM_TOML,
 };
 use async_trait::async_trait;
 
@@ -113,23 +113,23 @@ impl GuestSourceProvider {
     fn cangjie_binary(&self) -> Result<PathBuf> {
         let name = cangjie_package_name(&self.root)
             .ok_or_else(|| Error::failed(format!("无法从 {GUEST_CJPM_TOML} 解析包名")))?;
-        let binary = cangjie_binary_path(&self.root, &name);
-        if binary.is_file() {
+        if let Some(binary) = find_cangjie_binary(&self.root, &name) {
             return Ok(binary);
         }
+        let primary = cangjie_binary_path(&self.root, &name);
         if self.prebuilt_only {
             return Err(Error::artifact_missing(format!(
                 "仅用预构建模式：缺少仓颉产物 {}（请先构建后再装载）",
-                binary.display()
+                primary.display()
             )));
         }
-        self.cangjie_build(&binary)?;
-        if binary.is_file() {
+        self.cangjie_build(&primary)?;
+        if let Some(binary) = find_cangjie_binary(&self.root, &name) {
             return Ok(binary);
         }
         Err(Error::artifact_missing(format!(
             "构建后仍未找到仓颉产物 {}（请检查 {GUEST_CJPM_TOML} output-type 与包名）",
-            binary.display()
+            primary.display()
         )))
     }
 
@@ -196,6 +196,18 @@ pub fn cangjie_binary_path(root: &Path, package_name: &str) -> PathBuf {
         p.set_extension("exe");
     }
     p
+}
+
+/// 在两种 cjpm 产物布局中定位可执行文件：
+/// 约定布局 `target/release/<包名>[.exe]` 优先，其次 cjpm 1.x 的 `target/release/bin/main[.exe]`。
+pub fn find_cangjie_binary(root: &Path, package_name: &str) -> Option<PathBuf> {
+    let mut candidates = vec![cangjie_binary_path(root, package_name)];
+    let mut main = root.join("target").join("release").join("bin").join("main");
+    if cfg!(windows) {
+        main.set_extension("exe");
+    }
+    candidates.push(main);
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 #[async_trait]

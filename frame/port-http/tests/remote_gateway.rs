@@ -23,11 +23,7 @@ impl Gateway for FakeGateway {
             "scope": scope,
             "mask": request.invoke_mask,
         }))
-        .with_locals(
-            request
-                .locals_scope
-                .unwrap_or_else(frame_core::LocalsScope::new),
-        ))
+        .with_locals(request.locals_scope.unwrap_or_else(frame_core::LocalsScope::new)))
     }
 
     fn catalog(&self) -> Vec<CatalogEntry> {
@@ -70,10 +66,7 @@ async fn remote_invoke_roundtrip() {
     // 目录经 REST 还原
     assert_eq!(remote.catalog().len(), 1);
     let entry = remote
-        .get_entry(
-            &InstanceId::new("demo").unwrap(),
-            &MethodId::new("echo.say").unwrap(),
-        )
+        .get_entry(&InstanceId::new("demo").unwrap(), &MethodId::new("echo.say").unwrap())
         .expect("条目应可查");
     assert_eq!(entry.description, "回声");
 

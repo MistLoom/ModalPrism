@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ArticleBody } from "../components/ArticleBody";
 import { IconRefresh, IconTrash } from "../components/icons";
-import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, Tabs, useUi } from "../components/ui";
+import { ManualDeliveryModal } from "../components/ManualDelivery";
+import { Pager } from "../components/Pager";
+import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, StructuredValue, Tabs, useUi } from "../components/ui";
 import {
   batchContent,
   contentLineage,
@@ -12,20 +15,30 @@ import {
   listContent,
   listContentVersions,
   listSnapshots,
+  listSources,
+  listSourceTypes,
   patchContent,
   replaySnapshot,
 } from "../lib/api";
+import { isHtmlBody } from "../lib/article";
 import { contentKindLabel, relative, stamp } from "../lib/format";
 import { ProjectScopeBadge } from "../lib/project";
 import { navigate } from "../lib/router";
-import type { ContentDetail, ContentItem, Snapshot } from "../lib/types";
+import type { ContentDetail, ContentItem, Snapshot, SourceTypeRecord } from "../lib/types";
+
+// 类型→来源两级筛选：按 sourceId 派生信源类型（不落库）。
+function sourceKey(id: string): string {
+  return id.replace(/^source\//, "");
+}
 
 export function ContentPage() {
   const { notify, run } = useUi();
   const [tab, setTab] = useState<"items" | "snapshots">("items");
   const [items, setItems] = useState<ContentItem[] | null>(null);
-  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [next, setNext] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<Snapshot[] | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [source, setSource] = useState("");
   const [error, setError] = useState<unknown>(null);
@@ -35,25 +48,32 @@ export function ContentPage() {
   const [replay, setReplay] = useState(false);
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeRecords, setTypeRecords] = useState<SourceTypeRecord[]>([]);
+  const [deliver, setDeliver] = useState<ContentItem[] | null>(null);
+  const [sourceTypes, setSourceTypes] = useState<Map<string, string>>(new Map());
+  const [sourceNames, setSourceNames] = useState<Map<string, string>>(new Map());
 
   const load = useCallback(
-    async (cursor?: string) => {
+    async (target = page) => {
       setLoading(true);
+      const offset = (Math.max(1, target) - 1) * pageSize;
       try {
         if (tab === "snapshots") {
-          const page = await listSnapshots({ limit: 100, cursor });
-          setSnapshots((current) => (cursor ? [...current, ...page.items] : page.items));
-          setNext(page.nextCursor);
+          const result = await listSnapshots({ limit: pageSize, offset });
+          setSnapshots(result.items);
+          setTotal(result.total ?? result.items.length + offset);
         } else {
-          const page = await listContent({
-            limit: 100,
-            cursor,
+          const result = await listContent({
+            limit: pageSize,
+            offset,
             query: search.trim() || undefined,
             sourceId: source || undefined,
+            sourceType: typeFilter === "all" ? undefined : typeFilter,
             status: "active",
           });
-          setItems((current) => (cursor ? [...(current ?? []), ...page.items] : page.items));
-          setNext(page.nextCursor);
+          setItems(result.items);
+          setTotal(result.total ?? result.items.length + offset);
         }
         setError(null);
       } catch (problem) {
@@ -62,7 +82,7 @@ export function ContentPage() {
         setLoading(false);
       }
     },
-    [tab, search, source],
+    [tab, search, source, typeFilter, page, pageSize],
   );
 
   useEffect(() => {
@@ -70,10 +90,43 @@ export function ContentPage() {
     void load();
   }, [load]);
 
+  // 深链：从采集记录或工作台速览跳过来时，直接展开这条内容的详情。
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    const id = params.get("id");
+    if (id) setDetail(id);
+  }, []);
+
+  // 类型→来源两级筛选的元数据：一次拉取信源与类型注册表，按 sourceId 派生类型。
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [sourcePage, typePage] = await Promise.all([listSources({ limit: 200 }), listSourceTypes()]);
+        setSourceTypes(new Map(sourcePage.items.map((item) => [item.id, item.sourceType])));
+        setSourceNames(new Map(sourcePage.items.map((item) => [item.id, item.name])));
+        setTypeRecords(typePage.items);
+      } catch {
+        // 类型筛选是增强能力：拉取失败时退化为仅按来源筛选，不阻断内容主流程。
+      }
+    })();
+  }, []);
+
+  const typeOfSource = useCallback((id: string) => sourceTypes.get(sourceKey(id)) ?? "", [sourceTypes]);
+  const typeLabelOf = useCallback(
+    (typeId: string) => typeRecords.find((item) => item.id === typeId)?.label ?? typeId,
+    [typeRecords],
+  );
+
   const sourceOptions = useMemo(() => {
     const ids = new Set((items ?? []).map((item) => item.sourceId));
     return [...ids].sort();
   }, [items]);
+
+  // 来源下拉按所选类型收窄；类型为「全部」时展示全部来源。
+  const filteredSources = useMemo(
+    () => sourceOptions.filter((id) => typeFilter === "all" || typeOfSource(id) === typeFilter),
+    [sourceOptions, typeFilter, typeOfSource],
+  );
 
   async function act(label: string, ids: string[], action: string, tags?: string[]) {
     if (!ids.length) return;
@@ -99,9 +152,9 @@ export function ContentPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">content · 内容</div>
-          <h1 className="page-title">内容库与快照</h1>
+          <h1 className="page-title">内容库</h1>
           <p className="page-lede">
-            删除直接移除资源、派生数据、关系与无引用对象，不可恢复。版本、血缘与关系都在详情里，快照回放只写新版本，不改历史。
+            删除会一并移除派生数据与关联对象，且不可恢复。版本与关联信息都在详情里；按快照重建只追加新版本，不改动历史。
           </p>
         </div>
         <div className="page-actions">
@@ -112,7 +165,7 @@ export function ContentPage() {
           <button type="button" className="btn btn-danger" onClick={() => setPurgeOpen(true)}>
             <IconTrash size={14} /> 清空内容
           </button>
-          <button type="button" className="btn" onClick={() => setReplay(true)}>快照回放</button>
+          <button type="button" className="btn" onClick={() => setReplay(true)}>按快照重建</button>
         </div>
       </header>
 
@@ -120,9 +173,12 @@ export function ContentPage() {
 
       <Tabs
         value={tab}
-        onChange={(value) => setTab(value)}
+        onChange={(value) => {
+          setTab(value as "items" | "snapshots");
+          setPage(1);
+        }}
         items={[
-          { id: "items", label: "内容库", count: items?.length ?? 0 },
+          { id: "items", label: "内容库", count: total },
           { id: "snapshots", label: "快照" },
         ]}
       />
@@ -131,24 +187,61 @@ export function ContentPage() {
         <div className="toolbar-band">
           <label className="search">
             <span className="muted" aria-hidden="true">⌕</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="按标题或正文检索" aria-label="检索内容" />
+            <input
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
+              placeholder="按标题或正文检索"
+              aria-label="检索内容"
+            />
           </label>
-          <select className="select" value={source} onChange={(event) => setSource(event.target.value)} aria-label="来源筛选">
+          <select
+            className="select"
+            value={typeFilter}
+            onChange={(event) => {
+              const next = event.target.value;
+              setTypeFilter(next);
+              setPage(1);
+              if (source && next !== "all" && typeOfSource(source) !== next) setSource("");
+            }}
+            aria-label="信源类型筛选"
+          >
+            <option value="all">全部信源类型</option>
+            {typeRecords.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+          <select
+            className="select"
+            value={source}
+            onChange={(event) => {
+              setSource(event.target.value);
+              setPage(1);
+            }}
+            aria-label="来源筛选"
+          >
             <option value="">全部来源</option>
-            {sourceOptions.map((id) => (
-              <option key={id} value={id}>{id}</option>
+            {filteredSources.map((id) => (
+              <option key={id} value={id}>
+                {typeOfSource(id) ? `[${typeLabelOf(typeOfSource(id))}] ` : ""}{sourceNames.get(sourceKey(id)) ?? id}
+              </option>
             ))}
           </select>
           <span className="fill" />
-          <span className="small muted">{items?.length ?? 0} 条</span>
+          <span className="small muted">{total} 条</span>
         </div>
       ) : (
-        <div className="alert info">快照是已发布、可回放的可见状态。回放创建异步 Operation，不会改写历史快照。</div>
+        <div className="alert info">快照是库级版本（跨项目共享的只读记录）；重建是后台任务，只重放当前项目自有信源的内容，不改动历史快照。</div>
       )}
 
       {selection.length > 0 && tab !== "snapshots" ? (
         <div className="batchbar">
           <span>已选 {selection.length} 条</span>
+          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setDeliver((items ?? []).filter((item) => selection.includes(item.id)))}>
+            投递
+          </button>
           <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void act("批量打标签", selection, "addTags", ["待复核"])}>
             标记待复核
           </button>
@@ -164,13 +257,13 @@ export function ContentPage() {
 
       {tab === "snapshots" ? (
         <Card title="已发布快照" sub="按快照号倒序" flush>
-          {loading && snapshots.length === 0 ? (
+          {loading && !snapshots ? (
             <div className="card-body"><Loading lines={5} /></div>
-          ) : snapshots.length === 0 ? (
+          ) : (snapshots ?? []).length === 0 ? (
             <Empty title="还没有快照" text="第一次提交后出现。" />
           ) : (
             <div className="list">
-              {snapshots.map((snapshot) => (
+              {(snapshots ?? []).map((snapshot) => (
                 <div className="list-row" key={snapshot.id}>
                   <span className="list-main">
                     <span className="list-title">快照 #{snapshot.snapshot}</span>
@@ -179,17 +272,21 @@ export function ContentPage() {
                       <span>{snapshot.commitCount} 个提交</span>
                     </span>
                   </span>
-                  <button type="button" className="btn btn-sm" onClick={() => setReplay(true)}>回放</button>
+                  <button type="button" className="btn btn-sm" onClick={() => setReplay(true)}>重建</button>
                 </div>
               ))}
             </div>
           )}
-          {next ? (
-            <div className="pager">
-              <span>还有更多快照</span>
-              <button type="button" className="btn btn-sm" onClick={() => void load(next)} disabled={loading}>加载更多</button>
-            </div>
-          ) : null}
+          <Pager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPage={setPage}
+            onPageSize={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+          />
         </Card>
       ) : (
         <Card title="内容库" sub="版本只追加；删除会物理移除" flush>
@@ -222,11 +319,15 @@ export function ContentPage() {
                     <span className="content-meta">
                       <span className="tag">{contentKindLabel(item.kind)}</span>
                       <span>{item.sourceName}</span>
-                      <span>{relative(item.publishedAt || item.createdAt)}</span>
+                      <span title={stamp(item.publishedAt ?? "")}>{item.publishedAt ? `发布 ${relative(item.publishedAt)}` : "发布 未披露"}</span>
+                      <span>收录 {relative(item.createdAt)}</span>
                       {item.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
                     </span>
                   </button>
                   <div className="content-side row">
+                    <button type="button" className="btn btn-sm" onClick={() => setDeliver([item])}>
+                      投递
+                    </button>
                     <button
                       type="button"
                       className="btn btn-sm btn-danger"
@@ -256,17 +357,31 @@ export function ContentPage() {
               ))}
             </div>
           )}
-          {next ? (
-            <div className="pager">
-              <span>还有更多内容</span>
-              <button type="button" className="btn btn-sm" onClick={() => void load(next)} disabled={loading}>加载更多</button>
-            </div>
-          ) : null}
+          <Pager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPage={setPage}
+            onPageSize={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+          />
         </Card>
       )}
 
       {detail ? <ContentDrawer id={detail} onClose={() => setDetail(null)} onChanged={() => void load()} /> : null}
-      {replay ? <ReplayModal snapshots={snapshots} selected={selection} onClose={() => setReplay(false)} /> : null}
+      {deliver ? (
+        <ManualDeliveryModal
+          preset={{ items: deliver }}
+          onClose={() => setDeliver(null)}
+          onDone={() => {
+            setSelection([]);
+            void load();
+          }}
+        />
+      ) : null}
+      {replay ? <ReplayModal snapshots={snapshots ?? []} selected={selection} onClose={() => setReplay(false)} /> : null}
       {purgeOpen ? (
         <PurgeModal
           source={source}
@@ -362,7 +477,8 @@ function ContentDrawer({ id, onClose, onChanged }: { id: string; onClose: () => 
               <StatusBadge status={detail.status} />
               <span className="mono">{detail.id}</span>
               <span>{detail.sourceName}</span>
-              <span>{stamp(detail.publishedAt || detail.createdAt)}</span>
+              <span>{detail.publishedAt ? `发布 ${stamp(detail.publishedAt)}` : "原文未提供发布时间"}</span>
+              <span>收录 {stamp(detail.createdAt)}</span>
             </div>
           </div>
           <div className="grid cols-2">
@@ -379,19 +495,29 @@ function ContentDrawer({ id, onClose, onChanged }: { id: string; onClose: () => 
             items={[
               { id: "body", label: "正文" },
               { id: "versions", label: "版本", count: versions.length },
-              { id: "lineage", label: "血缘" },
+              { id: "lineage", label: "关联" },
               { id: "relations", label: "关系", count: relations.length },
             ]}
           />
           {tab === "body" ? (
             detail.body?.text ? (
-              <div className="body-text">
-                {detail.body.text.split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-              </div>
+              isHtmlBody(detail.body.kind, detail.body.mediaType, detail.body.text) ? (
+                // 采集正文多为原始网页 HTML：按白名单重建后渲染，避免把标签源码当文本展示。
+                <ArticleBody
+                  html={detail.body.text}
+                  base={contentUrl(detail)}
+                  bodyKind={detail.body.kind}
+                  mediaType={detail.body.mediaType}
+                />
+              ) : (
+                <div className="body-text">
+                  {detail.body.text.split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+                </div>
+              )
             ) : detail.body?.value ? (
-              <div className="code">{JSON.stringify(detail.body.value, null, 2)}</div>
+              <StructuredValue value={detail.body.value} />
             ) : detail.struct ? (
-              <div className="code">{JSON.stringify(detail.struct, null, 2)}</div>
+              <StructuredValue value={detail.struct} />
             ) : (
               <Empty title="没有可读正文" text="这条内容可能只有结构化字段或附件。" />
             )
@@ -412,9 +538,33 @@ function ContentDrawer({ id, onClose, onChanged }: { id: string; onClose: () => 
             </div>
           ) : null}
           {tab === "lineage" ? (
-            <div className="stack">
+            <div className="stack" style={{ gap: 12 }}>
               <div className="small muted">节点 {lineage?.nodes.length ?? 0} · 边 {lineage?.edges.length ?? 0}</div>
-              <div className="code">{JSON.stringify(lineage ?? {}, null, 2)}</div>
+              {lineage && lineage.nodes.length ? (
+                <div className="stack" style={{ gap: 6 }}>
+                  <span className="small muted">节点</span>
+                  <div className="value-list">
+                    {lineage.nodes.map((node, index) => (
+                      <div className="value-item" key={`node-${index}`}>
+                        <StructuredValue value={node} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {lineage && lineage.edges.length ? (
+                <div className="stack" style={{ gap: 6 }}>
+                  <span className="small muted">边</span>
+                  <div className="value-list">
+                    {lineage.edges.map((edge, index) => (
+                      <div className="value-item" key={`edge-${index}`}>
+                        <StructuredValue value={edge} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {lineage && !lineage.nodes.length && !lineage.edges.length ? <Empty title="没有关联记录" /> : null}
             </div>
           ) : null}
           {tab === "relations" ? (
@@ -438,6 +588,15 @@ function ContentDrawer({ id, onClose, onChanged }: { id: string; onClose: () => 
   );
 }
 
+/** 原文地址：优先取结构面的 locator.url，其次顶层 url；用于相对链接补齐与原文入口。 */
+function contentUrl(detail: ContentDetail): string {
+  const struct = (detail.struct ?? {}) as Record<string, unknown>;
+  const locator = struct.locator;
+  const located = locator && typeof locator === "object" ? (locator as Record<string, unknown>).url : undefined;
+  const value = struct.url ?? located;
+  return typeof value === "string" ? value : "";
+}
+
 function ReplayModal({ snapshots, selected, onClose }: { snapshots: Snapshot[]; selected: string[]; onClose: () => void }) {
   const { notify, run } = useUi();
   const [snapshot, setSnapshot] = useState(snapshots[0]?.id ?? "");
@@ -448,10 +607,10 @@ function ReplayModal({ snapshots, selected, onClose }: { snapshots: Snapshot[]; 
     setBusy(true);
     try {
       const operation = await replaySnapshot({ snapshotId: snapshot, scope, contentIds: scope === "selected" ? selected : undefined });
-      await run(operation, "快照回放");
+      await run(operation, "按快照重建");
       onClose();
     } catch (problem) {
-      notify("bad", "快照回放失败", problem instanceof Error ? problem.message : undefined);
+      notify("bad", "按快照重建失败", problem instanceof Error ? problem.message : undefined);
     } finally {
       setBusy(false);
     }
@@ -459,14 +618,14 @@ function ReplayModal({ snapshots, selected, onClose }: { snapshots: Snapshot[]; 
 
   return (
     <Modal
-      title="快照回放"
-      sub="把选定快照下的结构化字段重放为当前版本；历史快照保持只读"
+      title="按快照重建"
+      sub="用选定快照的结构化字段生成当前版本；历史快照保持只读"
       onClose={onClose}
       footer={
         <>
           <button type="button" className="btn" onClick={onClose}>取消</button>
           <button type="button" className="btn btn-primary" onClick={() => void start()} disabled={busy || !snapshot || (scope === "selected" && selected.length === 0)}>
-            {busy ? "回放中…" : "开始回放"}
+            {busy ? "重建中…" : "开始重建"}
           </button>
         </>
       }
@@ -486,7 +645,7 @@ function ReplayModal({ snapshots, selected, onClose }: { snapshots: Snapshot[]; 
             <option value="selected">仅已选内容（{selected.length}）</option>
           </select>
         </Field>
-        <div className="alert warn">回放是异步操作；失败项保留原版本，成功项会追加新版本并留下血缘。</div>
+        <div className="alert warn">重建是后台任务；失败的条目保持原样，成功的会追加新版本并记录关联。</div>
       </div>
     </Modal>
   );
@@ -559,7 +718,7 @@ function PurgeModal({ source, onClose, onDone }: { source: string; onClose: () =
         <Field label="范围">
           <select className="select" value={scope} onChange={(event) => setScope(event.target.value as "source" | "all")}>
             <option value="source" disabled={!source}>当前来源（{source || "未筛选"}）</option>
-            <option value="all">全部内容（含历史墓碑与快照关联数据）</option>
+            <option value="all">全部内容（含已删除记录）</option>
           </select>
         </Field>
         <div className="alert warn">

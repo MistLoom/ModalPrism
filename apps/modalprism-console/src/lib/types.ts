@@ -39,6 +39,8 @@ export interface FieldError {
 export interface ListResponse<T> {
   items: T[];
   nextCursor: string | null;
+  /** 筛选口径下的总条数（列表 API 透出，供页码分页）。 */
+  total?: number;
 }
 
 export interface SystemStatus {
@@ -46,6 +48,7 @@ export interface SystemStatus {
   version: string;
   generation: number;
   startedAt: string;
+  capabilities?: { parse?: boolean; workflow?: boolean };
 }
 
 export interface Queue {
@@ -56,6 +59,8 @@ export interface Queue {
   cancelled?: number;
   capacity: number;
   paused: boolean;
+  stalled?: boolean;
+  reason?: string;
 }
 
 export interface Overview {
@@ -72,7 +77,7 @@ export interface Overview {
     tasksQueued: number;
     tasksRunning: number;
     tasksFailed: number;
-    failedPublications: number;
+    failedDeliveries: number;
   };
   queues: Queue[];
   attention: { kind: string; id: string; title: string; status: string; message?: string | null; filter?: Record<string, string> }[];
@@ -93,12 +98,22 @@ export interface Source {
   name: string;
   description?: string | null;
   enabled: boolean;
+  /** 信源类型（feed/search/web/api/push/custom），后端按声明或推导输出。 */
+  sourceType: string;
+  /** 归属项目；由后端按创建时的活跃项目写入。 */
+  project?: string;
+  /** 共享后其他项目只读可见。 */
+  shared?: boolean;
   accessMethodId: string;
   adapterIds: string[];
   endpoint: string;
+  /** 接收类信源的频道标识（locator.channel）；其余类型为空。 */
+  channel?: string;
   schedule: Schedule;
   health?: string | null;
   healthReason?: string | null;
+  // 命中限额/停止策略时的原因（quota-paused / quota-exhausted / budget / daily-cap）。
+  stopReason?: string | null;
   nextRunAt?: string | null;
   lastRunAt?: string | null;
   todayYield?: number | null;
@@ -113,9 +128,36 @@ export interface SourceInput {
   accessMethodId: string;
   adapterIds: string[];
   enabled: boolean;
+  sourceType?: string;
   endpoint: string;
+  /** 接收类必填；与地址互斥，后端按它写 locator.channel。 */
+  channel?: string;
   schedule: Schedule;
   admission?: Record<string, unknown>;
+  /** 创建时是否立即共享给其他项目。 */
+  shared?: boolean;
+}
+
+/** 写盘载荷：节律已迁到计划，信源声明不再提交 schedule。 */
+export type SourcePayload = Omit<SourceInput, "schedule">;
+
+/** 信源类型注册表条目（GET /catalog/sourceTypes，与后端校验同源）。 */
+export interface SourceTypeRecord {
+  id: string;
+  label: string;
+  locatorShape: string;
+  allowedAccessors: string[] | null;
+  /** 简易表单可落盘的访问器子集；null 表示不限（自定义类型）。前端只渲染不判断。 */
+  formAccessors: string[] | null;
+  allowedAdapters: string[] | null;
+  forbidPaid: boolean;
+  stagnationCycles: number | null;
+  planDefaults: {
+    trigger?: Record<string, unknown> | null;
+    quota?: Record<string, unknown>;
+    stopPolicy?: Record<string, unknown>;
+  };
+  healthExpectation: Record<string, unknown>;
 }
 
 export interface NamedResource {
@@ -130,15 +172,41 @@ export interface NamedResource {
 
 export interface Plan {
   id: string;
-  sourceId: string;
   name: string;
+  description?: string | null;
+  targets?: string[];
+  trigger?: {
+    kind?: string;
+    interval?: string;
+    floor?: string;
+    ceiling?: string;
+    adaptive?: boolean;
+    expectedPeriod?: string;
+    fireAt?: string;
+  } | null;
+  queue?: string | null;
+  priority?: number | null;
+  quota?: {
+    perRunItems?: number;
+    totalItems?: number;
+    maxAge?: string;
+    dedupWindow?: string;
+  } | null;
+  stopPolicy?: Record<string, unknown> | null;
   enabled: boolean;
   status: string;
-  schedule: Schedule;
+  // 兼容旧信源页展示：节律已迁到 trigger，plan 实体不再返回 schedule。
+  schedule?: Schedule;
+  sourceId?: string;
   health?: string | null;
   nextRunAt?: string | null;
   lastRunAt?: string | null;
   todayYield?: number | null;
+  // 计划维度的投递：由内容投递域的规则承载，计划只提交目标与开关。
+  deliveryRuleId?: string | null;
+  deliveryTargets?: DeliveryTarget[] | null;
+  deliveryEnabled?: boolean | null;
+  deliveryLastRunAt?: string | null;
   etag: string;
 }
 
@@ -148,6 +216,7 @@ export interface Task {
   status: string;
   title?: string;
   sourceId?: string | null;
+  planId?: string | null;
   queue?: string;
   reason?: string;
   attempt?: number;
@@ -157,7 +226,6 @@ export interface Task {
   error?: string | null;
   locator?: unknown;
   runId?: string;
-  publicationId?: string;
 }
 
 export interface ContentItem {
@@ -189,6 +257,22 @@ export interface ContentDetail extends ContentItem {
   facets: { kind: string; variant?: string | null; version: number; versions: number; mediaType?: string | null; size?: number | null }[];
 }
 
+export interface CollectionRun {
+  id: string;
+  taskId: string;
+  sourceId: string;
+  /** 分派它的采集计划；手动采集为空。 */
+  planId?: string | null;
+  mode: "manual" | "scheduled" | string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | string;
+  queue: string;
+  attempt: number;
+  locator?: unknown;
+  createdAt: string;
+  updatedAt: string;
+  error?: string | null;
+}
+
 export interface Snapshot {
   id: string;
   snapshot: number;
@@ -196,126 +280,14 @@ export interface Snapshot {
   commitCount: number;
 }
 
-export interface InputSet {
+export interface DeliveryChannel {
   id: string;
   name: string;
-  inputs: { kind: string; title?: string; text?: string | null; contentId?: string; [key: string]: unknown }[];
-  createdAt: string;
-}
-
-export interface Workflow {
-  id: string;
-  name: string;
-  description: string;
-  latestVersionId: string | null;
-  versionCount: number;
-  etag: string;
-  createdAt: string;
-}
-
-export interface WorkflowStep {
-  id: string;
-  kind: "model" | "template" | "externalCall" | "validation";
-  modelId?: string;
-  promptVersionId?: string;
-  skillVersionIds?: string[];
-  dependsOn?: string[];
-  parameters?: Record<string, unknown>;
-}
-
-export interface WorkflowVersion {
-  id: string;
-  workflowId: string;
-  version: number;
-  steps: WorkflowStep[];
-  createdAt: string;
-}
-
-export interface ProductionRun {
-  id: string;
-  inputSetId: string;
-  workflowVersionId: string;
-  workflowId: string;
-  mode: string;
-  status: string;
-  attemptIds: string[];
-  candidateIds: string[];
-  taskId: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Attempt {
-  id: string;
-  runId: string;
-  number: number;
-  status: string;
-  steps: { id: string; kind: string; status: string; ms: number; output?: string; error?: string }[];
-  retryOfAttemptId?: string | null;
-  createdAt: string;
-  finishedAt?: string | null;
-  error?: string | null;
-}
-
-export interface Candidate {
-  id: string;
-  runId: string;
-  attemptId: string;
-  status: string;
-  title: string;
-  body: string;
-  outputs: Record<string, string>;
-  validation: { issues: { code: string; message: string }[] };
-  selectedOutputIds: string[];
-  etag?: string;
-  createdAt: string;
-}
-
-export interface Draft {
-  id: string;
-  candidateIds: string[];
-  title: string;
-  body: string;
-  latestVersion: number;
-  versions: { version: number; title: string; body: string; createdAt: string }[];
-  etag?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Channel {
-  id: string;
-  name: string;
-  kind: string;
+  kind: "webhook" | "feishu" | string;
   enabled: boolean;
   settings: Record<string, unknown>;
+  status?: string;
   etag?: string;
-  createdAt: string;
-}
-
-export interface Publication {
-  id: string;
-  draftId: string;
-  title: string;
-  body: string;
-  channelIds: string[];
-  channels: { id: string; name: string; kind: string }[];
-  status: string;
-  deliveryIds: string[];
-  scheduledAt?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Delivery {
-  id: string;
-  publicationId: string;
-  channelId: string;
-  channelName?: string;
-  status: string;
-  attempts: { at: string; status: string; error?: string }[];
-  lastError?: string | null;
-  retryOf?: string | null;
   createdAt: string;
 }
 
@@ -326,12 +298,37 @@ export interface ModelResource {
   endpoint: string;
   secretRef: string | null;
   secretPresent?: boolean;
+  secretInline?: boolean;
   enabled: boolean;
   model?: string;
   timeoutMs?: number;
   maxTokens?: number;
-  temperature?: number;
+  /** 采样温度；null 表示按厂商官方缺省、不向请求注入 temperature。 */
+  temperature?: number | null;
+  /** 上下文窗口（tokens），登记时按模型预设带出。 */
+  contextWindow?: number;
+  /** 是否支持思考模式（推理）输出。 */
+  reasoning?: boolean;
+  /** 支持的输入模态：text / image / audio / video。 */
+  modalities?: string[];
   createdAt: string;
+}
+
+export interface ModelTestResult {
+  ok: boolean;
+  mode: string;
+  latencyMs: number;
+  sample?: string;
+  version?: string;
+  note?: string;
+}
+
+export interface CliCandidate {
+  id: string;
+  label: string;
+  command: string;
+  found: boolean;
+  version: string;
 }
 
 export interface PromptResource {
@@ -401,8 +398,6 @@ export interface LogRecord {
   contentId?: string | null;
   runId?: string | null;
   attemptId?: string | null;
-  workflowVersionId?: string | null;
-  publicationId?: string | null;
   deliveryId?: string | null;
   configGeneration?: number | null;
   data?: unknown;
@@ -444,30 +439,27 @@ export interface ProjectResource {
   kind: string;
   id: string;
   boundAt?: string;
-  legacy?: boolean;
+  /** 信源资源：是否为其他项目共享而来。 */
+  shared?: boolean;
 }
 
 export interface WizardStep {
   id: string;
-  title?: string;
-  status: "pending" | "done" | "skipped";
-  updatedAt?: string;
+  title: string;
+  description?: string;
+  status: "pending" | "done" | "optional";
+  met: boolean;
+  optional: boolean;
+  /** 未满足时去哪儿做。 */
+  hint?: string;
 }
 
 export interface WizardDoc {
   projectId: string;
-  templateId: string;
-  status?: "active" | "completed" | "dismissed";
+  /** 只读起步清单：无待办即 ready。 */
+  status?: "active" | "ready";
+  pending: number;
   steps: WizardStep[];
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface WizardCheck {
-  wizard: WizardDoc;
-  stepId: string;
-  met: boolean;
-  detail: { reason?: string; count?: number; where?: string };
 }
 
 export interface SearchEngine {
@@ -486,9 +478,15 @@ export interface SearchHit {
 
 export interface SearchResult {
   engine: string;
+  /** 请求的引擎与实际应答的引擎不同时（DDG 回退 Lite）给出请求值。 */
+  requestedEngine?: string;
   query: string;
   count: number;
   results: SearchHit[];
+  /** 免密钥引擎均无结果时为真，不再静默返回空。 */
+  degraded?: boolean;
+  note?: string;
+  projectId?: string;
 }
 
 export interface FetchResult {
@@ -509,4 +507,239 @@ export interface PreconditionItem {
 export interface PreconditionReport {
   met: boolean;
   scopes: PreconditionItem[];
+}
+
+/** 内容投递目标：模型、外部 API 或通知渠道。 */
+export interface DeliveryTarget {
+  kind: "model" | "endpoint" | "channel";
+  id: string;
+  name?: string;
+  detail?: string;
+  enabled?: boolean;
+}
+
+export interface DeliveryTargetGroup {
+  kind: string;
+  label: string;
+  note: string;
+}
+
+export interface DeliveryRecordItem {
+  contentId: string;
+  title: string;
+  sourceName: string;
+}
+
+export interface DeliveryRecordResult {
+  targetKind: string;
+  targetId: string;
+  targetName?: string;
+  status: string;
+  latencyMs?: number;
+  output?: unknown;
+  error?: string;
+}
+
+export interface DeliveryRecord {
+  id: string;
+  type: "manual" | "auto" | string;
+  status: string;
+  note?: string;
+  ruleId?: string;
+  trigger?: { kind?: string; ruleName?: string; listener?: { kind?: string; id?: string; name?: string }; by?: string };
+  items: DeliveryRecordItem[];
+  targets: DeliveryTarget[];
+  results: DeliveryRecordResult[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface DeliveryRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  listener: { kind: "source" | "plan"; id: string; name?: string };
+  targets: DeliveryTarget[];
+  lastRunAt?: string | null;
+  lastStatus?: string | null;
+  createdAt: string;
+  etag?: string;
+}
+
+export interface DeliveryEndpoint {
+  id: string;
+  name: string;
+  url: string;
+  tokenRef: string;
+  enabled: boolean;
+  createdAt?: string;
+  etag?: string;
+}
+
+export interface NotificationEntry {
+  id: string;
+  category: string;
+  level: string;
+  title: string;
+  message: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface NotificationCenterSettings {
+  enabled: boolean;
+  desktop: boolean;
+  categories: Record<string, boolean>;
+}
+
+export interface PushPlatformField {
+  key: string;
+  label: string;
+  required: boolean;
+  secret?: boolean;
+  placeholder?: string;
+}
+
+export interface PushPlatform {
+  id: string;
+  name: string;
+  icon: string;
+  note: string;
+  fields: PushPlatformField[];
+}
+
+export interface PushChannel {
+  id: string;
+  name: string;
+  platform: string;
+  settings: Record<string, string>;
+  events: string[];
+  enabled: boolean;
+  createdAt?: string;
+  etag?: string;
+}
+
+export interface PushRecord {
+  id: string;
+  channelId: string;
+  channelName: string;
+  platform: string;
+  event: string;
+  title: string;
+  status: string;
+  error?: string | null;
+  createdAt: string;
+}
+
+export interface PushTestResult {
+  ok: boolean;
+  platform: string;
+  name: string;
+  latencyMs: number;
+  detail: string;
+}
+
+export interface SearchPlatform {
+  engine: string;
+  enabled: boolean;
+  keyRef: string;
+  catalog: SearchEngine & { icon: string; docs: string; fields: { key: string; label: string; required: boolean; placeholder?: string }[] };
+}
+
+/** 一种协议下的一个方法或命令。 */
+export interface ProtocolItem {
+  name: string;
+  usage: string;
+  summary: string;
+}
+
+/** HTTP 接口条目：路径、用途与调用要点。 */
+export interface ApiDocItem {
+  method: string;
+  path: string;
+  summary: string;
+  query: string | null;
+  body: string | null;
+}
+
+export interface ApiDocGroup {
+  id: string;
+  label: string;
+  note: string;
+  items: ApiDocItem[];
+}
+
+export interface ExternalProtocol {
+  id: string;
+  name: string;
+  status: "enabled" | "internal" | "disabled" | string;
+  note: string;
+  command: string | null;
+  endpoint: string | null;
+  examples: string[];
+  methods: number;
+  groups: ApiDocGroup[];
+  items: ProtocolItem[];
+}
+
+export interface ExternalHeader {
+  name: string;
+  optional: boolean;
+  note: string;
+}
+
+export interface ExternalConventions {
+  headers: ExternalHeader[];
+  errors: string;
+  paging: string;
+  async: string;
+  etag: string;
+}
+
+export interface ExternalStep {
+  title: string;
+  body: string;
+  commands: string[];
+}
+
+export interface ExternalCatalog {
+  generatedAt: string;
+  baseUrl: string;
+  conventions: ExternalConventions;
+  quickStart: ExternalStep[];
+  protocols: ExternalProtocol[];
+  cli: ProtocolItem[];
+}
+
+export interface MonitorEvent {
+  seq?: number;
+  kind?: string;
+  phase?: string;
+  instance?: string;
+  method?: string;
+  ability_id?: string;
+  started_at?: string;
+  ended_at?: string;
+  error?: string | null;
+  [key: string]: unknown;
+}
+
+export interface MonitorChain {
+  chain_id?: string;
+  instance?: string;
+  method?: string;
+  running?: boolean;
+  started_at?: string;
+  span_id?: string;
+  ability_id?: string;
+  [key: string]: unknown;
+}
+
+export interface MonitorSummary {
+  available: boolean;
+  note?: string;
+  generatedAt?: string;
+  stats?: { dropped: number; queued: number; recent: number };
+  chains?: MonitorChain[];
+  events?: MonitorEvent[];
 }

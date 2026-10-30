@@ -46,19 +46,10 @@ async fn bearer_token_guards_v1_but_not_health() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener); // 仅占位取空闲端口，交给 Port::serve 绑定
-    let base = spawn(
-        Box::new(HttpPort::new(addr).with_bearer_token("s3cret")),
-        Arc::new(Fake),
-    )
-    .await;
+    let base = spawn(Box::new(HttpPort::new(addr).with_bearer_token("s3cret")), Arc::new(Fake)).await;
 
     // /health 豁免
-    let health: Value = reqwest::get(format!("{base}/health"))
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let health: Value = reqwest::get(format!("{base}/health")).await.unwrap().json().await.unwrap();
     assert_eq!(health["status"], "ok");
 
     // 无凭证 → 401

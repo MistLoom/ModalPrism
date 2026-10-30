@@ -258,7 +258,13 @@ async function runUndos(undos, origin) {
  * @param {import('./spec.js').AbilityProvider} provider
  */
 export async function serveStdio(provider) {
-  const bridge = createBridge((line) => output.write(line));
+  const bridge = createBridge((line) => {
+    output.write(line);
+    // 管道下 stdout 可能全缓冲；协议 MUST：每帧写后 flush。
+    if (typeof output.flush === "function") {
+      output.flush();
+    }
+  });
   let abilitySlot = null;
   const rl = createInterface({ input, crlfDelay: Infinity });
   // 命令帧顺序执行。读循环不等待命令，应答与 run_handle 可以重入。

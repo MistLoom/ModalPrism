@@ -91,9 +91,7 @@ impl RemoteHttpGateway {
     ) -> Option<CatalogEntry> {
         catalog
             .iter()
-            .find(|e| {
-                e.instance.as_str() == instance.as_str() && e.method.as_str() == method.as_str()
-            })
+            .find(|e| e.instance.as_str() == instance.as_str() && e.method.as_str() == method.as_str())
             .cloned()
     }
 }

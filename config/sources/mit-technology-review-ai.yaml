@@ -1,18 +1,17 @@
-id: source/mit-technology-review-ai
-kind: source
-name: "MIT Technology Review · AI"
-labels:
-  tier: T2
-  topic: "媒体"
 access:
   accessor: accessor/rss
   locator:
-    url: https://www.technologyreview.com/topic/artificial-intelligence/feed
+    url: "https://www.technologyreview.com/topic/artificial-intelligence/feed"
+admission: {}
+id: source/mit-technology-review-ai
+kind: source
+labels:
+  tier: T2
+  topic: 媒体
+name: MIT Technology Review · AI
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

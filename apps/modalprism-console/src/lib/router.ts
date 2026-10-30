@@ -4,23 +4,37 @@ export type PageId =
   | "overview"
   | "projects"
   | "sources"
+  | "plans"
   | "tasks"
   | "content"
-  | "production"
-  | "outbound"
+  | "delivery"
+  | "notifications"
   | "logs"
+  | "external"
+  | "tools"
   | "settings";
 
-export const ROUTES: { id: PageId; label: string; kicker: string }[] = [
-  { id: "overview", label: "概览", kicker: "overview" },
-  { id: "projects", label: "项目", kicker: "projects" },
-  { id: "sources", label: "信源", kicker: "sources" },
-  { id: "tasks", label: "任务", kicker: "tasks" },
-  { id: "content", label: "内容", kicker: "content" },
-  { id: "production", label: "生产", kicker: "production" },
-  { id: "outbound", label: "出站", kicker: "outbound" },
-  { id: "logs", label: "日志", kicker: "logs" },
-  { id: "settings", label: "系统设置", kicker: "settings" },
+export interface RouteDef {
+  id: PageId;
+  label: string;
+  kicker: string;
+  group: "workspace" | "diagnostics";
+}
+
+// 一级页面：日常在做的事（工作区）与排查/接入（诊断）分两组。
+export const ROUTES: RouteDef[] = [
+  { id: "overview", label: "概览", kicker: "overview", group: "workspace" },
+  { id: "projects", label: "项目", kicker: "projects", group: "workspace" },
+  { id: "sources", label: "信源", kicker: "sources", group: "workspace" },
+  { id: "plans", label: "计划", kicker: "plans", group: "workspace" },
+  { id: "tasks", label: "任务", kicker: "tasks", group: "workspace" },
+  { id: "content", label: "内容", kicker: "content", group: "workspace" },
+  { id: "delivery", label: "内容投递", kicker: "delivery", group: "workspace" },
+  { id: "notifications", label: "通知管理", kicker: "notifications", group: "workspace" },
+  { id: "external", label: "外部调用", kicker: "external", group: "diagnostics" },
+  { id: "logs", label: "日志", kicker: "logs", group: "diagnostics" },
+  { id: "tools", label: "调试工具", kicker: "tools", group: "diagnostics" },
+  { id: "settings", label: "系统设置", kicker: "settings", group: "diagnostics" },
 ];
 
 export interface RouteState {

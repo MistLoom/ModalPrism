@@ -129,6 +129,7 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
     let task = AccessTask {
         task_id: task_id.clone(),
         source_id: SourceId::new("src").unwrap(),
+        plan_id: None,
         accessor: "accessor/http".into(),
         locator: Locator::Url {
             url: "https://example.com/a".into(),

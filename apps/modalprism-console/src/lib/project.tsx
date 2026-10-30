@@ -18,13 +18,13 @@ interface ProjectContextValue {
   loading: boolean;
 }
 
-const STORAGE_KEY = "modalprism.currentProjectId";
+export const PROJECT_STORAGE_KEY = "modalprism.currentProjectId";
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProjectId, setCurrentId] = useState<string | null>(() =>
-    window.localStorage.getItem(STORAGE_KEY),
+    window.localStorage.getItem(PROJECT_STORAGE_KEY),
   );
   const [bindings, setBindings] = useState<ProjectResource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,7 +54,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       setBindings([]);
       return;
     }
-    window.localStorage.setItem(STORAGE_KEY, currentProjectId);
+    window.localStorage.setItem(PROJECT_STORAGE_KEY, currentProjectId);
     let alive = true;
     listProjectResources(currentProjectId)
       .then((page) => {
@@ -68,7 +68,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     };
   }, [currentProjectId]);
 
-  const setCurrentProjectId = useCallback((id: string) => setCurrentId(id), []);
+  // 同步写 localStorage：请求头在 api.ts 里按需读取，晚于渲染的 effect 会让第一次请求打到旧项目。
+  const setCurrentProjectId = useCallback((id: string) => {
+    window.localStorage.setItem(PROJECT_STORAGE_KEY, id);
+    setCurrentId(id);
+  }, []);
 
   const value = useMemo<ProjectContextValue>(() => {
     const bound = (kind: string) =>

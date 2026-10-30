@@ -1,19 +1,18 @@
-id: source/the-decoder
-kind: source
-name: "The Decoder"
-enabled: false
-labels:
-  tier: T2
-  topic: "媒体"
 access:
   accessor: accessor/rss
   locator:
-    url: https://the-decoder.com/feed/
+    url: "https://the-decoder.com/feed/"
+admission: {}
+enabled: false
+id: source/the-decoder
+kind: source
+labels:
+  tier: T2
+  topic: 媒体
+name: The Decoder
 pipeline:
-  - run: [adapter/feed-items]
-schedule:
-  interval: 1h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed

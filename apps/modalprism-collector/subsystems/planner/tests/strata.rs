@@ -24,6 +24,7 @@ fn now() -> Timestamp {
 fn plan() -> SourcePlan {
     SourcePlan {
         source_id: SourceId::new("source/blog").unwrap(),
+        plan_id: None,
         locator: Locator::Url {
             url: "https://example.com/blog".into(),
         },
@@ -47,6 +48,11 @@ fn plan() -> SourcePlan {
         yield_drop_ratio: 0.3,
         failure_threshold: 5,
         daily_limit: None,
+        one_shot: false,
+        per_run_items: None,
+        total_items: None,
+        on_budget_exhausted: "skip".into(),
+        stagnation_cycles: None,
     }
 }
 

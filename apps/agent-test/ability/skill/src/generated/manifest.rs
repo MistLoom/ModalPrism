@@ -9,18 +9,7 @@ pub fn manifest() -> AbilityManifest {
         depends: vec![],
         stateful: false,
         config_schema: serde_json::json!(null),
-        methods: vec![
-            ability_support::MethodMeta::new(
-                "load",
-                "加载单个 Skill 目录",
-                serde_json::json!({"properties":{"path":{"type":"string"}},"required":["path"],"type":"object"}),
-            ),
-            ability_support::MethodMeta::new(
-                "list",
-                "扫描根目录下的 Skill",
-                serde_json::json!({"properties":{"root":{"type":"string"}},"required":["root"],"type":"object"}),
-            ),
-        ],
+        methods: vec![ability_support::MethodMeta::new("load", "加载单个 Skill 目录", serde_json::json!({"properties":{"path":{"type":"string"}},"required":["path"],"type":"object"})), ability_support::MethodMeta::new("list", "扫描根目录下的 Skill", serde_json::json!({"properties":{"root":{"type":"string"}},"required":["root"],"type":"object"}))],
         events: vec![],
     }
 }

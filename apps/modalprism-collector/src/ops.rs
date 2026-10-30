@@ -14,12 +14,10 @@ use frame_core::{CatalogEntry, Gateway, InvokeRequest, InvokeResponse};
 use serde_json::{Value, json};
 
 /// 需要异步句柄的长任务：它们在进程内同步执行到完成才返回。
-/// `workflow.run` 只处理单篇文章、很快，不在此列；`workflow.tick` 才扫一批。
 const LONG_CALLS: &[(&str, &str)] = &[
     ("planner", "round"),
     ("planner", "tick"),
     ("planner", "trigger"),
-    ("workflow", "tick"),
     ("committer", "sweep"),
 ];
 

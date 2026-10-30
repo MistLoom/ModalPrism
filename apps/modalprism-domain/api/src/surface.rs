@@ -112,7 +112,7 @@ async fn parse_input(
                 ApiError::validation("text|url", "required", "text 与 url 至少提供一个")
             })?
     };
-    let hook = state.parse_hook.clone().ok_or_else(|| {
+    let hook = state.parse_hook.get().cloned().ok_or_else(|| {
         crate::search::precondition_requirements(vec![json!({
             "type": "parser",
             "message": "结构化解析能力（rawprism）未接入",

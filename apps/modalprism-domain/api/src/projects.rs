@@ -26,8 +26,7 @@ pub const BINDABLE_KINDS: &[&str] = &[
     "source",
     "task",
     "content",
-    "workflow_version",
-    "publication",
+    "delivery_rule",
 ];
 
 pub fn routes() -> Router<Shared> {
@@ -49,7 +48,7 @@ pub fn routes() -> Router<Shared> {
         )
 }
 
-/// 确保默认项目存在，并把未归属的信源挂到默认项目（一次性，幂等）。
+/// 确保默认项目存在，并把未标注归属的历史信源一次性划到默认项目并标记共享（幂等）。
 pub async fn seed(state: &AppState) -> Result<(), ApiError> {
     if state
         .store
@@ -70,24 +69,32 @@ pub async fn seed(state: &AppState) -> Result<(), ApiError> {
             .insert_document(PROJECT_KIND, DEFAULT_PROJECT_ID, &body)
             .await?;
     }
-    // 旧全局信源：凡未出现在任何 binding 里的信源，一次性挂到默认项目。
-    let sources = crate::catalog::source_rows(state).await?;
-    let bindings = state.store.list_documents(BINDING_KIND).await?;
-    let bound: std::collections::HashSet<String> = bindings
-        .iter()
-        .filter(|doc| doc.body["resourceKind"] == "source")
-        .filter_map(|doc| {
-            doc.body["resourceId"]
-                .as_str()
-                .map(|value| value.to_string())
-        })
-        .collect();
-    for source in sources {
-        let slug = source["id"].as_str().unwrap_or_default().to_string();
-        if slug.is_empty() || bound.contains(&slug) {
+    // 历史全局信源：凡正文未标注 project 的信源，一次性归默认项目并标为共享，
+    // 使其对所有项目可见；已标注的（功能上线后新建）保持不变。
+    let entries = config::entries(&state.config_dir, "source").map_err(ApiError::from)?;
+    let mut changed = false;
+    for entry in entries {
+        if entry.doc.get("project").is_some() {
             continue;
         }
-        bind(state, DEFAULT_PROJECT_ID, "source", &slug).await?;
+        let mut doc = entry.doc;
+        doc["project"] = json!(DEFAULT_PROJECT_ID);
+        doc["shared"] = json!(true);
+        config::update(
+            &state.config_dir,
+            &crate::catalog::options(),
+            &config::Draft {
+                kind: "source".into(),
+                slug: entry.slug.clone(),
+                doc,
+            },
+        )
+        .map_err(ApiError::from)?;
+        changed = true;
+    }
+    // 仅在真的改写过信源正文时重载配置，避免无变更启动也推高配置代数。
+    if changed {
+        state.services.config_reload().map_err(ApiError::from)?;
     }
     Ok(())
 }
@@ -262,55 +269,48 @@ struct ResourceQuery {
     kind: Option<String>,
 }
 
-/// 项目资源清单：已归属资源 ∪（默认项目视角下的未归属旧数据）。
+/// 项目资源清单：信源按归属/共享派生（含其他项目的共享信源），
+/// 其余落库资源（如 search_record）经 project_binding 关联。
 async fn list_resources(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
     Query(query): Query<ResourceQuery>,
 ) -> Result<Response, ApiError> {
-    let (project, _) = project_body(&state, &project_id).await?;
-    let is_default = project["isDefault"].as_bool().unwrap_or(false);
+    let _ = project_body(&state, &project_id).await?;
+    let wanted = query.kind.as_deref().filter(|value| !value.is_empty());
     let bindings = state.store.list_documents(BINDING_KIND).await?;
     let mut items = Vec::new();
-    let mut bound_sources: std::collections::HashSet<String> = Default::default();
     for doc in &bindings {
         let kind = doc.body["resourceKind"].as_str().unwrap_or_default();
-        let resource_id = doc.body["resourceId"].as_str().unwrap_or_default();
+        // 信源归属不再看 binding（改由正文 project/shared 派生）。
         if kind == "source" {
-            bound_sources.insert(resource_id.to_string());
+            continue;
         }
         if doc.body["projectId"] != project_id {
             continue;
         }
-        if let Some(filter) = query.kind.as_deref().filter(|value| !value.is_empty()) {
+        if let Some(filter) = wanted {
             if kind != filter {
                 continue;
             }
         }
         items.push(json!({
             "kind": kind,
-            "id": resource_id,
+            "id": doc.body["resourceId"].as_str().unwrap_or_default(),
             "boundAt": doc.body["boundAt"],
         }));
     }
-    // 默认项目承接旧数据：未归属的信源以默认项目视角展示。
-    if is_default
-        && query
-            .kind
-            .as_deref()
-            .map(|k| k == "source" || k.is_empty())
-            .unwrap_or(true)
-    {
+    if wanted.is_none() || wanted == Some("source") {
         let sources = crate::catalog::source_rows(&state).await?;
         for source in sources {
-            let slug = source["id"].as_str().unwrap_or_default();
-            if !slug.is_empty() && !bound_sources.contains(slug) {
-                items.push(json!({
-                    "kind": "source",
-                    "id": slug,
-                    "legacy": true,
-                }));
+            if !crate::catalog::source_visible(&source, &project_id) {
+                continue;
             }
+            items.push(json!({
+                "kind": "source",
+                "id": source["id"].as_str().unwrap_or_default(),
+                "shared": source["shared"].as_bool().unwrap_or(false),
+            }));
         }
     }
     items.sort_by(|a, b| {

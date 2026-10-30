@@ -664,6 +664,11 @@ impl Gateway {
         task::active(&self.db, source, key).await
     }
 
+    /// 同定位键上活跃任务的 id（不加租约）。
+    pub async fn active_task_id(&self, source: &str, key: &str) -> Result<Option<TaskId>> {
+        task::active_id(&self.db, source, key).await
+    }
+
     /// 任务一页，供控制台查看队列状态。
     pub async fn list_tasks(
         &self,

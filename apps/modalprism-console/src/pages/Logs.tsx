@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { IconDownload, IconRefresh } from "../components/icons";
-import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, Tabs, useUi } from "../components/ui";
+import { Pager } from "../components/Pager";
+import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, StructuredValue, Tabs, useUi } from "../components/ui";
 import {
   exportObservability,
   listAuditEvents,
@@ -22,7 +23,9 @@ export function LogsPage() {
   const [tab, setTab] = useState<Tab>("logs");
   const [records, setRecords] = useState<LogRecord[] | null>(null);
   const [health, setHealth] = useState<HealthHistory[] | null>(null);
-  const [next, setNext] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState("");
   const [correlation, setCorrelation] = useState(params.get("correlationId") ?? "");
@@ -32,29 +35,30 @@ export function LogsPage() {
   const [exportOpen, setExportOpen] = useState(false);
 
   const load = useCallback(
-    async (cursor?: string) => {
+    async (target = page) => {
       setLoading(true);
+      const offset = (Math.max(1, target) - 1) * pageSize;
       try {
         if (tab === "health") {
-          const page = await listHealthHistory({ limit: 100, cursor, sourceId: correlation || undefined });
-          setHealth((current) => (cursor ? [...(current ?? []), ...page.items] : page.items));
-          setNext(page.nextCursor);
+          const result = await listHealthHistory({ limit: pageSize, offset, sourceId: correlation || undefined });
+          setHealth(result.items);
+          setTotal(result.total ?? result.items.length + offset);
         } else {
           const filters = {
-            limit: 100,
-            cursor,
+            limit: pageSize,
+            offset,
             query: query.trim() || undefined,
             level: level || undefined,
             correlationId: correlation.trim() || undefined,
           };
-          const page =
+          const result =
             tab === "events"
               ? await listEvents(filters)
               : tab === "audit"
                 ? await listAuditEvents(filters)
                 : await listLogs(filters);
-          setRecords((current) => (cursor ? [...(current ?? []), ...page.items] : page.items));
-          setNext(page.nextCursor);
+          setRecords(result.items);
+          setTotal(result.total ?? result.items.length + offset);
         }
         setError(null);
       } catch (problem) {
@@ -63,7 +67,7 @@ export function LogsPage() {
         setLoading(false);
       }
     },
-    [tab, query, level, correlation],
+    [tab, query, level, correlation, page, pageSize],
   );
 
   useEffect(() => {
@@ -80,7 +84,7 @@ export function LogsPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">logs · 日志</div>
-          <h1 className="page-title">日志、事件、审计与健康历史</h1>
+          <h1 className="page-title">运行日志与审计记录</h1>
           <p className="page-lede">
             三类观测流分工明确：日志可清理，事件只追加，审计不可修改。requestId、operationId、taskId、runId 可以互相追踪；其他页面只带过滤条件跳到这里。
           </p>
@@ -116,7 +120,10 @@ export function LogsPage() {
 
       <Tabs
         value={tab}
-        onChange={setTab}
+        onChange={(value) => {
+          setTab(value as Tab);
+          setPage(1);
+        }}
         items={[
           { id: "logs", label: "日志" },
           { id: "events", label: "事件" },
@@ -128,10 +135,21 @@ export function LogsPage() {
       <div className="toolbar-band">
         <label className="search">
           <span className="muted" aria-hidden="true">⌕</span>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="全文搜索消息" aria-label="搜索日志" />
+          <input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
+            placeholder="全文搜索消息"
+            aria-label="搜索日志"
+          />
         </label>
         {tab !== "health" ? (
-          <select className="select" value={level} onChange={(event) => setLevel(event.target.value)} aria-label="级别筛选">
+          <select className="select" value={level} onChange={(event) => {
+              setLevel(event.target.value);
+              setPage(1);
+            }} aria-label="级别筛选">
             <option value="">全部级别</option>
             <option value="trace">trace</option>
             <option value="debug">debug</option>
@@ -140,30 +158,50 @@ export function LogsPage() {
             <option value="error">error</option>
           </select>
         ) : null}
-        <input className="input mono" style={{ maxWidth: 320 }} value={correlation} onChange={(event) => setCorrelation(event.target.value)} placeholder="requestId / operationId / taskId / runId" aria-label="关联标识" />
-        {correlation ? <button type="button" className="btn btn-sm" onClick={() => setCorrelation("")}>清除关联</button> : null}
+        <input className="input mono" style={{ maxWidth: 320 }} value={correlation} onChange={(event) => {
+            setCorrelation(event.target.value);
+            setPage(1);
+          }} placeholder="requestId / operationId / taskId / runId" aria-label="关联标识" />
+        {correlation ? (
+          <button type="button" className="btn btn-sm" onClick={() => {
+              setCorrelation("");
+              setPage(1);
+            }}>清除关联</button>
+        ) : null}
         <span className="fill" />
-        <span className="small muted">{tab === "health" ? health?.length ?? 0 : records?.length ?? 0} 条</span>
+        <span className="small muted">{total} 条</span>
       </div>
 
       {tab === "health" ? (
         health === null ? <Loading lines={5} /> : health.length === 0 ? <Card title="健康历史"><Empty title="还没有健康评估" text="点击“重算健康”生成第一条不可变记录。" /></Card> : (
-          <div className="grid cols-2">
-            {health.map((item, index) => (
-              <Card key={`${item.evaluatedAt}-${index}`} title={stamp(item.evaluatedAt)} sub={`${item.sources.length} 个信源 · ${item.status}`} flush>
-                <div className="list">
-                  {item.sources.map((source) => (
-                    <div className="list-row" key={source.sourceId}>
-                      <span className="list-main">
-                        <span className="list-title mono">{source.sourceId}</span>
-                        <span className="list-meta">{source.reason || "无异常"} · 今日 {source.todayYield ?? 0}</span>
-                      </span>
-                      <StatusBadge status={source.status} />
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            ))}
+          <div className="stack">
+            <div className="grid cols-2">
+              {health.map((item, index) => (
+                <Card key={`${item.evaluatedAt}-${index}`} title={stamp(item.evaluatedAt)} sub={`${item.sources.length} 个信源 · ${item.status}`} flush>
+                  <div className="list">
+                    {item.sources.map((source) => (
+                      <div className="list-row" key={source.sourceId}>
+                        <span className="list-main">
+                          <span className="list-title mono">{source.sourceId}</span>
+                          <span className="list-meta">{source.reason || "无异常"} · 今日 {source.todayYield ?? 0}</span>
+                        </span>
+                        <StatusBadge status={source.status} />
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              ))}
+            </div>
+            <Pager
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPage={setPage}
+              onPageSize={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+            />
           </div>
         )
       ) : records === null ? (
@@ -188,12 +226,16 @@ export function LogsPage() {
               </tbody>
             </table>
           </div>
-          {next ? (
-            <div className="pager">
-              <span>还有更多记录</span>
-              <button type="button" className="btn btn-sm" onClick={() => void load(next)} disabled={loading}>加载更多</button>
-            </div>
-          ) : null}
+          <Pager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPage={setPage}
+            onPageSize={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+          />
         </Card>
       )}
 
@@ -212,8 +254,6 @@ function RecordDrawer({ record, onClose }: { record: LogRecord; onClose: () => v
     ["contentId", record.contentId],
     ["runId", record.runId],
     ["attemptId", record.attemptId],
-    ["workflowVersionId", record.workflowVersionId],
-    ["publicationId", record.publicationId],
     ["deliveryId", record.deliveryId],
     ["configGeneration", record.configGeneration === null || record.configGeneration === undefined ? null : String(record.configGeneration)],
   ];
@@ -241,7 +281,7 @@ function RecordDrawer({ record, onClose }: { record: LogRecord; onClose: () => v
         {record.data ? (
           <div className="drawer-section">
             <h3>数据</h3>
-            <div className="code">{JSON.stringify(record.data, null, 2)}</div>
+            <StructuredValue value={record.data} />
           </div>
         ) : null}
       </div>

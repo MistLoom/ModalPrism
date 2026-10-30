@@ -9,11 +9,7 @@ pub fn manifest() -> AbilityManifest {
         depends: vec![],
         stateful: false,
         config_schema: serde_json::json!(null),
-        methods: vec![ability_support::MethodMeta::new(
-            "run",
-            "会话内计数器",
-            serde_json::json!({"properties":{"delta":{"default":1,"type":"integer"}},"type":"object"}),
-        )],
+        methods: vec![ability_support::MethodMeta::new("run", "会话内计数器", serde_json::json!({"properties":{"delta":{"default":1,"type":"integer"}},"type":"object"}))],
         events: vec![],
     }
 }

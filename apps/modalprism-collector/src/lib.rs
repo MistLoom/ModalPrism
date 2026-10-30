@@ -22,6 +22,7 @@ pub struct Running {
     services: Arc<Services>,
     host: Arc<AbilityHost>,
     gateway: Arc<dyn Gateway>,
+    monitor: Arc<leaf_monitor::MonitorApp>,
     http: SocketAddr,
     proxy: SocketAddr,
     push: SocketAddr,
@@ -57,6 +58,7 @@ impl Running {
 
     pub async fn shutdown(self) -> Result<(), assembly::Error> {
         self.stop.store(true, Ordering::Relaxed);
+        self.monitor.shutdown();
         for task in &self.tasks {
             task.abort();
         }
@@ -109,18 +111,26 @@ pub async fn boot_opts(
         .local_addr()
         .map_err(|source| assembly::Error::with_source("监听", source))?;
     let (host, parse_ready) = link(Arc::clone(&services), &opts).await?;
+    // 框架监测：只在上层接上 monitor 并把内存视图注入领域 API，不改框架组件。
+    let monitor_config = leaf_monitor::MonitorConfig {
+        log_path: data.join("monitor.jsonl").display().to_string(),
+        ..leaf_monitor::MonitorConfig::default()
+    };
+    let monitor = leaf_monitor::attach(&host, monitor_config);
     let gateway = ops::gateway(Arc::clone(&host));
-    let mut api = domain_api::AppState::open(Arc::clone(&services), config_dir, data, http)
+    let api = domain_api::AppState::open(Arc::clone(&services), config_dir, data, http)
         .await
         .map_err(|error| assembly::Error::new(error.to_string()))?;
     // 接线结构化解析：rawprism 经仓颉 Guest 由 host 提供（Guest 未就绪时 /parse 返回 412）。
+    // rawprism 是内部解析引擎而非治理面能力（仓颉 Guest、fun 协议、无 logic 面），
+    // 所以钩子直连 host 而不走 OpsGateway 的 COLLECTOR_OPS 白名单。
     {
-        let gateway = Arc::clone(&gateway);
+        let host = Arc::clone(&host);
         let hook: domain_api::ParseHook = Arc::new(move |args: &serde_json::Value| {
-            let gateway = Arc::clone(&gateway);
+            let host = Arc::clone(&host);
             let args = args.clone();
             Box::pin(async move {
-                let response = gateway
+                let response = host
                     .invoke(frame_core::InvokeRequest::new(
                         InstanceId::new("rawprism").map_err(|e| e.to_string())?,
                         MethodId::new("scan").map_err(|e| e.to_string())?,
@@ -131,9 +141,43 @@ pub async fn boot_opts(
                 Ok(response.data)
             }) as domain_api::ParseHookFuture
         });
-        // AppState 此刻尚未被共享，可以安全写一次。
-        if let (Some(state), true) = (Arc::get_mut(&mut api), parse_ready) {
-            state.parse_hook = Some(hook);
+        // AppState 已被后台任务共享，钩子经 OnceLock 单写；写入失败只在真正冲突时告警。
+        if parse_ready && api.parse_hook.set(hook).is_err() {
+            tracing::warn!("parse 钩子已写入，忽略重复接线");
+        }
+    }
+    // 接线监测投影：控制台工作台轮询 /monitor/summary，读的是同一份内存环形缓冲。
+    {
+        let monitor = Arc::clone(&monitor);
+        let hook: domain_api::MonitorHook = Arc::new(move |what: &str, tail: usize| {
+            match what {
+                "chains" => json!({"available": true, "chains": monitor.chains()}),
+                "events" => {
+                    let events = monitor.recent_events();
+                    let start = events.len().saturating_sub(tail.max(1));
+                    json!({"available": true, "events": &events[start..]})
+                }
+                "stats" => {
+                    let mut value = serde_json::to_value(monitor.stats()).unwrap_or_else(|_| json!({}));
+                    value["available"] = json!(true);
+                    value
+                }
+                "graph" => json!({"available": true, "graph": monitor.chain_graph()}),
+                "summary" => {
+                    let events = monitor.recent_events();
+                    let start = events.len().saturating_sub(tail.max(1));
+                    json!({
+                        "available": true,
+                        "stats": monitor.stats(),
+                        "chains": monitor.chains(),
+                        "events": &events[start..],
+                    })
+                }
+                _ => json!({"available": false}),
+            }
+        });
+        if api.monitor_hook.set(hook).is_err() {
+            tracing::warn!("monitor 钩子已写入，忽略重复接线");
         }
     }
     let stop = Arc::new(AtomicBool::new(false));
@@ -184,6 +228,7 @@ pub async fn boot_opts(
         services,
         host,
         gateway,
+        monitor,
         http,
         proxy,
         push,
@@ -268,7 +313,6 @@ async fn link(
             accessor_probe::provider(Arc::clone(&services)),
         ),
         ("catalog_admin", catalog_admin::provider(Arc::clone(&read))),
-        ("workflow", ability_workflow::provider(Arc::clone(&read))),
         ("type_article", type_article::provider(Arc::clone(&read))),
     ];
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -416,32 +460,6 @@ fn spawn_loops(
         }
     });
     let stop_health = stop;
-    let host_flow = Arc::clone(&host);
-    let stop_flow = Arc::clone(&stop_health);
-    let maintenance_flow = Arc::clone(&maintenance);
-    let flow = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(20)).await;
-            if stop_flow.load(Ordering::Relaxed) {
-                break;
-            }
-            if maintenance_flow.load(Ordering::Relaxed) {
-                continue;
-            }
-            let value = match invoke(&host_flow, "workflow", "tick", json!({})).await {
-                Ok(value) => value,
-                Err(error) => {
-                    tracing::warn!(error = %error, "内容加工失败");
-                    continue;
-                }
-            };
-            let processed = value.get("processed").and_then(Value::as_u64).unwrap_or(0);
-            let failed = value.get("failed").and_then(Value::as_u64).unwrap_or(0);
-            if processed > 0 || failed > 0 {
-                tracing::info!(processed, failed, "内容加工完成");
-            }
-        }
-    });
     let services_derive = Arc::clone(&services);
     let stop_derive = Arc::clone(&stop_health);
     let maintenance_derive = Arc::clone(&maintenance);
@@ -489,7 +507,7 @@ fn spawn_loops(
             }
         }
     });
-    vec![tick, flush, flow, health, sweep, derive]
+    vec![tick, flush, health, sweep, derive]
 }
 
 pub async fn apply_hotlist(services: &Services) -> Result<bool, types::Error> {

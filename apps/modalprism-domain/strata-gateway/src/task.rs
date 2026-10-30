@@ -118,7 +118,7 @@ pub async fn enqueue(db: &Db, tasks: &[AccessTask]) -> Result<Vec<AccessTask>> {
     let mut inserted = Vec::new();
     for task in tasks {
         task.validate()?;
-        let key = locator_key(&task.locator)?;
+        let key = task.locator_key();
         if active_in(&mut tx, task.source_id.as_str(), &key).await? {
             continue;
         }
@@ -205,6 +205,22 @@ pub async fn active(db: &Db, source: &str, key: &str) -> Result<bool> {
     sql.text(key.to_string());
     push_active(&mut sql);
     Ok(db.fetch_int(&sql).await?.unwrap_or(0) > 0)
+}
+
+/// 同定位键上活跃任务的 id（不加租约）。入队去重跳过新任务后，
+/// 据此解析出真正活跃的那条，避免对未入库的新 id 误报「任务不存在」。
+pub async fn active_id(db: &Db, source: &str, key: &str) -> Result<Option<TaskId>> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT task_id FROM g_tasks WHERE source_id = ");
+    sql.text(source.to_string());
+    sql.push(" AND locator_key = ");
+    sql.text(key.to_string());
+    push_active(&mut sql);
+    sql.push(" ORDER BY priority DESC, created_at ASC LIMIT 1");
+    let Some(row) = db.fetch_one(&sql).await? else {
+        return Ok(None);
+    };
+    Ok(Some(TaskId::new(row.text("task_id")?)?))
 }
 
 /// 批量租约：排队中或租约已过期的任务按优先级与入队时间领取。
@@ -463,6 +479,8 @@ pub struct TaskRow {
     pub queue: String,
     pub status: String,
     pub source_id: String,
+    /// 所属采集计划（来自 payload 的 planId），供任务详情归组与追溯。
+    pub plan_id: Option<String>,
     pub accessor: String,
     pub reason: String,
     pub attempt: u64,
@@ -571,6 +589,10 @@ fn row_of(row: &Row) -> Result<TaskRow> {
         queue: row.text("queue")?.to_string(),
         status: row.text("status")?.to_string(),
         source_id: row.text("source_id")?.to_string(),
+        plan_id: payload
+            .get("planId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
         accessor: payload
             .get("accessor")
             .and_then(serde_json::Value::as_str)

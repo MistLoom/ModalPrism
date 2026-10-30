@@ -13,7 +13,7 @@ function sdkAbilityJs(fromDir) {
   }
 }
 
-const { serveAbility } = await import(
+const { serveAbility, pending } = await import(
   sdkAbilityJs(path.dirname(fileURLToPath(import.meta.url)))
 );
 
@@ -21,5 +21,13 @@ await serveAbility({
   ping: async (ctx) => {
     await ctx.emit("pong", { from: "probe" });
     return { ok: true, from: "external-ts" };
+  },
+  slow: async (_ctx, args) => {
+    const ms = Number(args?.ms ?? 150);
+    return pending(
+      new Promise((resolve, reject) =>
+        setTimeout(() => (args?.fail ? reject(new Error("boom")) : resolve({ slept: ms })), ms),
+      ),
+    );
   },
 });

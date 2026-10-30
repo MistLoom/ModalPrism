@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 use crate::author;
 use crate::error::Error;
 use crate::load::{LoadOptions, validate};
+use crate::source_type;
 
 /// 一份信源的迁移结果：改写后的信源正文 + 需要新建的绑定。
 pub struct SourceMigration {
@@ -131,6 +132,152 @@ fn adapter_stem(adapter: &str) -> String {
         .next_back()
         .unwrap_or(adapter)
         .to_string()
+}
+
+/// 由信源的 `schedule` + `admission.initialBackfill` 合成一份等价采集计划文档。
+/// 节律逐字搬进 `trigger`，回填额度搬进 `quota`，其余信源字段（access/pipeline/paid/admission
+/// 的 allowUrlPrefixes 等）留在信源。规划器兼容路径据同一份信源合成同 id 计划，取值一致。
+fn synthesize_plan(entry: &crate::author::Entry) -> Option<Value> {
+    let schedule = entry.doc.get("schedule")?.as_object()?;
+    let mut trigger = Map::new();
+    trigger.insert("kind".into(), json!("recurring"));
+    for key in [
+        "interval",
+        "floor",
+        "ceiling",
+        "adaptive",
+        "expectedPeriod",
+        "batchKey",
+    ] {
+        if let Some(value) = schedule.get(key) {
+            trigger.insert(key.to_string(), value.clone());
+        }
+    }
+    let mut plan = Map::new();
+    plan.insert("id".into(), json!(format!("plan/{}", entry.slug)));
+    plan.insert("kind".into(), json!("plan"));
+    let name = entry
+        .doc
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(&entry.slug)
+        .to_string();
+    plan.insert("name".into(), json!(format!("{name} · 采集计划")));
+    plan.insert("targets".into(), json!([format!("source/{}", entry.slug)]));
+    plan.insert("trigger".into(), Value::Object(trigger));
+    if let Some(backfill) = entry
+        .doc
+        .pointer("/admission/initialBackfill")
+        .and_then(Value::as_object)
+    {
+        let mut quota = Map::new();
+        if let Some(limit) = backfill.get("limit") {
+            quota.insert("perRunItems".into(), limit.clone());
+        }
+        if let Some(max_age) = backfill.get("maxAge") {
+            quota.insert("maxAge".into(), max_age.clone());
+        }
+        if !quota.is_empty() {
+            plan.insert("quota".into(), Value::Object(quota));
+        }
+    }
+    if let Some(priority) = entry.doc.pointer("/schedule/priority") {
+        plan.insert("priority".into(), priority.clone());
+    }
+    Some(Value::Object(plan))
+}
+
+/// 把信源里的 `schedule` 与 `admission.initialBackfill` 摘除，其余原样保留。
+fn strip_schedule_fields(doc: &Value) -> Value {
+    let mut new_doc = doc.clone();
+    if let Some(map) = new_doc.as_object_mut() {
+        map.remove("schedule");
+        if let Some(admission) = map.get_mut("admission").and_then(Value::as_object_mut) {
+            admission.remove("initialBackfill");
+        }
+    }
+    new_doc
+}
+
+/// 采集节律迁出信源 → 一等计划（阶段 2c）。扫描 `dir/sources/*`，为仍带 `schedule` 的
+/// 信源生成同名 `dir/plans/<slug>.yaml`，并从信源摘除 `schedule` 与 `admission.initialBackfill`。
+/// 复用 [`apply_atomic`]：计划先、信源后，整库校验，全有或全无。幂等——无 `schedule` 的信源跳过。
+pub fn migrate_schedules_to_plans(dir: &Path, options: &LoadOptions) -> Result<usize, Error> {
+    let entries = author::entries(dir, "source")?;
+    let mut writes: Vec<AtomicWrite> = Vec::new();
+    for entry in &entries {
+        if entry.doc.get("schedule").is_none() {
+            continue;
+        }
+        let Some(plan_doc) = synthesize_plan(entry) else {
+            continue;
+        };
+        let plan_file = format!("plans/{}.yaml", entry.slug);
+        writes.push(AtomicWrite::write(plan_file, author::to_yaml(&plan_doc)));
+        writes.push(AtomicWrite::write(
+            entry.file.clone(),
+            author::to_yaml(&strip_schedule_fields(&entry.doc)),
+        ));
+    }
+    let moved = writes.len() / 2;
+    if writes.is_empty() {
+        return Ok(0);
+    }
+    apply_atomic(dir, options, &writes)?;
+    Ok(moved)
+}
+
+/// dry-run：不写盘，返回将要生成的计划文档（供迁移前后计划视图等价性断言）。
+pub fn plan_schedule_migration(dir: &Path) -> Result<Vec<Value>, Error> {
+    let mut out = Vec::new();
+    for entry in author::entries(dir, "source")? {
+        if let Some(plan) = synthesize_plan(&entry) {
+            out.push(plan);
+        }
+    }
+    Ok(out)
+}
+
+/// 缺失 `sourceType` 的信源清单 `(文件, 拟回填类型)`。回填前的清点用途，不作为校验硬错误。
+pub fn plan_source_type_backfill(dir: &Path) -> Result<Vec<(String, String)>, Error> {
+    let mut out = Vec::new();
+    for entry in author::entries(dir, "source")? {
+        if source_type::is_missing(&entry.doc) {
+            out.push((
+                entry.file.clone(),
+                source_type::derive(&entry.doc).as_str().to_string(),
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// 声明回填（v3 R16）：为缺失 `sourceType` 的信源按派生规则写入显式类型，只增字段、
+/// 不动其余取值（写出走 [`author::to_yaml`] 的既有键序约定，产物仍可读回）。复用
+/// [`apply_atomic`]：全部改写一次性提交并整库校验，任一失败回滚到写入前状态。幂等——
+/// 已带 `sourceType` 的信源跳过。`config_hash` 不受影响（v3 S1：节律输入不含 sourceType）。
+pub fn backfill_source_types(dir: &Path, options: &LoadOptions) -> Result<usize, Error> {
+    let mut writes: Vec<AtomicWrite> = Vec::new();
+    for entry in author::entries(dir, "source")? {
+        if !source_type::is_missing(&entry.doc) {
+            continue;
+        }
+        let kind = source_type::derive(&entry.doc);
+        let mut doc = entry.doc.clone();
+        if let Some(map) = doc.as_object_mut() {
+            map.insert("sourceType".to_string(), json!(kind.as_str()));
+        }
+        writes.push(AtomicWrite::write(
+            entry.file.clone(),
+            author::to_yaml(&doc),
+        ));
+    }
+    let count = writes.len();
+    if writes.is_empty() {
+        return Ok(0);
+    }
+    apply_atomic(dir, options, &writes)?;
+    Ok(count)
 }
 
 /// 应用迁移：先写绑定，再改写信源；任一失败把已写文件全部回滚（消解 H9 的部分成功）。
@@ -311,5 +458,84 @@ mod tests {
             !dir.path().join("sources/ghost.yaml").exists(),
             "失败后新建文件必须被回滚删除"
         );
+    }
+
+    /// v3 W1 验收：真实仓库 `config/` 的每个信源都带显式 `sourceType`，且整库校验通过
+    /// （类型缺失不作为硬错误，故显式声明由回填保证，本测试是回归护栏）。
+    #[test]
+    fn real_config_sources_all_carry_explicit_type() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../config")
+            .canonicalize()
+            .expect("仓库 config 目录应存在");
+        assert!(
+            dir.join("system.yaml").is_file(),
+            "未找到 config/system.yaml"
+        );
+        let options = LoadOptions::default();
+        validate(&dir, &options).expect("真实 config 应通过含类型的整库校验");
+        let missing = plan_source_type_backfill(&dir).expect("清点缺失类型");
+        assert!(
+            missing.is_empty(),
+            "所有信源应已显式声明 sourceType，缺失: {missing:?}"
+        );
+    }
+
+    /// 回填幂等且不改其余取值：对临时副本重复回填，第二次应 0 改写，且类型与派生一致。
+    #[test]
+    fn backfill_is_idempotent_and_preserves_values() {
+        let dir = tempfile::tempdir().unwrap();
+        copy_fixture_sources(dir.path());
+        let options = LoadOptions::default();
+        let first = backfill_source_types(dir.path(), &options).expect("首次回填");
+        assert!(first > 0, "样本源应至少回填一份");
+        let second = backfill_source_types(dir.path(), &options).expect("二次回填应幂等");
+        assert_eq!(second, 0, "已带类型的信源不应被再次改写");
+        for entry in author::entries(dir.path(), "source").unwrap() {
+            let declared = entry.doc["sourceType"].as_str().unwrap();
+            assert_eq!(declared, source_type::derive(&entry.doc).as_str());
+        }
+    }
+
+    /// 复制两份最小可校验的样本信源到临时目录（含 rss 与 http 两种形态）。
+    fn copy_fixture_sources(dir: &Path) {
+        let preset = crate::builtin_presets()
+            .into_iter()
+            .find(|item| item.id == "preset/standard")
+            .expect("内置预设");
+        fs::create_dir_all(dir.join("presets")).unwrap();
+        fs::write(dir.join("presets/standard.yaml"), preset.source).unwrap();
+        fs::write(
+            dir.join("system.yaml"),
+            "id: system\nkind: system\nname: s\npolicy:\n  preset: standard\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("accessors")).unwrap();
+        for (stem, implementation) in [("rss", "builtin:rss"), ("http", "builtin:http")] {
+            fs::write(
+                dir.join("accessors").join(format!("{stem}.yaml")),
+                format!(
+                    "id: accessor/{stem}\nkind: accessor\nname: {stem}\nimplementation: {implementation}\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n"
+                ),
+            )
+            .unwrap();
+        }
+        fs::create_dir_all(dir.join("adapters")).unwrap();
+        fs::write(
+            dir.join("adapters/feed-items.yaml"),
+            "id: adapter/feed-items\nkind: adapter\nname: Feed\nimplementation: builtin:feed-items\nrole: search\nconsumes:\n  - {kind: raw, part_role: document}\nproduces: [discovery]\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: exponential\n    base: 1s\n    max: 30s\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("sources")).unwrap();
+        fs::write(
+            dir.join("sources/feed.yaml"),
+            "id: source/feed\nkind: source\nname: Feed\naccess:\n  accessor: accessor/rss\n  locator:\n    url: https://example.com/feed\npipeline:\n  - run:\n      - adapter/feed-items\nadmission: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("sources/page.yaml"),
+            "id: source/page\nkind: source\nname: Page\naccess:\n  accessor: accessor/http\n  locator:\n    url: https://example.com/list\npipeline:\n  - run:\n      - adapter/feed-items\nadmission: {}\n",
+        )
+        .unwrap();
     }
 }
