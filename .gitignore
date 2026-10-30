@@ -19,6 +19,10 @@ __pycache__/
 # 能力宿主的运行期反馈/事件落盘（启动即生成）
 /apps/ability-core/data/
 
+# 控制台在本地创建的运行期声明（不属于示例集，不入库）
+/config/sources/111.yaml
+/config/plans/111-*.yaml
+
 # 仅本地保留的文档、参考实现与笔记
 /docs
 /manual
