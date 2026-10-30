@@ -1,32 +1,28 @@
 #!/usr/bin/env node
 // ModalPrism 公共 HTTP 的薄封装：一个命令一件事，输出原样 JSON。
 // 只用 Node 18+ 自带的 fetch，无依赖；失败时退出码 1，正文打到 stderr。
+import { parseArgs } from "node:util";
 
 const DEFAULT_BASE = "http://127.0.0.1:17880";
+const commandOptions = {
+  help: [],
+  status: [],
+  content: ["query", "source", "status", "limit"],
+  "content-item": [],
+  sources: ["limit"],
+  targets: [],
+  records: ["type", "status", "limit"],
+  deliver: ["targets", "note"],
+  op: [],
+  logs: ["correlation", "level", "limit"],
+};
+let base;
+let project;
 
-const args = process.argv.slice(2);
-const command = args.shift() ?? "help";
-const flags = {};
-const rest = [];
-for (let index = 0; index < args.length; index += 1) {
-  const item = args[index];
-  if (!item.startsWith("--")) {
-    rest.push(item);
-    continue;
-  }
-  const key = item.slice(2);
-  const next = args[index + 1];
-  if (next === undefined || next.startsWith("--")) {
-    flags[key] = "true";
-  } else {
-    flags[key] = next;
-    index += 1;
-  }
-}
+const usage = `用法: node prism.mjs <命令> [参数] [--base http://host:port] [--project projectId]
 
-const base = (flags.base ?? process.env.MODALPRISM_BASE ?? DEFAULT_BASE).replace(/\/+$/, "");
-
-const usage = `用法: node prism.mjs <命令> [参数] [--base http://host:port]
+  --project projectId                       指定项目；省略时沿用服务端默认项目
+                                            也支持 --project=projectId；项目 ID 不可为空
 
   status                                    系统状态与配置代际
   content [--query Q] [--source ID] [--status active|tombstoned] [--limit N]
@@ -44,7 +40,9 @@ function newKey() {
 }
 
 async function request(path, init) {
-  const response = await fetch(`${base}${path}`, init);
+  const headers = new Headers(init?.headers);
+  if (project) headers.set("x-project-id", project);
+  const response = await fetch(`${base}${path}`, { ...init, headers });
   const body = await response.text();
   let data;
   try {
@@ -82,6 +80,18 @@ function post(path, payload) {
 }
 
 async function main() {
+  const args = process.argv.slice(2);
+  const command = args.shift() ?? "help";
+  if (!Object.hasOwn(commandOptions, command)) throw new Error(`未知命令: ${command}`);
+  const options = Object.fromEntries(
+    ["base", "project", ...commandOptions[command]].map((name) => [name, { type: "string" }]),
+  );
+  const { values: flags, positionals: rest } = parseArgs({ args, options, strict: true, allowPositionals: true });
+  const positionalLimit = ["content-item", "deliver", "op"].includes(command) ? 1 : 0;
+  if (rest.length > positionalLimit) throw new Error(`多余的位置参数: ${rest.slice(positionalLimit).join(" ")}`);
+  base = (flags.base ?? process.env.MODALPRISM_BASE ?? DEFAULT_BASE).replace(/\/+$/, "");
+  project = flags.project?.trim();
+  if (flags.project !== undefined && !project) throw new Error("--project 需要项目 ID");
   switch (command) {
     case "status":
       return request("/api/v1/system/status");
