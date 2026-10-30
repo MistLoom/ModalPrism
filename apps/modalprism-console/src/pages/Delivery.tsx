@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { IconPlus, IconRefresh, IconTrash } from "../components/icons";
+import { RowSubject } from "../components/ListRow";
 import { ManualDeliveryModal } from "../components/ManualDelivery";
 import { PlatformIcon } from "../components/platforms";
 import { Seg, SortHeader, sortRows, useSort } from "../components/Table";
@@ -130,7 +131,7 @@ export function DeliveryPage() {
           <div className="kicker">delivery · 内容投递</div>
           <h1 className="page-title">投递记录与规则</h1>
           <p className="page-lede">
-            手动投递选内容与目标；自动投递按「信源」或「计划」订阅新增内容，计划自己的投递目标在计划表单里配。三类目标（模型、外部 API、通知渠道）都在本页维护。
+            手动投递指定内容与目标；自动投递按信源或计划订阅新增内容，计划级目标在计划表单配置。模型、外部 API、通知渠道三类目标在本页维护。
           </p>
         </div>
         <div className="page-actions">
@@ -178,13 +179,13 @@ export function DeliveryPage() {
             <span className="fill" />
             <span className="small muted">{rows.length} 条记录</span>
           </div>
-          <Card title="投递记录" sub="按类型区分手动与自动；点开看每个目标的明细" flush>
+          <Card title="投递记录" sub="按类型区分为手动与自动；展开查看目标明细" flush>
             {loading && records.length === 0 ? (
               <div className="card-body">
                 <Loading lines={5} />
               </div>
             ) : rows.length === 0 ? (
-              <Empty title="还没有投递记录" text="从内容页或本页发起一次手动投递，或先建一条自动投递规则。" />
+              <Empty title="暂无投递记录" text="可从内容页或本页发起手动投递，或新建自动投递规则。" />
             ) : (
               <div className="table-wrap">
                 <table className="table">
@@ -195,7 +196,6 @@ export function DeliveryPage() {
                       <th>内容</th>
                       <th>目标</th>
                       <SortHeader label="状态" sortKey="status" sort={sort} onSort={toggle} />
-                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -210,7 +210,9 @@ export function DeliveryPage() {
                         </td>
                         <td>
                           <div className="cell-main">
-                            <span className="source-name">{record.items[0]?.title ?? "—"}</span>
+                            <RowSubject onClick={() => setDetail(record.id)} title="查看投递明细">
+                              {record.items[0]?.title ?? "—"}
+                            </RowSubject>
                             <span className="source-sub">{record.items.length > 1 ? `等 ${record.items.length} 条` : record.items[0]?.sourceName}</span>
                           </div>
                         </td>
@@ -219,11 +221,6 @@ export function DeliveryPage() {
                         </td>
                         <td>
                           <StatusBadge status={record.status} />
-                        </td>
-                        <td className="actions">
-                          <button type="button" className="btn btn-sm" onClick={() => setDetail(record.id)}>
-                            详情
-                          </button>
                         </td>
                       </tr>
                     ))}
@@ -238,7 +235,7 @@ export function DeliveryPage() {
       {tab === "rules" ? (
         <Card
           title="自动投递"
-          sub="监听信源或计划，把新增内容按目标投递；计划行里的投递目标会在保存计划时自动落成规则"
+          sub="监听信源或计划，新增内容按目标投递；计划表单中的投递目标在保存时生成规则"
           action={
             <button type="button" className="btn btn-sm" onClick={() => setRuleEditing("new")}>
               <IconPlus size={12} /> 新建规则
@@ -247,28 +244,25 @@ export function DeliveryPage() {
           flush
         >
           {rules.length === 0 ? (
-            <Empty title="还没有自动投递规则" text="例如：监听某个信源，新增内容交给模型生成摘要并提交到你的接口。" />
+            <Empty title="暂无自动投递规则" text="示例：监听信源，新增内容交由模型生成摘要并提交至外部接口。" />
           ) : (
             <div className="list">
               {rules.map((rule) => (
                 <div className="list-row" key={rule.id}>
                   <span className="list-main">
-                    <span className="list-title">
+                    <RowSubject onClick={() => setRuleEditing(rule)} title="编辑规则">
                       {rule.name}
                       <span className="badge neutral" style={{ marginLeft: 6 }}>
                         {rule.listener.kind === "plan" ? "监听计划" : "监听信源"}
                       </span>
                       {rule.enabled ? null : <span className="badge neutral" style={{ marginLeft: 6 }}>已停用</span>}
-                    </span>
+                    </RowSubject>
                     <span className="list-meta">
                       <span>{rule.listener.name ?? rule.listener.id}</span>
                       <span>目标：{rule.targets.map((target) => targetName(target.kind, target.id)).join("、") || "—"}</span>
                       <span>最近：{rule.lastRunAt ? relative(rule.lastRunAt) : "尚未投递"}</span>
                     </span>
                   </span>
-                  <button type="button" className="btn btn-sm" disabled={busy === rule.id} onClick={() => setRuleEditing(rule)}>
-                    编辑
-                  </button>
                   <button
                     type="button"
                     className="btn btn-sm"
@@ -299,7 +293,7 @@ export function DeliveryPage() {
         <div className="stack" style={{ gap: 16 }}>
           <Card
             title="外部 API"
-            sub="按 JSON 提交内容；令牌只保存环境变量名"
+            sub="按 JSON 提交内容；令牌仅保存环境变量名"
             action={
               <button type="button" className="btn btn-sm" onClick={() => setEndpointEditing("new")}>
                 <IconPlus size={12} /> 新增接口
@@ -308,25 +302,22 @@ export function DeliveryPage() {
             flush
           >
             {endpoints.length === 0 ? (
-              <Empty title="还没有外部接口" text="填一个接收地址即可；提交体包含 title 与 items。" />
+              <Empty title="暂无外部接口" text="填写接收地址；提交体包含 title 与 items。" />
             ) : (
               <div className="list">
                 {endpoints.map((endpoint) => (
                   <div className="list-row" key={endpoint.id}>
                     <PlatformIcon icon="endpoint" size={26} />
                     <span className="list-main">
-                      <span className="list-title">
+                      <RowSubject onClick={() => setEndpointEditing(endpoint)} title="编辑接口">
                         {endpoint.name}
                         {endpoint.enabled ? null : <span className="badge neutral" style={{ marginLeft: 6 }}>已停用</span>}
-                      </span>
+                      </RowSubject>
                       <span className="list-meta">
                         <span className="mono">{endpoint.url}</span>
                         {endpoint.tokenRef ? <span>令牌 {endpoint.tokenRef}</span> : null}
                       </span>
                     </span>
-                    <button type="button" className="btn btn-sm" onClick={() => setEndpointEditing(endpoint)}>
-                      编辑
-                    </button>
                     <button
                       type="button"
                       className="icon-btn"
@@ -346,7 +337,7 @@ export function DeliveryPage() {
 
           <Card
             title="通知渠道"
-            sub="投递内容到 Webhook 或飞书；地址只回传主机，密钥不出服务端"
+            sub="投递内容至 Webhook 或飞书；地址仅回传主机，密钥不出服务端"
             action={
               <button type="button" className="btn btn-sm" onClick={() => setChannelEditing("new")}>
                 <IconPlus size={12} /> 新增渠道
@@ -355,19 +346,19 @@ export function DeliveryPage() {
             flush
           >
             {channels.length === 0 ? (
-              <Empty title="还没有通知渠道" text="填一个 Webhook 地址或飞书机器人地址即可。" />
+              <Empty title="暂无通知渠道" text="填写 Webhook 地址或飞书机器人地址。" />
             ) : (
               <div className="list">
                 {channels.map((channel) => (
                   <div className="list-row" key={channel.id}>
                     <span className="list-main">
-                      <span className="list-title">
+                      <RowSubject onClick={() => setChannelEditing(channel)} title="编辑渠道">
                         {channel.name}
                         <span className="badge neutral" style={{ marginLeft: 6 }}>
                           {channel.kind === "feishu" ? "飞书" : "Webhook"}
                         </span>
                         {channel.enabled ? null : <span className="badge neutral" style={{ marginLeft: 6 }}>已停用</span>}
-                      </span>
+                      </RowSubject>
                       <span className="list-meta">
                         <span className="mono">{String(channel.settings?.url ?? "—")}</span>
                       </span>
@@ -379,9 +370,6 @@ export function DeliveryPage() {
                       onClick={() => void act("连通检测", () => testDeliveryChannel(channel.id))}
                     >
                       检测
-                    </button>
-                    <button type="button" className="btn btn-sm" onClick={() => setChannelEditing(channel)}>
-                      编辑
                     </button>
                     <button
                       type="button"
@@ -590,7 +578,7 @@ function RuleModal({
 
   async function save() {
     if (!listenerId) {
-      notify("warn", "先选择要监听的信源或计划");
+      notify("warn", "请选择要监听的信源或计划");
       return;
     }
     if (!chosen.length) {
@@ -622,7 +610,7 @@ function RuleModal({
   return (
     <Modal
       title={rule ? "编辑自动投递规则" : "新建自动投递规则"}
-      sub="监听对象的新增内容会按目标投递；计划按它包含的信源计算"
+      sub="监听对象的新增内容按目标投递；计划按其包含的信源计算"
       onClose={onClose}
       wide
       footer={
@@ -731,7 +719,7 @@ function EndpointModal({ endpoint, onClose, onDone }: { endpoint: DeliveryEndpoi
   return (
     <Modal
       title={endpoint ? "编辑外部接口" : "新增外部接口"}
-      sub="提交体为 JSON：title、kind、items；令牌只保存环境变量名"
+      sub="提交体为 JSON：title、kind、items；令牌仅保存环境变量名"
       onClose={onClose}
       footer={
         <>
@@ -798,7 +786,7 @@ function ChannelModal({
   return (
     <Modal
       title={channel ? "编辑通知渠道" : "新增通知渠道"}
-      sub="Webhook 按 JSON 提交；飞书用机器人地址。令牌密钥不进备份、不回传。"
+      sub="Webhook 按 JSON 提交；飞书使用机器人地址。令牌密钥不进备份、不回传。"
       onClose={onClose}
       footer={
         <>
@@ -821,7 +809,7 @@ function ChannelModal({
             <option value="feishu">飞书机器人</option>
           </select>
         </Field>
-        <Field label="投递地址" hint="保存后只回传主机，路径与密钥留在服务端">
+        <Field label="投递地址" hint="保存后仅回传主机，路径与密钥保留在服务端">
           <input
             className="input mono"
             value={url}

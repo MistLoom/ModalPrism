@@ -1,3 +1,5 @@
+import { t } from "./dictionary";
+
 export function relative(value?: string | null): string {
   if (!value) return "—";
   const at = Date.parse(value);
@@ -95,20 +97,15 @@ export function statusTone(status?: string | null): "ok" | "warn" | "bad" | "inf
   }
 }
 
-const STATUS_LABELS: Record<string, string> = {
+/** 字典未收录的状态补充文案（运行/发布/审核等界面状态，不属于任务状态域）。 */
+const STATUS_FALLBACK: Record<string, string> = {
   online: "在线",
   offline: "离线",
-  degraded: "能力受限",
   maintenance: "维护中",
   healthy: "正常",
-  failed: "失败",
   suspended: "已暂停",
   paused: "暂停",
-  queued: "排队",
-  running: "执行中",
   cancelling: "取消中",
-  cancelled: "已取消",
-  succeeded: "成功",
   partiallySucceeded: "部分成功",
   awaitingReview: "待审核",
   approved: "已批准",
@@ -130,38 +127,68 @@ const STATUS_LABELS: Record<string, string> = {
   sent: "已发送",
 };
 
+/** 状态文案：字典优先，补充表兜底，最后回落原值。 */
 export function statusLabel(status?: string | null): string {
   if (!status) return "未知";
-  return STATUS_LABELS[status] ?? status;
+  return t("task.status", status, STATUS_FALLBACK[status] ?? status);
 }
 
+/** 操作/任务种类：先按任务值域翻，再按操作与事件值域翻，最后回落原值。 */
 export function kindLabel(kind: string): string {
-  return (
-    {
-      collection: "采集",
-      maintenance: "维护",
-      sourceAnalysis: "信源分析",
-      adapterDraft: "适配器草稿",
-      adapterApprove: "适配器批准",
-    }[kind] ?? kind
-  );
+  return t("task.kind", kind, t("operation.kind", kind, kind));
 }
 
-/** 内容形态的用户可见名称；未知形态原样保留。 */
+/** 日志级别：trace/debug/info/warn/error 的中文名。 */
+export function levelLabel(level?: string | null): string {
+  if (!level) return "—";
+  return t("log.level", level, level);
+}
+
+/** 框架监测事件的种类与相位。 */
+export function monitorKindLabel(kind?: string | null): string {
+  if (!kind) return "—";
+  return t("monitor.kind", kind, kind);
+}
+
+export function monitorPhaseLabel(phase?: string | null): string {
+  if (!phase) return "";
+  return t("monitor.phase", phase, phase);
+}
+
+/** 监测事件主体：`实例.方法` 拆开后各自翻译，未收录的部分保留原值。 */
+export function monitorAbilityLabel(instance?: string | null, method?: string | null): string {
+  const ability = instance ? t("ability", instance, instance) : "";
+  const action = method ? t("ability.method", method, method) : "";
+  return [ability, action].filter(Boolean).join(" · ");
+}
+
+/** 操作过程事件（已受理、成功、请求取消等）。 */
+export function operationEventLabel(kind?: string | null): string {
+  if (!kind) return "—";
+  return t("operation.event", kind, kind);
+}
+
+/** 观测流名称：logs / events / audit。 */
+export function streamLabel(stream?: string | null): string {
+  if (!stream) return "—";
+  return t("log.stream", stream, stream);
+}
+
+/** 操作关联资源种类：source、contentBatch 等。 */
+export function refKindLabel(kind?: string | null): string {
+  if (!kind) return "—";
+  return t("ref.kind", kind, kind);
+}
+
+/** 计划命中限额/停止策略的原因。 */
+export function stopReasonLabel(reason?: string | null): string {
+  if (!reason) return "—";
+  return t("source.stopReason", reason, reason);
+}
+
+/** 内容形态的用户可见名称：先按数据面变体翻，再按数据面类型翻。 */
 export function contentKindLabel(kind: string): string {
-  return (
-    {
-      discovery: "采集条目",
-      article: "文章",
-      hotlist: "热榜",
-      struct: "结构化对象",
-      structured: "结构化对象",
-      image: "图片",
-      audio: "音频",
-      video: "视频",
-      document: "文档",
-    }[kind] ?? kind
-  );
+  return t("facet.variant", kind, t("facet.kind", kind, kind));
 }
 
 export function errorHint(error: unknown): string | undefined {

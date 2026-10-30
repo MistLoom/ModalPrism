@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://spectrum.ieee.org/feeds/feed.rss"
+admission: {}
+description: IEEE 旗舰工程与技术杂志的最新内容。
+id: source/ieee-spectrum
+kind: source
+labels:
+  domain: 科技
+  tier: T1
+  topic: 工程
+name: IEEE Spectrum
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_tech

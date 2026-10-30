@@ -23,7 +23,7 @@ pub fn routes() -> Router<Shared> {
         .route("/parse", post(parse_input))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FetchBody {
     url: String,
@@ -33,9 +33,17 @@ struct FetchBody {
 
 /// `POST /fetch`：URL → 正文。回环内自动透传（遵循本机回环约束）。
 async fn fetch_url(
-    State(_state): State<Shared>,
+    State(state): State<Shared>,
     Json(body): Json<FetchBody>,
 ) -> Result<Response, ApiError> {
+    let payload = fetch_value(&state, serde_json::to_value(&body).unwrap_or_default()).await?;
+    Ok(util::ok(&payload))
+}
+
+/// 取数的可复用入口：工具面的 `tool.fetch` 与 `POST /fetch` 走同一实现。
+pub(crate) async fn fetch_value(_state: &Shared, body: Value) -> Result<Value, ApiError> {
+    let body: FetchBody = serde_json::from_value(body)
+        .map_err(|error| ApiError::validation("body", "invalid", error.to_string()))?;
     let url = body.url.trim();
     let parsed =
         url::Url::parse(url).map_err(|_| ApiError::validation("url", "invalid", "URL 无法解析"))?;
@@ -72,16 +80,16 @@ async fn fetch_url(
         .cloned()
         .collect::<Vec<u8>>();
     let text = String::from_utf8_lossy(&text).into_owned();
-    Ok(util::ok(&json!({
+    Ok(json!({
         "url": parsed.as_str(),
         "status": status,
         "contentType": content_type,
         "truncated": text.len() as u64 >= limit,
         "text": text,
-    })))
+    }))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ParseBody {
     #[serde(default)]
@@ -99,6 +107,14 @@ async fn parse_input(
     State(state): State<Shared>,
     Json(body): Json<ParseBody>,
 ) -> Result<Response, ApiError> {
+    let payload = parse_value(&state, serde_json::to_value(&body).unwrap_or_default()).await?;
+    Ok(util::ok(&payload))
+}
+
+/// 识别的可复用入口：工具面的 `tool.parse` 与 `POST /parse` 走同一实现。
+pub(crate) async fn parse_value(state: &Shared, body: Value) -> Result<Value, ApiError> {
+    let body: ParseBody = serde_json::from_value(body)
+        .map_err(|error| ApiError::validation("body", "invalid", error.to_string()))?;
     let text = if let Some(url) = body.url.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
         let fetch: Value = serde_json::from_value(json!({ "url": url }))
             .map_err(|error| ApiError::internal(format!("请求构造失败: {error}")))?;
@@ -129,7 +145,7 @@ async fn parse_input(
     let result = hook(&args)
         .await
         .map_err(|error| ApiError::dependency(error).retryable())?;
-    Ok(util::ok(&result))
+    Ok(result)
 }
 
 async fn fetch_text(url: &str) -> Result<String, ApiError> {

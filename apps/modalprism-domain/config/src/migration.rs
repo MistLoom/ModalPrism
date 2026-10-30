@@ -227,6 +227,36 @@ pub fn migrate_schedules_to_plans(dir: &Path, options: &LoadOptions) -> Result<u
     Ok(moved)
 }
 
+/// 初始数据兜底：把内置信源里遗留的 `schedule` 摘掉，**不新建计划**。
+///
+/// 自带计划只保留少量示例（见 `config/plans`），节律归计划表达：没被示例计划
+/// 覆盖的信源不参与调度，用户按需在计划页自建。老配置（或旧出厂基线）里仍带
+/// `schedule` 的内置源如果原样留着，规划器会走兼容路径就地合成隐藏计划、按源
+/// 启用状态自动采集——正是「没有计划却在采集」的来源，所以这里只做剥离。
+pub(crate) fn strip_builtin_schedules(
+    dir: &Path,
+    options: &LoadOptions,
+    slugs: &[&str],
+) -> Result<usize, Error> {
+    let entries = author::entries(dir, "source")?;
+    let mut writes: Vec<AtomicWrite> = Vec::new();
+    for entry in &entries {
+        if !slugs.contains(&entry.slug.as_str()) || entry.doc.get("schedule").is_none() {
+            continue;
+        }
+        writes.push(AtomicWrite::write(
+            entry.file.clone(),
+            author::to_yaml(&strip_schedule_fields(&entry.doc)),
+        ));
+    }
+    let stripped = writes.len();
+    if writes.is_empty() {
+        return Ok(0);
+    }
+    apply_atomic(dir, options, &writes)?;
+    Ok(stripped)
+}
+
 /// dry-run：不写盘，返回将要生成的计划文档（供迁移前后计划视图等价性断言）。
 pub fn plan_schedule_migration(dir: &Path) -> Result<Vec<Value>, Error> {
     let mut out = Vec::new();

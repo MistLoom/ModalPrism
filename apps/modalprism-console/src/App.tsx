@@ -18,6 +18,7 @@ import {
 } from "./components/icons";
 import { Field, Loading, Modal, useUi } from "./components/ui";
 import { createProject, systemOverview, systemStatus } from "./lib/api";
+import { loadDictionary } from "./lib/dictionary";
 import { ProjectProvider, useCurrentProject } from "./lib/project";
 import { navigate, pageLabel, ROUTES, useRoute, type PageId } from "./lib/router";
 import { ContentPage } from "./pages/Content";
@@ -52,6 +53,7 @@ interface Badges {
   sources: number;
   attention: number;
   tasks: number;
+  notifications: number;
 }
 
 export default function App() {
@@ -69,10 +71,15 @@ function Shell() {
   useDesktopNotifications();
   const [online, setOnline] = useState<boolean | null>(null);
   const [generation, setGeneration] = useState<number | null>(null);
-  const [badges, setBadges] = useState<Badges>({ sources: 0, attention: 0, tasks: 0 });
+  const [badges, setBadges] = useState<Badges>({ sources: 0, attention: 0, tasks: 0, notifications: 0 });
   const [palette, setPalette] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [, setDictionaryReady] = useState(false);
   const view = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // 字典：启动拉一次，落地后重渲染，详情里的程序值才能被翻译。
+    void loadDictionary().then(() => setDictionaryReady(true));
+  }, []);
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -92,6 +99,7 @@ function Shell() {
           sources: overview.counts.sources,
           attention: overview.counts.attention,
           tasks: overview.counts.tasksQueued + overview.counts.tasksRunning,
+          notifications: overview.counts.unreadNotifications,
         });
       } catch {
         // 概览失败不改变在线状态。
@@ -149,6 +157,8 @@ function Shell() {
                   <span className={`nav-badge${badges.attention ? " is-alert" : ""}`}>{badges.attention || badges.sources}</span>
                 ) : route.id === "tasks" && badges.tasks ? (
                   <span className="nav-badge">{badges.tasks}</span>
+                ) : route.id === "notifications" && badges.notifications ? (
+                  <span className="nav-badge is-alert">{badges.notifications}</span>
                 ) : null
               }
             />
@@ -160,7 +170,7 @@ function Shell() {
         </nav>
         <div className="rail-foot">
           <span>
-            配置代际 <strong>{generation === null ? "—" : `G-${generation}`}</strong>
+            配置版本 <strong>{generation === null ? "—" : `G-${generation}`}</strong>
           </span>
           <span>仅本机访问 · 无远程认证</span>
         </div>
@@ -196,7 +206,7 @@ function Shell() {
             <div className="offline-bar" role="status">
               <IconAlert size={16} />
               <span>
-                collector 不可达。只读外壳仍可打开，但不会伪造业务数据；确认 <code>modalprism-collector</code> 已启动后会自动恢复。
+                collector 不可达。只读外壳仍可打开，但不含业务数据；确认 <code>modalprism-collector</code> 已启动后自动恢复。
               </span>
             </div>
           ) : null}
@@ -248,7 +258,7 @@ function QuickProjectButton() {
       const project = await createProject({ name: trimmed });
       await reload();
       setCurrentProjectId(project.id);
-      notify("ok", "项目已创建并切换", `${project.name} · 新建的信源与运行数据自动归入本项目`);
+      notify("ok", "项目已创建并切换", `${project.name} · 新建信源与运行数据归属本项目`);
       setName("");
       setOpen(false);
     } catch (problem) {
@@ -266,7 +276,7 @@ function QuickProjectButton() {
       {open ? (
         <Modal
           title="新建项目"
-          sub="只填项目名即可；之后新建的信源、计划与内容自动归入本项目。"
+          sub="仅需填写项目名；新建信源、计划与内容归属本项目。"
           onClose={() => setOpen(false)}
           footer={
             <>
@@ -320,7 +330,7 @@ function Page({ page, online }: { page: PageId; online: boolean | null }) {
           <div className="page-head-text">
             <div className="kicker">{page} · 离线</div>
             <h1 className="page-title">{pageLabel(page)}</h1>
-            <p className="page-lede">Node 进程可达但 collector 未就绪。恢复连接后本页会重新读取业务数据。</p>
+            <p className="page-lede">Node 进程可达，collector 未就绪。连接恢复后重新加载数据。</p>
           </div>
         </header>
         <div className="card">

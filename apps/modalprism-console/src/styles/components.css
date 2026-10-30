@@ -729,6 +729,39 @@ button.list-row:hover {
   white-space: nowrap;
 }
 
+/* 统一列表主体：标题即入口，可键盘激活；不再另外挂「详情」按钮。 */
+.row-subject {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.row-subject:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.row-subject:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .list-meta {
   display: flex;
   align-items: center;
@@ -742,6 +775,12 @@ button.list-row:hover {
   display: grid;
   gap: 1px;
   min-width: 0;
+}
+
+/* 单元主区域是 grid：徽标不该被拉伸到整列宽，按内容宽度排。 */
+.cell-main > .badge,
+.cell-main > .tag {
+  justify-self: start;
 }
 
 .scrim {

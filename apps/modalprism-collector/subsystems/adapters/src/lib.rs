@@ -6,6 +6,7 @@ mod builtin;
 mod compile;
 mod error;
 mod model;
+mod prism;
 mod registry;
 mod route;
 mod run;
@@ -17,6 +18,9 @@ pub use compile::{
     IdentityHit, IdentityView, MapIdentities, compile,
 };
 pub use error::AdapterError;
+pub use prism::{
+    PRISM_INPUT_LIMIT, Prism, ScanOutcome, ScanRegion, TypeCount, prism_input,
+};
 pub use model::{
     AdapterInput, AdapterMeta, AdapterRole, ContentOutput, Declared, Detection, DiscoverOutput,
     Discovery, DiscoveryHints, DraftBody, FacetDraft, Feedback, Follow, InputSelector, LinkDraft,
@@ -32,5 +36,5 @@ pub use traits::{ContentAdapter, Detector, SearchAdapter};
 
 pub use builtin::{
     BasicDetector, FeedFulltext, FeedItems, HtmlList, JsonLd, JsonList, LinkDiscovery, PageFields,
-    Readability,
+    PrismDetector, Readability, SmartContent, SmartDiscover,
 };

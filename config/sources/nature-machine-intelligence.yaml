@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.nature.com/natmachintell.rss"
+admission: {}
+description: Nature 旗下机器智能期刊的最新目录。
+id: source/nature-machine-intelligence
+kind: source
+labels:
+  domain: AI
+  tier: T1
+  topic: 期刊
+name: Nature Machine Intelligence
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_ai_research

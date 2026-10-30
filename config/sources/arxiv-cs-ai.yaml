@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://rss.arxiv.org/rss/cs.AI"
+admission: {}
+description: arXiv 人工智能分类的每日新论文。
+id: source/arxiv-cs-ai
+kind: source
+labels:
+  domain: AI
+  tier: T1
+  topic: 论文
+name: arXiv · cs.AI
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_ai_research

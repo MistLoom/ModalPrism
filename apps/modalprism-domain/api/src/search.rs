@@ -255,6 +255,12 @@ async fn run_search(
     State(state): State<Shared>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
+    let payload = search_value(&state, body).await?;
+    Ok(util::ok(&payload))
+}
+
+/// 搜索的可复用入口：工具面的 `tool.search` 与 `POST /search` 走同一实现。
+pub(crate) async fn search_value(state: &Shared, body: Value) -> Result<Value, ApiError> {
     let map = util::object(&body)?;
     util::unknown(map, &["query", "engine", "projectId", "limit"])?;
     let query = util::text(map, "query")?.trim().to_string();
@@ -424,7 +430,7 @@ async fn run_search(
     if !project_id.is_empty() {
         payload["projectId"] = json!(project_id);
     }
-    Ok(util::ok(&payload))
+    Ok(payload)
 }
 
 /// 结构化 412 前置失败：缺什么、去哪配。裸 409 不够，用同一错误码约定。

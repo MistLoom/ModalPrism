@@ -1,0 +1,15 @@
+[package]
+name = "dictionary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "语义字典：把程序值翻译成用户语言"
+publish = false
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

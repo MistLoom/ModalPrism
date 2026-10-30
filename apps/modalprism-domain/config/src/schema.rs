@@ -461,6 +461,8 @@ fn module_schema() -> Value {
             },
             "bindings": {"type": "array", "items": {"type": "string", "pattern": "^binding/"}},
             "sourceType": {"enum": ["feed", "search", "web", "api", "push", "custom"]},
+            // 信源分类：用户自定义的管理分组，与 sourceType 正交；只对 source 开放（见 scope）。
+            "groupId": {"type": "string", "minLength": 1},
             "schema": {"type": "string", "minLength": 1}
         }
     })

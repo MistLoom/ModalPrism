@@ -1,8 +1,6 @@
 id: adapter/json-list
 kind: adapter
 name: JSON 列表
-# 默认适配器示例：JSON 接口信源用这一条按字段路径抽取条目。
-description: 按字段路径从 JSON 响应里抽取条目；JSON 接口、页面内嵌数据信源默认使用。
 implementation: builtin:json-list
 role: search
 consumes:

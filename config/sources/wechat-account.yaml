@@ -30,3 +30,4 @@ pipeline:
 project: proj_default
 shared: true
 sourceType: api
+groupId: grp_builtin_access

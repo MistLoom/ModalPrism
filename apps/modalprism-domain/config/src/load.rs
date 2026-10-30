@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::check::check_modules;
 use crate::error::{Diagnostic, Diagnostics, Error};
 use crate::interpolate::interpolate;
+use crate::layout;
 use crate::merge::{merge, merge_policy, without_identity};
 use crate::node::{Data, Node, leaves};
 use crate::schema::{self, SchemaFailure};
@@ -85,7 +86,20 @@ struct Choice {
 }
 
 pub fn validate(dir: &Path, options: &LoadOptions) -> Result<Snapshot, Error> {
+    validate_with_warnings(dir, options).map(|(snapshot, _)| snapshot)
+}
+
+/// 与 [`validate`] 相同，但把「非声明文件」的提示另外返回。
+///
+/// 配置目录里会出现不属于任何声明类型的东西：已下线功能留下的目录、临时草稿、
+/// 编辑器备份。它们不能让整次加载失败——否则一份杂项文件就升级成「系统起不来」。
+/// 这些位置记一条警告后跳过；只有声明本身的错误才是致命诊断。
+pub fn validate_with_warnings(
+    dir: &Path,
+    options: &LoadOptions,
+) -> Result<(Snapshot, Vec<Diagnostic>), Error> {
     let mut diags = Vec::new();
+    let mut warnings = Vec::new();
     if let Some(name) = &options.overlay {
         if name.is_empty()
             || name.contains('/')
@@ -100,7 +114,7 @@ pub fn validate(dir: &Path, options: &LoadOptions) -> Result<Snapshot, Error> {
         EnvSource::Fixed(map) => map.clone(),
         EnvSource::Process => std::env::vars().collect(),
     };
-    let files = read_tree(dir, options.overlay.as_deref(), &mut diags)?;
+    let files = read_tree(dir, options.overlay.as_deref(), &mut warnings)?;
     let schemas = read_schemas(dir, &mut diags);
     let docs = parse_docs(files, &mut diags);
     if !diags.is_empty() {
@@ -122,7 +136,7 @@ pub fn validate(dir: &Path, options: &LoadOptions) -> Result<Snapshot, Error> {
     if !diags.is_empty() {
         return Err(Error::Invalid(Diagnostics(diags)));
     }
-    Ok(snapshot)
+    Ok((snapshot, warnings))
 }
 
 fn assemble(docs: Vec<Parsed>, diags: &mut Vec<Diagnostic>) -> Option<Built> {
@@ -838,37 +852,17 @@ fn check_id(id: &str, kind: DocKind) -> Result<(), String> {
     Ok(())
 }
 
-/// 不在配置快照内的声明目录。
+/// 不在配置快照内的声明路径。
 ///
-/// 这些目录由专门的领域模块读取，配置加载只负责跳过，避免把它们的形状写进快照 schema。
-pub(crate) fn is_subsystem_dir(logical: &str) -> bool {
-    logical.starts_with("models/")
+/// 具体名单由 [`layout`] 维护：`schemas/` 与 `models/` 是子系统，`workflows/` 是已下线
+/// 功能的遗留。这些位置整棵跳过：加载不为它们的形状负责，也不能因为一个遗留文件让整次
+/// 加载失败。
+fn is_ignored_path(logical: &str) -> bool {
+    layout::is_ignored(logical)
 }
 
 fn kind_of(logical: &str) -> Result<DocKind, String> {
-    if logical == "system.yaml" || logical == "system.yml" {
-        Ok(DocKind::System)
-    } else if logical.starts_with("defaults/") {
-        Ok(DocKind::Defaults)
-    } else if logical.starts_with("presets/") {
-        Ok(DocKind::Preset)
-    } else if logical.starts_with("profiles/") {
-        Ok(DocKind::Profile)
-    } else if logical.starts_with("accessors/") {
-        Ok(DocKind::Accessor)
-    } else if logical.starts_with("adapters/") {
-        Ok(DocKind::Adapter)
-    } else if logical.starts_with("bindings/") {
-        Ok(DocKind::AdapterBinding)
-    } else if logical.starts_with("sources/") {
-        Ok(DocKind::Source)
-    } else if logical.starts_with("plans/") {
-        Ok(DocKind::Plan)
-    } else if logical.starts_with("types/") {
-        Ok(DocKind::Type)
-    } else {
-        Err(format!("未知的配置路径: {logical}"))
-    }
+    layout::kind_of(logical)
 }
 
 fn kind_name(kind: DocKind) -> &'static str {
@@ -1002,10 +996,10 @@ fn diag(file: &str, line: u32, message: impl Into<String>) -> Diagnostic {
 fn read_tree(
     dir: &Path,
     overlay: Option<&str>,
-    diags: &mut Vec<Diagnostic>,
+    warnings: &mut Vec<Diagnostic>,
 ) -> Result<Vec<Input>, Error> {
     let mut out = Vec::new();
-    walk(dir, dir, overlay, &mut out, diags)?;
+    walk(dir, dir, overlay, &mut out, warnings)?;
     Ok(out)
 }
 
@@ -1014,7 +1008,7 @@ fn walk(
     dir: &Path,
     overlay: Option<&str>,
     out: &mut Vec<Input>,
-    diags: &mut Vec<Diagnostic>,
+    warnings: &mut Vec<Diagnostic>,
 ) -> Result<(), Error> {
     let entries = fs::read_dir(dir).map_err(|source| Error::Read {
         path: dir.display().to_string(),
@@ -1036,13 +1030,22 @@ fn walk(
             if rel == "overlays" && overlay.is_none() {
                 continue;
             }
-            walk(root, &path, overlay, out, diags)?;
+            // 非声明子树整棵跳过，不进去报错。
+            if layout::is_ignored(&rel) {
+                continue;
+            }
+            walk(root, &path, overlay, out, warnings)?;
             continue;
         }
         let rel = rel_path(root, &path);
+        // `dictionary.yaml` 是语义字典覆盖，不描述任何能力声明：由领域 API 的 `/dictionary`
+        // 直接读取，配置加载只跳过，不把它写进配置快照。
+        if rel.rsplit('/').next() == Some("dictionary.yaml") {
+            continue;
+        }
         // `schemas/` 由专门的读取器处理；子系统目录由各自的领域模块读取，
         // 配置加载只负责跳过，避免把它们的形状写进快照 schema。
-        if rel.starts_with("schemas/") || is_subsystem_dir(&rel) {
+        if is_ignored_path(&rel) {
             continue;
         }
         if let Some(rest) = rel.strip_prefix("overlays/") {
@@ -1053,7 +1056,7 @@ fn walk(
                 continue;
             }
             if kind_of(tail).is_err() {
-                diags.push(diag(&rel, 1, format!("未知的配置路径: {tail}")));
+                warnings.push(diag(&rel, 1, format!("未知的配置路径，已跳过: {tail}")));
                 continue;
             }
             let text = fs::read_to_string(&path).map_err(|source| Error::Read {
@@ -1072,7 +1075,7 @@ fn walk(
             continue;
         }
         if kind_of(&rel).is_err() {
-            diags.push(diag(&rel, 1, format!("未知的配置路径: {rel}")));
+            warnings.push(diag(&rel, 1, format!("未知的配置路径，已跳过: {rel}")));
             continue;
         }
         let text = fs::read_to_string(&path).map_err(|source| Error::Read {

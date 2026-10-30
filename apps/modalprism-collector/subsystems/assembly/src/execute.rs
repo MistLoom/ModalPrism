@@ -32,6 +32,8 @@ pub struct FetchState {
     pub proxy: String,
     pub browser: PathBuf,
     pub timeout: std::time::Duration,
+    /// 结构化识别引擎（RawPrism）。未装载时采集按基础检测降级。
+    pub prism: Option<Arc<dyn adapters::Prism>>,
 }
 
 pub(crate) struct NoSession;
@@ -147,7 +149,22 @@ pub async fn fetch(
         .unwrap_or(Value::Array(Vec::new()));
     let (ops, follow_requests) =
         if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
-            (raw_ops(&envelopes)?, Vec::new())
+            // 未声明管道不等于放弃解析：默认交给智能适配器（识别可用时按区域切分），
+            // 失败再退回「只存原文」，采集不因适配失败而中断。
+            match adapted_ops(
+                state,
+                task,
+                &module,
+                &envelopes,
+                &default_pipeline(task.reason),
+                initial,
+                resource.as_ref(),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => (raw_ops(&envelopes)?, Vec::new()),
+            }
         } else {
             adapted_ops(
                 state,
@@ -269,7 +286,20 @@ pub(crate) async fn inbound_ops(
         .cloned()
         .unwrap_or_else(|| Value::Array(Vec::new()));
     if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
-        let mut ops = raw_ops(envelopes)?;
+        let mut ops = match adapted_ops(
+            state,
+            &task,
+            module,
+            envelopes,
+            &default_pipeline(task.reason),
+            false,
+            None,
+        )
+        .await
+        {
+            Ok((ops, _)) => ops,
+            Err(_) => raw_ops(envelopes)?,
+        };
         stamp_source(&mut ops, task.source_id.as_str());
         Ok(ops)
     } else {
@@ -277,6 +307,16 @@ pub(crate) async fn inbound_ops(
             .await
             .map(|(ops, _)| ops)
     }
+}
+
+/// 未声明管道时的默认管道：发现阶段用智能发现，跟进（详情）阶段用智能拆分。
+fn default_pipeline(reason: TaskReason) -> Value {
+    let adapter = if reason == TaskReason::Follow {
+        "adapter/smart-content"
+    } else {
+        "adapter/smart-discover"
+    };
+    serde_json::json!([{ "run": [adapter] }])
 }
 
 fn raw_ops(envelopes: &[RawEnvelope]) -> Result<Vec<Op>, Classified> {
@@ -293,13 +333,9 @@ fn raw_ops(envelopes: &[RawEnvelope]) -> Result<Vec<Op>, Classified> {
             .final_locator
             .clone()
             .unwrap_or_else(|| envelope.locator.clone());
-        let url = match located {
-            Locator::Url { url } => url,
-            Locator::Query { query } => query,
-            Locator::ApiEndpoint { endpoint } => endpoint,
-            Locator::PushChannel { channel } => format!("push://{channel}"),
+        let Some(identity) = document_identity(&located) else {
+            continue;
         };
-        let identity = format!("url:{url}");
         IdentityKey::parse(&identity).map_err(|_| classified(ErrorClass::Permanent, "identity"))?;
         let alias = format!("p{index}");
         ops.push(Op::Ensure {
@@ -323,6 +359,18 @@ fn raw_ops(envelopes: &[RawEnvelope]) -> Result<Vec<Op>, Classified> {
         });
     }
     Ok(ops)
+}
+
+/// 文档身份键：URL 与接口按 `url:`，推送频道按 `ext:push:`。
+///
+/// 查询类定位器没有可用的去重键，返回 None：宁可不建资源，也不编造一个跨轮次不稳定的键。
+fn document_identity(locator: &Locator) -> Option<String> {
+    match locator {
+        Locator::Url { url } => Some(format!("url:{url}")),
+        Locator::ApiEndpoint { endpoint } => Some(format!("url:{endpoint}")),
+        Locator::PushChannel { channel } => Some(format!("ext:push:{channel}")),
+        Locator::Query { .. } => None,
+    }
 }
 
 /// R1–R3：把 pipeline 里的 `binding: "binding/x"` 引用在运行期展开为内联步骤。
@@ -425,8 +473,27 @@ async fn adapted_ops(
     }
     let admission = Admission::from_value(&merged_admission(&state.snapshot, task, module))
         .map_err(|error| classified(error.class(), error.to_string()))?;
+    let prism = state.prism.clone();
+    let detector = if prism.is_some() {
+        DetectorChoice::Prism
+    } else {
+        DetectorChoice::Basic
+    };
+    // 首次采集还没有 rid：先 Ensure 一份文档资源（别名 p0），内容面与链接面落到该别名上。
+    let (resource_alias, ensure) = match (resource, document_identity(&task.locator)) {
+        (Some(_), _) | (None, None) => (None, None),
+        (None, Some(identity)) => (
+            Some("p0".to_string()),
+            Some(Op::Ensure {
+                identity,
+                ns: None,
+                labels: BTreeMap::new(),
+                r#as: "p0".into(),
+            }),
+        ),
+    };
     let output = run(
-        &Registry::builtins(),
+        &Registry::builtins_with(prism.clone()),
         adapters::RunRequest {
             parts,
             pipeline: rules,
@@ -434,9 +501,10 @@ async fn adapted_ops(
             source: source_view(task.source_id.as_str(), accessor_of(task, module).as_str())
                 .map_err(|error| classified(error.class(), error.to_string()))?,
             resource: resource.cloned(),
+            resource_alias,
             origin: None,
             locator: task.locator.clone(),
-            detector: DetectorChoice::Basic,
+            detector,
             admission,
             now: strata_model::Timestamp::now(),
             initial,
@@ -447,11 +515,16 @@ async fn adapted_ops(
             },
             specs,
             identities: empty_identities(),
+            prism,
         },
     )
     .await
     .map_err(|error| classified(error.class(), error.to_string()))?;
     let mut ops = output.changeset.ops;
+    // 别名要先于落到它上面的数据面进入变更集。
+    if let Some(ensure) = ensure {
+        ops.insert(0, ensure);
+    }
     stamp_source(&mut ops, task.source_id.as_str());
     Ok((ops, output.follows))
 }

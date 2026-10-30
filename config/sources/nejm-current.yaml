@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.nejm.org/action/showFeed?jc=nejm&type=etoc&feed=rss"
+admission: {}
+description: NEJM 最新一期目录。
+id: source/nejm-current
+kind: source
+labels:
+  domain: 医疗
+  tier: T1
+  topic: 期刊
+name: New England Journal of Medicine
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_health

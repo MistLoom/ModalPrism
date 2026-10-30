@@ -190,6 +190,65 @@ async fn preview_counts(state: &AppState, domains: &[String]) -> Result<Value, A
     Ok(Value::Object(out))
 }
 
+/// 配置域现状：可预演、可核算的那部分。
+///
+/// 配置文件不是清空域（它只能被出厂基线替换），但用户有权在执行前知道「会重建多少
+/// 声明、会退役哪些遗留目录、出厂基线在不在」。
+async fn config_state(state: &AppState) -> Value {
+    let root = &state.config_dir;
+    let mut declarations = 0u64;
+    for name in config::declaration_paths() {
+        let path = root.join(name);
+        if path.is_file() {
+            declarations += 1;
+        } else if path.is_dir() {
+            declarations += count_yaml_files(&path).await;
+        }
+    }
+    let retired: Vec<Value> = config::retired_paths()
+        .into_iter()
+        .filter(|name| root.join(name).exists())
+        .map(|name| json!({"path": name, "since": config::retired_since(name)}))
+        .collect();
+    let baseline = factory_root(&state.data_dir).await.join("config");
+    let baseline_available =
+        baseline.is_dir() && config::validate(&baseline, &crate::catalog::options()).is_ok();
+    json!({
+        "declarations": declarations,
+        "retiredPaths": retired,
+        "baselineAvailable": baseline_available,
+    })
+}
+
+/// 递归数 YAML 声明文件；读不到的目录直接跳过，预演不因为权限问题失败。
+async fn count_yaml_files(path: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+            continue;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata().await else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+            {
+                total += 1;
+            }
+        }
+    }
+    total
+}
+
 fn dependencies(domains: &[String]) -> Vec<Value> {
     let mut added = Vec::new();
     if domains.iter().any(|domain| domain == "content") {
@@ -269,6 +328,8 @@ async fn build_preview(
         "etag": etag.trim_matches('"'),
         "generation": state.services.config_generation(),
         "storageReachable": storage_reachable,
+        // 配置不是清空域：这里给出「重建哪些、退役哪些、基线在不在」供执行前核对。
+        "config": config_state(state).await,
         "createdAt": now(),
         "irreversible": true,
         "note": "执行前请确认范围；执行期间进入维护模式。",
@@ -573,7 +634,10 @@ async fn run_reset(
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     report["cancelledTasks"] = json!(cancelled_tasks);
-    for domain in domains {
+    // 排空结束才真正开始清数据：先推一次进度，让控制台知道已经跨过等待阶段。
+    crate::operations::progress(state, operation_id, 0.2).await;
+    let total = domains.len().max(1);
+    for (index, domain) in domains.iter().enumerate() {
         if crate::operations::check_cancel(state, operation_id)
             .await
             .is_err()
@@ -581,6 +645,9 @@ async fn run_reset(
             cancelled = true;
             break;
         }
+        // 按域推进：任务卡片的进度条能看得出正在清哪一段。
+        crate::operations::progress(state, operation_id, 0.2 + 0.5 * index as f64 / total as f64)
+            .await;
         if factory && domain == "operations" {
             continue;
         }
@@ -603,23 +670,42 @@ async fn run_reset(
             }
         }
     }
+    crate::operations::progress(state, operation_id, 0.72).await;
     if factory {
+        // 记下恢复前还欠清理的已下线目录：它们会被基线替换与退役清理一并抹掉。
+        let retired_before: Vec<&str> = config::retired_paths()
+            .into_iter()
+            .filter(|name| state.config_dir.join(name).exists())
+            .collect();
+        report["retiredConfigPaths"] = json!(retired_before);
         state
             .store
             .reset_documents_keep_operation(operation_id)
             .await?;
-        restore_factory_config(state).await?;
-        state.services.config_reload()?;
-        crate::settings::seed(state).await?;
-        crate::observe::append_audit(
-            state,
-            "maintenance.factoryReset",
-            "succeeded",
-            "恢复出厂设置",
-            json!({"operationId": operation_id}),
-            Some(crate::observe::Refs::op(operation_id)),
-        )
-        .await?;
+        // 先恢复配置目录：内置资源（提示词、Skill、模型）要从恢复后的声明里重建。
+        if let Err(error) = restore_factory_config(state, operation_id).await {
+            failed.push(json!({"domain": "config", "code": error.code, "message": error.message}));
+        }
+        // 内置资源与设置是运行底线：不管配置恢复成败都要重建，不能让系统落到
+        // 「设置尚未初始化」或没有默认项目的裸状态。
+        if let Err(error) = crate::settings::seed(state).await {
+            failed.push(json!({"domain": "userSettings", "code": error.code, "message": error.message}));
+        }
+        if let Err(error) = crate::projects::seed(state).await {
+            failed.push(json!({"domain": "projects", "code": error.code, "message": error.message}));
+        }
+        if failed.is_empty() {
+            crate::observe::append_audit(
+                state,
+                "maintenance.factoryReset",
+                "succeeded",
+                "恢复出厂设置",
+                json!({"operationId": operation_id}),
+                Some(crate::observe::Refs::op(operation_id)),
+            )
+            .await?;
+        }
+        crate::operations::progress(state, operation_id, 0.9).await;
     }
     report["succeeded"] = json!(succeeded);
     report["failed"] = json!(failed);
@@ -647,6 +733,8 @@ async fn run_reset(
     let residual_clear = residual.values().all(|value| value.as_u64() == Some(0));
     report["residual"] = Value::Object(residual);
     report["finishedAt"] = json!(now());
+    // 恢复后的配置域现状：声明数量、遗留目录（应为空）、基线是否可用。
+    report["config"] = config_state(state).await;
     let staging_files = dir_stats(&state.data_dir.join("staging")).await.0;
     let staging_clean = !domains.iter().any(|domain| domain == "staging") || staging_files == 0;
     let indexes_consistent = state.services.strata().summary().await.is_ok();
@@ -856,18 +944,117 @@ pub(crate) async fn ensure_factory_snapshot(state: &AppState) -> Result<(), ApiE
     if root.exists() {
         return Ok(());
     }
+    // 只有通过校验的配置才配当出厂基线：把一份坏配置冻成快照，恢复出厂就永远失败。
+    if let Err(error) = config::validate(&state.config_dir, &crate::catalog::options()) {
+        tracing::warn!(detail = %error, "当前配置未通过校验，暂不建立出厂快照");
+        return Ok(());
+    }
     copy_dir(&state.config_dir, &root).await?;
+    // 基线里不留已下线目录的副本，否则它会被恢复出厂一次次复制回来。
+    strip_retired(&root).await;
     Ok(())
 }
 
-async fn restore_factory_config(state: &AppState) -> Result<(), ApiError> {
+/// 从配置副本里剔除已下线目录。
+///
+/// 出厂基线可能早于退役登记：`workflows/` 这类历史目录会原样藏在快照里，清理必须
+/// 覆盖「即将落位的副本」，不能只依赖启动时的清理。
+async fn strip_retired(root: &Path) {
+    for rel in config::retired_paths() {
+        let path = root.join(rel);
+        if !path.exists() {
+            continue;
+        }
+        let outcome = if path.is_dir() {
+            tokio::fs::remove_dir_all(&path).await
+        } else {
+            tokio::fs::remove_file(&path).await
+        };
+        match outcome {
+            Ok(()) => tracing::warn!(path = %path.display(), "已下线配置目录已从副本剔除"),
+            Err(error) => {
+                tracing::error!(path = %path.display(), detail = %error, "剔除已下线目录失败")
+            }
+        }
+    }
+}
+
+/// 用出厂快照替换配置目录并重新加载。
+///
+/// 顺序保证「要么换成能加载的出厂配置，要么保留原配置」：先校验快照，再复制到临时目录校验
+/// 副本，最后才清空 live 目录落位；落位或热加载失败时用替换前的备份回滚并再次加载。
+/// 恢复出厂本身失败不该把系统变成起不来的状态。
+async fn restore_factory_config(state: &AppState, operation_id: &str) -> Result<(), ApiError> {
     let root = factory_root(&state.data_dir).await.join("config");
-    if !root.exists() {
+    if !root.is_dir() {
         return Err(ApiError::dependency("恢复出厂快照不存在"));
     }
-    remove_dir_contents(&state.config_dir).await?;
-    copy_dir(&root, &state.config_dir).await?;
+    let options = crate::catalog::options();
+    if let Err(error) = config::validate(&root, &options) {
+        tracing::error!(detail = %error, "出厂配置快照无法通过校验");
+        return Err(ApiError::dependency(
+            "出厂配置快照无法通过校验，已保留当前配置",
+        ));
+    }
+    let backup = state
+        .data_dir
+        .join("backup")
+        .join(format!("config-before-factory-{operation_id}"));
+    // 重试会复用同一个操作标识：先清掉上一次留下的副本，避免陈旧文件混入比对。
+    let _ = tokio::fs::remove_dir_all(&backup).await;
+    copy_dir(&state.config_dir, &backup).await?;
+    tracing::info!(path = %backup.display(), "配置已备份");
+    let staging = state
+        .data_dir
+        .join("backup")
+        .join(format!("config-factory-{operation_id}"));
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    if let Err(error) = copy_dir(&root, &staging).await {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(error);
+    }
+    strip_retired(&staging).await;
+    if let Err(error) = config::validate(&staging, &options) {
+        tracing::error!(detail = %error, "出厂配置副本无法通过校验");
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(ApiError::dependency(
+            "出厂配置快照无法通过校验，已保留当前配置",
+        ));
+    }
+    let placed = async {
+        remove_dir_contents(&state.config_dir).await?;
+        copy_dir(&staging, &state.config_dir).await
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    if let Err(error) = placed {
+        tracing::error!(detail = %error.message, "恢复出厂配置落位失败");
+        rollback_config(state, &backup).await;
+        return Err(ApiError::dependency("恢复出厂配置失败，已回滚到原配置"));
+    }
+    if let Err(error) = state.services.config_reload() {
+        tracing::error!(detail = %error, "恢复出厂后热加载失败");
+        rollback_config(state, &backup).await;
+        return Err(ApiError::dependency(
+            "恢复出厂配置后热加载失败，已回滚到原配置",
+        ));
+    }
     Ok(())
+}
+
+/// 用备份覆盖回配置目录并重新加载。回滚自身失败只记日志：此时已没有更安全的动作。
+async fn rollback_config(state: &AppState, backup: &Path) {
+    if let Err(error) = remove_dir_contents(&state.config_dir).await {
+        tracing::error!(detail = %error, "回滚时清空配置目录失败");
+        return;
+    }
+    if let Err(error) = copy_dir(backup, &state.config_dir).await {
+        tracing::error!(detail = %error, "回滚时复制配置失败");
+        return;
+    }
+    if let Err(error) = state.services.config_reload() {
+        tracing::error!(detail = %error, "回滚后热加载失败");
+    }
 }
 
 async fn copy_dir(from: &Path, to: &Path) -> Result<(), ApiError> {

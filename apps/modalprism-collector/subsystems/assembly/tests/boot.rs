@@ -117,6 +117,72 @@ async fn empty_dir_creates_storage_and_keeps_snapshot() {
     );
 }
 
+/// 配置目录坏掉时用出厂快照自愈启动，原配置整份留在 backup 下：
+/// 一份坏文件不该把「系统起不来」变成唯一结果。
+#[tokio::test]
+async fn invalid_config_falls_back_to_factory_snapshot() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    config_dir(&data.path().join("factory").join("config"));
+    fs::write(config.path().join("system.yaml"), "kind: [\n").unwrap();
+    let services = Services::open(data.path(), config.path(), binds())
+        .await
+        .expect("配置损坏时应回退到出厂快照启动");
+    assert_eq!(services.config_generation(), 1);
+    let restored = fs::read_to_string(config.path().join("system.yaml")).unwrap();
+    assert!(restored.contains("preset: standard"), "{restored}");
+    let backups: Vec<_> = fs::read_dir(data.path().join("backup")).unwrap().collect();
+    assert_eq!(backups.len(), 1, "原配置应完整备份");
+}
+
+/// 已下线的配置目录不能只被「跳过」：live 配置与出厂基线里都要真的移走，
+/// 否则恢复出厂会把历史垃圾一次次复制回来。
+#[tokio::test]
+async fn retired_config_dirs_are_moved_out_of_live_and_factory() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let factory = data.path().join("factory").join("config");
+    config_dir(&factory);
+    let body = "id: workflow/1\nkind: workflow\nname: 遗留\n";
+    write(config.path(), "workflows/1.yaml", body);
+    write(&factory, "workflows/1.yaml", body);
+
+    Services::open(data.path(), config.path(), binds())
+        .await
+        .expect("已下线目录不应阻断启动");
+
+    assert!(!config.path().join("workflows").exists(), "live 配置应已退役");
+    assert!(!factory.join("workflows").exists(), "出厂基线应已退役");
+    // 原文件进备份，逐个可找回。
+    let backup = data.path().join("backup");
+    let mut found = 0;
+    for entry in fs::read_dir(&backup).unwrap() {
+        let dir = entry.unwrap().path();
+        if dir.join("workflows").join("1.yaml").is_file() {
+            found += 1;
+        }
+    }
+    assert_eq!(found, 2, "live 与出厂基线各应留一份退役备份");
+}
+
+/// 没有出厂快照可回退时，配置损坏仍然必须报错而不是带病启动。
+#[tokio::test]
+async fn invalid_config_without_factory_snapshot_still_fails() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    fs::write(config.path().join("system.yaml"), "kind: [\n").unwrap();
+    let Err(error) = Services::open(data.path(), config.path(), binds()).await else {
+        panic!("无出厂快照时不应静默启动");
+    };
+    assert!(
+        error.to_string().contains("kind") || error.to_string().contains("system.yaml"),
+        "{error}"
+    );
+}
+
 #[tokio::test]
 async fn failed_reload_keeps_generation() {
     let data = tempfile::tempdir().unwrap();
@@ -642,5 +708,36 @@ async fn long_limit_keeps_the_request_past_thirty_seconds() {
     assert!(
         elapsed > Duration::from_secs(30),
         "45 秒时限应留下超过 30 秒的响应，实际 {elapsed:?}"
+    );
+}
+
+/// 临时采集：首次遇到的 URL 还没有资源，内容面要先落到变更集别名上而不是报「缺少目标资源」。
+#[tokio::test]
+async fn tool_once_previews_facets_without_a_preexisting_resource() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let services = Services::open(data.path(), config.path(), binds())
+        .await
+        .unwrap();
+    let request = assembly::tools::OnceRequest {
+        input: b"<html><body><article><h1>Hi</h1><p>hello</p></article></body></html>".to_vec(),
+        media_type: "text/html".into(),
+        locator: Locator::Url {
+            url: "https://example.com/blog/post".into(),
+        },
+        source_id: "source/tool-preview".into(),
+        mode: assembly::tools::Mode::Preview,
+        pipeline: None,
+        hint: "content".into(),
+    };
+    let value = assembly::tools::once(&services, request).await.unwrap();
+    assert_eq!(value["stored"], false, "{value}");
+    // 本用例未装载识别引擎：允许 degraded，但请求不能因为「没有既有资源」直接失败。
+    assert!(
+        value["facets"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "零产出不是可接受结果: {value}"
     );
 }

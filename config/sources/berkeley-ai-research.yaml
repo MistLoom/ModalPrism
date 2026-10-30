@@ -15,3 +15,4 @@ pipeline:
 project: proj_default
 shared: true
 sourceType: feed
+groupId: grp_builtin_ai_research

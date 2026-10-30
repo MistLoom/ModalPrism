@@ -14,6 +14,7 @@ mod error;
 mod explain;
 mod inspect;
 mod interpolate;
+mod layout;
 mod load;
 mod merge;
 mod migration;
@@ -36,7 +37,8 @@ pub use duration::parse as duration;
 pub use error::{Diagnostic, Diagnostics, Error};
 pub use explain::{FieldOrigin, explain};
 pub use inspect::{domain_of_module, domain_of_path, modules};
-pub use load::{EnvSource, LoadOptions, validate};
+pub use layout::{declaration_paths, retired_kinds, retired_paths, retired_since};
+pub use load::{EnvSource, LoadOptions, validate, validate_with_warnings};
 pub use migration::{
     AtomicWrite, MigrationPlan, SourceMigration, apply_atomic, apply_migration,
     backfill_source_types, migrate_schedules_to_plans, plan_migration, plan_schedule_migration,

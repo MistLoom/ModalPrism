@@ -11,6 +11,7 @@ publish = false
 ability-core.workspace = true
 ability-support.workspace = true
 accessor_probe = { path = "ability/accessor_probe" }
+adapters = { path = "subsystems/adapters" }
 assembly = { path = "subsystems/assembly" }
 async-trait.workspace = true
 axum = "0.8"
@@ -35,6 +36,7 @@ serde_json.workspace = true
 strata_queue = { path = "ability/strata_queue" }
 strata_read = { path = "../../abilitys/data/strata_read" }
 strata_write = { path = "ability/strata_write" }
+tool = { path = "ability/tool" }
 type_article = { path = "../../abilitys/types/type_article" }
 strata-model = { path = "../modalprism-domain/strata-model" }
 surface = { path = "../modalprism-domain/surface" }

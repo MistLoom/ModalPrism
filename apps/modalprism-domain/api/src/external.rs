@@ -98,13 +98,10 @@ fn conventions() -> Value {
 fn cli_items() -> Vec<Value> {
     vec![
         json!({"name": "启动服务", "usage": "modalprism-collector [--data var] [--config config] [--http 127.0.0.1:17880] [--proxy 127.0.0.1:17881] [--push 127.0.0.1:17882]", "summary": "不带动词时启动进程：HTTP 领域 API、代理与推送三个端口"}),
-        json!({"name": "search", "usage": "modalprism-collector search <关键词> [--engine <id>] [--project <项目>]", "summary": "调用 /search，按默认引擎搜索并打印 JSON"}),
-        json!({"name": "fetch", "usage": "modalprism-collector fetch <url>", "summary": "调用 /fetch，取回网页正文"}),
-        json!({"name": "parse", "usage": "modalprism-collector parse <url>", "summary": "调用 /parse，做结构化抽取"}),
-        json!({"name": "project list", "usage": "modalprism-collector project list", "summary": "列出项目"}),
-        json!({"name": "project create", "usage": "modalprism-collector project create <名称>", "summary": "新建项目"}),
-        json!({"name": "project resources", "usage": "modalprism-collector project resources <项目标识>", "summary": "列出项目下的资源归属"}),
-        json!({"name": "preconditions", "usage": "modalprism-collector preconditions", "summary": "打印就绪检查结果"}),
+        json!({"name": "tool <动词>", "usage": "modalprism-collector tool <catalog|once|probe|save|fetch|search|parse|read> [--参数 值 ...] [--json]", "summary": "工具面单一入口：动词、参数与读写标记都来自 GET /tools，--help 同源生成"}),
+        json!({"name": "tool once", "usage": "modalprism-collector tool once https://example.com --mode preview", "summary": "一次完成取数、识别、适配与写入或返回；类型未识别时降级返回，不报失败"}),
+        json!({"name": "tool probe", "usage": "modalprism-collector tool probe https://example.com", "summary": "只识别不落库：类型分布、结构区域与建议信源声明"}),
+        json!({"name": "api <路径>", "usage": "modalprism-collector api /content/items?limit=5 [--method POST] [--body <json>]", "summary": "运维透传：直接请求指定实例的领域 API，不重复实现业务逻辑"}),
         json!({"name": "通用参数", "usage": "--http <地址>", "summary": "动词默认连 127.0.0.1:17880，可用它指向其他实例"}),
     ]
 }
@@ -154,7 +151,7 @@ fn ability_label(id: &str) -> &'static str {
         "strata_read" => "数据读取",
         "type_article" => "文章视图",
         "type_hotlist" => "热榜视图",
-        "web" => "即时采集",
+        "tool" => "工具面",
         _ => "能力",
     }
 }
@@ -187,9 +184,14 @@ fn mcp_method_summary(ability: &str, method: &str) -> &'static str {
         ("type_article", "on_commit") => "提交时投影到类型视图",
         ("type_hotlist", "project") => "热榜视图",
         ("type_hotlist", "on_commit") => "提交时投影到类型视图",
-        ("web", "search") => "即时关键词搜索",
-        ("web", "fetch") => "URL 取正文",
-        ("web", "parse") => "结构化抽取",
+        ("tool", "catalog") => "列出工具动词及其参数",
+        ("tool", "once") => "一次完成取数、识别、适配与写入/返回",
+        ("tool", "probe") => "只识别不落库：类型分布与建议声明",
+        ("tool", "save") => "把探测结论固化为信源声明",
+        ("tool", "fetch") => "按地址取回正文",
+        ("tool", "search") => "用已配置的搜索引擎检索",
+        ("tool", "parse") => "对文本或地址做结构化识别",
+        ("tool", "read") => "读取已入库内容的详情或单面数据",
         _ => "能力方法",
     }
 }
@@ -276,8 +278,8 @@ fn protocol_cards(base: &str, groups: Vec<Value>, total: usize) -> Vec<Value> {
             "endpoint": null,
             "command": "modalprism-collector",
             "examples": [
-                "modalprism-collector search 关键词",
-                "modalprism-collector fetch https://example.com",
+                "modalprism-collector tool catalog",
+                "modalprism-collector tool once https://example.com --mode preview",
             ],
             "methods": cli_items().len(),
             "groups": [],

@@ -136,6 +136,8 @@ pub struct CompileInput<'a> {
     pub now: Timestamp,
     pub initial: bool,
     pub resource: Option<&'a Rid>,
+    /// 没有 rid 时把内容面落到变更集别名上（调用方已先 `Ensure`）。
+    pub resource_alias: Option<&'a str>,
     pub origin: Option<&'a Rid>,
     pub identities: &'a dyn IdentityView,
 }
@@ -148,9 +150,16 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
         now,
         initial,
         resource,
+        resource_alias,
         origin,
         identities,
     } = input;
+    // 内容面的落点：已有资源用 rid，首次采集用别名；两者都没有就是调用方漏了。
+    let target = match (resource, resource_alias) {
+        (Some(rid), _) => Some(Target::Rid(rid.clone())),
+        (None, Some(alias)) => Some(Target::Alias(alias.to_string())),
+        (None, None) => None,
+    };
     let admitted = admit(&batch.discoveries, admission, now, initial);
     let mut ops = Vec::new();
     let mut follows = Vec::new();
@@ -224,13 +233,13 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
             }
         }
     }
-    if (!batch.facets.is_empty() || !batch.links.is_empty()) && resource.is_none() {
+    if (!batch.facets.is_empty() || !batch.links.is_empty()) && target.is_none() {
         return Err(AdapterError::config("内容适配器缺少目标资源"));
     }
-    if let Some(resource) = resource {
+    if let Some(target) = target {
         for emitted in &batch.facets {
             ops.push(put_facet(
-                Target::Rid(resource.clone()),
+                target.clone(),
                 &emitted.draft,
                 emitted.params_hash.clone(),
             )?);
@@ -250,7 +259,7 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
                 }
                 LinkTarget::Rid(dst) => {
                     ops.push(Op::Link {
-                        src: Target::Rid(resource.clone()),
+                        src: target.clone(),
                         rel: link.rel.clone(),
                         dst: Target::Rid(dst.clone()),
                         attrs: link.attrs.clone(),
@@ -260,7 +269,7 @@ pub fn compile(input: CompileInput<'_>) -> Result<Compiled, AdapterError> {
         }
         for (hash, links) in url_links {
             ops.push(put_facet(
-                Target::Rid(resource.clone()),
+                target.clone(),
                 &FacetDraft {
                     kind: FacetKind::Links,
                     variant: None,

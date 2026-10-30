@@ -3,6 +3,8 @@ import type {
   CliCandidate,
   CollectionRun,
   ContentDetail,
+  ContentFacetBody,
+  ContentFacetSummary,
   ContentItem,
   DeliveryChannel,
   DeliveryEndpoint,
@@ -42,6 +44,7 @@ import type {
   SettingsSchema,
   Snapshot,
   Source,
+  SourceGroup,
   SourcePayload,
   SourceTypeRecord,
   SystemStatus,
@@ -212,6 +215,16 @@ export const unshareSource = (id: string) =>
   call<Source>("POST", `/catalog/sources/${encodeURIComponent(id)}/unshare`, {}, { noIdempotency: true });
 export const listAccessMethods = () => call<ListResponse<NamedResource>>("GET", "/catalog/accessMethods?limit=200");
 export const listSourceTypes = () => call<ListResponse<SourceTypeRecord>>("GET", "/catalog/sourceTypes?limit=200");
+export const listSourceGroups = (params: { scope?: string } = {}) =>
+  call<ListResponse<SourceGroup>>("GET", `/catalog/sourceGroups${query(params)}`);
+export const createSourceGroup = (input: { name: string; description?: string }) =>
+  call<SourceGroup>("POST", "/catalog/sourceGroups", input);
+export const updateSourceGroup = (id: string, patch: { name?: string; description?: string }) =>
+  call<SourceGroup>("PATCH", `/catalog/sourceGroups/${encodeURIComponent(id)}`, patch);
+export const deleteSourceGroup = (id: string) =>
+  call<null>("DELETE", `/catalog/sourceGroups/${encodeURIComponent(id)}`);
+export const assignSourcesToGroup = (input: { groupId: string | null; sourceIds: string[] }) =>
+  call<{ updated: string[]; skipped: { id: string; reason: string }[] }>("POST", "/catalog/sourceGroups/bindings", input);
 export const listAdapters = () => call<ListResponse<NamedResource>>("GET", "/catalog/adapters?limit=200");
 export const listTemplates = () => call<ListResponse<NamedResource>>("GET", "/catalog/templates?limit=200");
 export const analyzeSource = (input: { url: string; instruction?: string; modelId?: string }) =>
@@ -272,10 +285,52 @@ export const contentLineage = (id: string) =>
   call<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }>("GET", `/content/items/${encodeURIComponent(id)}/lineage`);
 export const contentRelations = (id: string) =>
   call<ListResponse<Record<string, unknown>>>("GET", `/content/items/${encodeURIComponent(id)}/relations?limit=200`);
+/** 该内容的全部数据面明细（kind/variant/version/mediaType/size）。 */
+export const listContentFacets = (id: string) =>
+  call<ListResponse<ContentFacetSummary>>("GET", `/content/items/${encodeURIComponent(id)}/facets`);
+/** 读单个数据面：不给 variant 时返回该类型的默认（最新）一面。 */
+export const getContentFacet = (id: string, kind: string, variant?: string | null) => {
+  if (!variant) {
+    return call<ContentFacetBody>("GET", `/content/items/${encodeURIComponent(id)}/facets/${encodeURIComponent(kind)}`);
+  }
+  return call<ContentFacetBody>(
+    "GET",
+    `/content/items/${encodeURIComponent(id)}/facets/${encodeURIComponent(kind)}/${encodeURIComponent(variant)}`,
+  );
+};
+/**
+ * 附件字节地址（图片/音视频/文件）。浏览器原生媒体标签无法携带项目头，
+ * 所以先按项目上下文取回字节，再生成对象地址；调用方负责在用完后 revoke。
+ */
+export async function contentFacetBlobUrl(id: string, kind: string, variant?: string | null): Promise<string> {
+  const project = window.localStorage.getItem("modalprism.currentProjectId");
+  const headers: Record<string, string> = {};
+  if (project) headers["x-project-id"] = project;
+  const suffix = variant ? `/${encodeURIComponent(variant)}` : "";
+  const path = `/api/v1/content/items/${encodeURIComponent(id)}/blobs/${encodeURIComponent(kind)}` + suffix;
+  let response: Response;
+  try {
+    response = await fetch(path, { headers, cache: "no-store" });
+  } catch {
+    throw new ApiError("Node 控制台没有响应", 0, "dependencyUnavailable", "", true);
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status === 404 ? "这条内容没有该附件" : `读取附件失败（${response.status}）`, response.status);
+  }
+  return URL.createObjectURL(await response.blob());
+}
 export const listSnapshots = (params: { limit?: number; cursor?: string; offset?: number } = {}) =>
   call<ListResponse<Snapshot>>("GET", `/content/snapshots${query(params)}`);
 export const replaySnapshot = (input: { snapshotId: string; scope: string; contentIds?: string[] }) =>
   call<Operation>("POST", "/content/replays", input);
+
+// dictionary
+export interface DictionaryDocument {
+  version: string;
+  domains: Record<string, Record<string, { label: string; tone?: string }>>;
+}
+/** 语义字典：内置条目 + `config/dictionary.yaml` 覆盖，启动拉一次。 */
+export const getDictionary = () => call<DictionaryDocument>("GET", "/dictionary");
 
 // settings
 export const getSettingsSchema = () => call<SettingsSchema>("GET", "/settings/schema");

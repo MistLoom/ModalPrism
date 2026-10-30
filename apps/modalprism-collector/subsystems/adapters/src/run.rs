@@ -19,6 +19,7 @@ use crate::model::{
     RenderMode, SourceView,
 };
 use crate::registry::Registry;
+use crate::prism::Prism;
 use crate::route::{PartMatch, Step, candidates, needs_detection, schedule};
 use crate::textutil::{essence, params_hash};
 
@@ -35,6 +36,8 @@ pub struct PartBytes {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DetectorChoice {
     Basic,
+    /// RawPrism 识别器；引擎未注入时自动退回 `Basic`。
+    Prism,
     Off,
     Plugin(String),
 }
@@ -45,6 +48,11 @@ pub struct RunRequest {
     pub reason: TaskReason,
     pub source: SourceView,
     pub resource: Option<Rid>,
+    /// 文档资源在变更集里的别名（与 `Op::Ensure.as` 对应）。
+    ///
+    /// 临时采集与首次采集还没有 rid：调用方先 `Ensure` 一个别名，再把内容面落到该别名，
+    /// 避免为此提前生成 rid 或空写一份资源。
+    pub resource_alias: Option<String>,
     pub origin: Option<Rid>,
     pub locator: strata_model::Locator,
     pub detector: DetectorChoice,
@@ -54,6 +62,8 @@ pub struct RunRequest {
     pub producer: Producer,
     pub specs: Map<String, Value>,
     pub identities: Arc<dyn IdentityView>,
+    /// 结构化识别引擎（RawPrism）。None 表示未装载，全链路按基础检测降级。
+    pub prism: Option<Arc<dyn Prism>>,
 }
 
 #[derive(Debug)]
@@ -105,18 +115,29 @@ async fn detect_once(
     registry: &Registry,
     request: &RunRequest,
 ) -> Result<Option<DetectionPass>, AdapterError> {
+    // 识别器就绪时总是检测：即使声明里没有 traits 规则，也要留下 detect/regions 面，
+    // 内容库据此展示“这份内容由哪些类型构成”。
+    let prism_ready = request.prism.is_some() && matches!(request.detector, DetectorChoice::Prism);
     let empty = BTreeMap::new();
     let matches = part_matches(&request.parts, &empty);
-    if !needs_detection(&matches, &request.pipeline, request.reason) {
+    if !prism_ready && !needs_detection(&matches, &request.pipeline, request.reason) {
         return Ok(None);
     }
     let detector_id = match &request.detector {
         DetectorChoice::Off => return Ok(None),
         DetectorChoice::Basic => "detector/basic".to_string(),
+        DetectorChoice::Prism if prism_ready => "detector/prism".to_string(),
+        DetectorChoice::Prism => "detector/basic".to_string(),
         DetectorChoice::Plugin(id) => id.clone(),
     };
     let Some(detector) = registry.detector(&detector_id) else {
         return Err(AdapterError::config(format!("检测器不存在: {detector_id}")));
+    };
+    // 基础检测器只认 json-ld 区域；识别器返回全量区域。
+    let wanted: Vec<String> = if detector_id == "detector/prism" {
+        Vec::new()
+    } else {
+        vec!["json-ld".into()]
     };
     let mut by_part = BTreeMap::new();
     let mut regions = Vec::new();
@@ -128,7 +149,7 @@ async fn detect_once(
             role: part.role.clone(),
         };
         let detection = detector.detect(&view, &declared).await?;
-        let mut hits = detector.regions(&view, &["json-ld".into()]).await;
+        let mut hits = detector.regions(&view, &wanted).await;
         for hit in &mut hits {
             hit.part_id = part.part_id.as_str().to_string();
         }
@@ -372,6 +393,7 @@ async fn execute(
         now: request.now,
         initial: request.initial,
         resource: request.resource.as_ref(),
+        resource_alias: request.resource_alias.as_deref(),
         origin: request.origin.as_ref(),
         identities: request.identities.as_ref(),
     })?;

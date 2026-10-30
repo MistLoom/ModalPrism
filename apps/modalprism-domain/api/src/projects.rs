@@ -96,6 +96,68 @@ pub async fn seed(state: &AppState) -> Result<(), ApiError> {
     if changed {
         state.services.config_reload().map_err(ApiError::from)?;
     }
+    // 默认项目是所有内置信源的归属，内置分类也跟着它落地：启动与恢复出厂都会走到这里。
+    crate::source_groups::seed_builtin(state).await?;
+    // 旧配置里内置信源仍把节律写在 `schedule` 上：只摘除、不补计划。自带计划只留
+    // 少量示例，未被示例覆盖的信源不参与调度，避免「没有计划却在采集」。
+    let slugs: Vec<&str> = config::source_type::BUILTIN_SOURCES
+        .iter()
+        .map(|source| source.slug)
+        .collect();
+    match config::source_type::strip_builtin_schedules(
+        &state.config_dir,
+        &crate::catalog::options(),
+        &slugs,
+    ) {
+        Ok(0) => {}
+        Ok(stripped) => {
+            state.services.config_reload().map_err(ApiError::from)?;
+            tracing::info!(stripped, "内置信源遗留的节律已摘除");
+        }
+        Err(error) => tracing::warn!(detail = %error, "内置信源节律摘除失败"),
+    }
+    // 旧配置（升级或从旧基线恢复）里内置信源一个归属都没有时，按内置分类补齐。
+    crate::source_groups::file_builtin(state).await?;
+    // 出厂基线要跟随版本：内置分类/信源清单变化后作废旧基线，
+    // `AppState::open` 紧随其后的 ensure_factory_snapshot 会按当前配置重建。
+    refresh_factory_baseline(state).await?;
+    Ok(())
+}
+
+/// 让出厂基线代表当前版本的自带数据。
+///
+/// 基线曾在首次安装时一次性冻结，后续版本新增的内置信源与分类永远进不去，
+/// 恢复出厂就会退回旧配置。指纹未变时什么都不做；变了就删掉旧基线并记下
+/// 新指纹，重建由启动流程里随后的 `ensure_factory_snapshot` 完成。
+async fn refresh_factory_baseline(state: &AppState) -> Result<(), ApiError> {
+    let base = state.data_dir.join("factory");
+    let stamp = base.join("revision");
+    let revision = config::source_type::builtin_fingerprint().to_string();
+    let current = tokio::fs::read_to_string(&stamp)
+        .await
+        .ok()
+        .map(|text| text.trim().to_string());
+    if current.as_deref() == Some(revision.as_str()) {
+        return Ok(());
+    }
+    // 现行配置不健康时不动旧基线：重建会失败，留着至少还能恢复出厂。
+    if let Err(error) = config::validate(&state.config_dir, &crate::catalog::options()) {
+        tracing::warn!(detail = %error, "当前配置未通过校验，暂不更新出厂基线版本");
+        return Ok(());
+    }
+    let root = base.join("config");
+    if root.exists() {
+        tokio::fs::remove_dir_all(&root)
+            .await
+            .map_err(|error| ApiError::internal(format!("作废过期出厂基线失败: {error}")))?;
+        tracing::info!("出厂基线版本过期，已移除，将按当前配置重建");
+    }
+    tokio::fs::create_dir_all(&base)
+        .await
+        .map_err(|error| ApiError::internal(format!("建立出厂基线目录失败: {error}")))?;
+    tokio::fs::write(&stamp, format!("{revision}\n"))
+        .await
+        .map_err(|error| ApiError::internal(format!("记录出厂基线版本失败: {error}")))?;
     Ok(())
 }
 
@@ -248,13 +310,14 @@ async fn delete_project(
     if body["isDefault"].as_bool().unwrap_or(false) {
         return Err(ApiError::conflict("默认项目不可删除"));
     }
-    // 项目下已归属的资源先解绑，避免悬空引用。
+    // 项目下已归属的资源先解绑，避免悬空引用；分类元数据随项目一并清理。
     let bindings = state.store.list_documents(BINDING_KIND).await?;
     for doc in bindings {
         if doc.body["projectId"] == project_id {
             state.store.delete_document(BINDING_KIND, &doc.id).await?;
         }
     }
+    crate::source_groups::delete_for_project(&state, &project_id).await?;
     state
         .store
         .delete_document(PROJECT_KIND, &project_id)

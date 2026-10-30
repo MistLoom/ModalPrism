@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml"
+admission: {}
+description: 美国食品药品监督管理局官方新闻稿。
+id: source/fda-press-releases
+kind: source
+labels:
+  domain: 医疗
+  tier: T1
+  topic: 监管
+name: FDA Press Releases
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_health

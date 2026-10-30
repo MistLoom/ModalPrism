@@ -134,6 +134,11 @@ export const IconTrash = (props: { size?: number }) => (
     <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6" />
   </Icon>
 );
+export const IconPencil = (props: { size?: number }) => (
+  <Icon {...props}>
+    <path d="M4 20h4L20 8l-4-4L4 16v4ZM14 6l4 4" />
+  </Icon>
+);
 export const IconRestore = (props: { size?: number }) => (
   <Icon {...props}>
     <path d="M4 10a8 8 0 1 1 2.3 5.7M4 5v5h5" />

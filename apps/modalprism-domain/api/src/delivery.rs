@@ -1107,15 +1107,26 @@ pub async fn auto_round(state: &AppState) -> Result<usize, ApiError> {
             .store
             .update_document(RULE_KIND, &doc.id, &next, Some(doc.version))
             .await?;
+        let status = outcome["status"].as_str().unwrap_or("succeeded");
+        let bad = status != "succeeded";
+        let rule_name = doc.body["name"].as_str().unwrap_or("未命名规则");
         crate::notifications::emit(
             state,
             "delivery",
-            if outcome["status"] == "failed" { "warn" } else { "info" },
+            if bad {
+                "delivery.failed"
+            } else {
+                "content.delivered"
+            },
+            if bad { "warn" } else { "info" },
+            format!("自动投递{}：{rule_name}", if bad { "未完成" } else { "完成" }),
             format!(
-                "自动投递完成：{}",
-                doc.body["name"].as_str().unwrap_or("未命名规则")
+                "{} 条内容 · 成功 {} / 失败 {}",
+                items.len(),
+                outcome["succeeded"].as_u64().unwrap_or(0),
+                outcome["failed"].as_u64().unwrap_or(0)
             ),
-            format!("{} 条内容 · {}", items.len(), outcome["status"]),
+            Some("delivery?tab=records"),
         )
         .await;
         sent += 1;

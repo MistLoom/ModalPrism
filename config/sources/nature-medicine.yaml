@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.nature.com/nm.rss"
+admission: {}
+description: Nature Medicine 最新研究目录。
+id: source/nature-medicine
+kind: source
+labels:
+  domain: 医疗
+  tier: T1
+  topic: 期刊
+name: Nature Medicine
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_health

@@ -1,6 +1,7 @@
 //! 采集进程。组合根直接链接 Ability，并持有调度、发布和健康循环。
 
 pub mod ops;
+pub mod prism;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -111,6 +112,10 @@ pub async fn boot_opts(
         .local_addr()
         .map_err(|source| assembly::Error::with_source("监听", source))?;
     let (host, parse_ready) = link(Arc::clone(&services), &opts).await?;
+    // 识别内核接线：同一个 host 包成 Prism 注入采集链路，recognize→adapt 不再依赖静态声明。
+    if parse_ready {
+        services.set_prism(Arc::new(prism::HostPrism::new(Arc::clone(&host))));
+    }
     // 框架监测：只在上层接上 monitor 并把内存视图注入领域 API，不改框架组件。
     let monitor_config = leaf_monitor::MonitorConfig {
         log_path: data.join("monitor.jsonl").display().to_string(),
@@ -314,6 +319,8 @@ async fn link(
         ),
         ("catalog_admin", catalog_admin::provider(Arc::clone(&read))),
         ("type_article", type_article::provider(Arc::clone(&read))),
+        // 工具面：方法与参数由 surface::TOOLS 派生，调用转回环 API。
+        ("tool", tool::provider()),
     ];
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (id, provider) in providers {

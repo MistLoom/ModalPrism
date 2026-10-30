@@ -130,7 +130,7 @@ export function SettingsCheck() {
             </button>
           </div>
           {!snap ? (
-            <div className="check-empty">检查未成功，点“重新检查”。</div>
+            <div className="check-empty">检查未完成，请重新检查。</div>
           ) : (
             <div className="check-list">
               {items.map((item) => (
@@ -184,7 +184,7 @@ function buildChecks(
   if (!llm?.met) {
     items.push({ id: "model", label: "模型", level: "bad", detail: llm?.requirements[0]?.message ?? "尚未配置模型。" });
   } else if (!snap.defaultModelId) {
-    items.push({ id: "model", label: "模型", level: "warn", detail: "已登记模型，但未设置默认模型；未显式指定时加工会缺少兜底。" });
+    items.push({ id: "model", label: "模型", level: "warn", detail: "已登记模型，未设置默认模型；未显式指定时缺少默认模型。" });
   } else {
     const named = snap.models.find((model) => model.id === snap.defaultModelId);
     items.push({ id: "model", label: "模型", level: "ok", detail: named ? `默认模型：${named.name}` : "默认模型已设置。" });
@@ -288,7 +288,7 @@ function QuickModelForm({ busy, onDone }: { busy: boolean; onDone: () => Promise
         reasoning: profile.reasoning,
         modalities: profile.modalities,
       });
-      notify("ok", "模型已登记", `已按预设带出能力缺省：${profileSummary(profile)}`);
+      notify("ok", "模型已登记", `已按预设填充默认能力：${profileSummary(profile)}`);
       await onDone();
     } catch (problem) {
       notify("bad", "登记失败", problem instanceof Error ? problem.message : undefined);

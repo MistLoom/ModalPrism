@@ -103,6 +103,7 @@ async fn run_bytes(
         reason: TaskReason::Schedule,
         source: source_view(source_id, accessor).unwrap(),
         resource: None,
+        resource_alias: None,
         origin: None,
         locator,
         detector: DetectorChoice::Basic,
@@ -112,6 +113,7 @@ async fn run_bytes(
         producer: producer(),
         specs: Default::default(),
         identities: empty_identities(),
+        prism: None,
     };
     run(&Registry::builtins(), request).await.unwrap()
 }
@@ -205,7 +207,8 @@ async fn every_declared_source_maps_its_fixture() {
             _ => assert_eq!(found, [name]),
         }
     }
-    assert_eq!(seen, 23);
+    // 声明数随 config/sources 变动；这里守住「每一份声明都能跑出条目」。
+    assert_eq!(seen, 24);
 }
 
 #[tokio::test]
@@ -508,6 +511,7 @@ fn bare(body: &str, media: &str, pipeline: Value) -> RunRequest {
         reason: TaskReason::Schedule,
         source: source_view("source/demo", "accessor/http").unwrap(),
         resource: None,
+        resource_alias: None,
         origin: None,
         locator: Locator::Url {
             url: "https://example.com/list".into(),
@@ -519,5 +523,6 @@ fn bare(body: &str, media: &str, pipeline: Value) -> RunRequest {
         producer: producer(),
         specs: Default::default(),
         identities: empty_identities(),
+        prism: None,
     }
 }

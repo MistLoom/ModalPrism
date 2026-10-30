@@ -259,6 +259,7 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "schedule",
             "admission",
             "sourceType",
+            "groupId",
         ],
         DocKind::Plan => &[
             "id",

@@ -67,11 +67,11 @@ export function ManualDeliveryModal({
 
   async function submit() {
     if (!selected.length) {
-      notify("warn", "先选择要投递的内容");
+      notify("warn", "请选择要投递的内容");
       return;
     }
     if (!chosen.length) {
-      notify("warn", "先选择至少一个投递目标");
+      notify("warn", "请选择至少一个投递目标");
       return;
     }
     setBusy(true);
@@ -103,8 +103,8 @@ export function ManualDeliveryModal({
       title="手动投递"
       sub={
         fixed
-          ? "内容已选定，只需选择投递目标；模型会生成摘要，外部 API 按 JSON 提交，通知渠道直接推送"
-          : "选择内容与目标；模型会生成摘要，外部 API 按 JSON 提交，通知渠道直接推送"
+          ? "内容已选定，选择投递目标；模型生成摘要，外部 API 按 JSON 提交，通知渠道直接推送"
+          : "选择内容与目标；模型生成摘要，外部 API 按 JSON 提交，通知渠道直接推送"
       }
       onClose={onClose}
       wide

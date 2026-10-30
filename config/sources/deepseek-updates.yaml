@@ -21,3 +21,4 @@ pipeline:
 project: proj_default
 shared: true
 sourceType: web
+groupId: grp_builtin_ai_labs

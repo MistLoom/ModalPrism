@@ -36,12 +36,22 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("system", "系统"),
 ];
 
+/// 推送事件：细到“发生了什么”，渠道订阅按这里勾选。
+/// 分类（[`CATEGORIES`]）仍是通知中心的粗过滤，两者互相独立。
 pub const EVENTS: &[(&str, &str)] = &[
     ("plan.started", "计划启动"),
+    ("plan.stopped", "计划暂停"),
+    ("plan.resumed", "计划恢复"),
+    ("collection.started", "采集已提交"),
     ("collection.completed", "采集完成"),
+    ("collection.failed", "采集失败"),
     ("content.produced", "内容入库"),
     ("content.delivered", "内容投递完成"),
+    ("delivery.failed", "投递失败"),
     ("source.unhealthy", "信源异常"),
+    ("source.recovered", "信源恢复"),
+    ("settings.changed", "配置变更"),
+    ("maintenance.reset", "数据清理"),
     ("system.notice", "系统通知"),
 ];
 
@@ -294,15 +304,27 @@ async fn mark_read(
 
 /// 记录一条通知：通知中心留档，并按分类与事件发给已订阅的推送渠道。
 /// 推送失败只写推送记录，不影响调用方。
+///
+/// `event` 必须是 [`EVENTS`] 里的标识：推送渠道按事件订阅，未知事件回落为系统通知。
+/// `link` 是可选的站内深链，通知中心据此把条目指回产生它的页面。
 pub async fn emit(
     state: &AppState,
     category: &str,
+    event: &str,
     level: &str,
     title: impl Into<String>,
     message: impl Into<String>,
+    link: Option<&str>,
 ) {
     let title = title.into();
     let message = message.into();
+    let event = match EVENTS.iter().find(|(id, _)| *id == event) {
+        Some((id, _)) => *id,
+        None => {
+            tracing::warn!(event, category, "未知通知事件，回落为系统通知");
+            "system.notice"
+        }
+    };
     let settings = read_settings(state).await;
     let enabled = settings["enabled"].as_bool().unwrap_or(true)
         && settings["categories"][category].as_bool().unwrap_or(true);
@@ -311,9 +333,11 @@ pub async fn emit(
         let entry = json!({
             "id": id,
             "category": category,
+            "event": event,
             "level": level,
             "title": title,
             "message": message,
+            "link": link,
             "read": false,
             "createdAt": now(),
         });
@@ -323,8 +347,7 @@ pub async fn emit(
             .await;
         let _ = state.store.trim_documents(ENTRY_KIND, 500).await;
     }
-    // 推送：仅发给显式订阅了该事件分类的渠道。
-    let event = event_of(category);
+    // 推送：仅发给显式订阅了该事件的渠道。
     let channels = state.store.list_documents(PUSH_KIND).await.unwrap_or_default();
     for doc in channels {
         if !doc.body["enabled"].as_bool().unwrap_or(false) {
@@ -359,14 +382,18 @@ pub async fn emit(
     }
 }
 
-fn event_of(category: &str) -> &'static str {
-    match category {
-        "plan" => "plan.started",
-        "source" => "source.unhealthy",
-        "content" => "content.produced",
-        "delivery" => "content.delivered",
-        _ => "system.notice",
-    }
+/// 未读通知条数：工作台「待处理」与导航角标共用这一口径。
+pub async fn unread_count(state: &AppState) -> usize {
+    state
+        .store
+        .list_documents(ENTRY_KIND)
+        .await
+        .map(|docs| {
+            docs.iter()
+                .filter(|doc| !doc.body["read"].as_bool().unwrap_or(false))
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 async fn record_push(

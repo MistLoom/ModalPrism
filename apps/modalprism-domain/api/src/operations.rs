@@ -160,8 +160,8 @@ async fn run(state: Shared, id: String, action: Value) {
             } else {
                 "succeeded"
             };
-            finish(&state, &id, status, 1.0, Some(result), None, partial).await;
-            notify_finished(&state, &kind, status, None).await;
+            finish(&state, &id, status, 1.0, Some(result.clone()), None, partial).await;
+            notify_finished(&state, &kind, status, Some(&result), None).await;
         }
         Err(error) => {
             let retryable = error.retryable;
@@ -177,34 +177,314 @@ async fn run(state: Shared, id: String, action: Value) {
                 retryable,
             )
             .await;
-            notify_finished(&state, &kind, "failed", Some(message)).await;
+            notify_finished(&state, &kind, "failed", None, Some(message)).await;
         }
     }
 }
 
-/// 终态操作 → 通知事件：只映射用户关心的几类，其余仅留日志。
-async fn notify_finished(state: &AppState, kind: &str, status: &str, error: Option<String>) {
-    let Some((category, label)) = (match kind {
-        "collection.run" => Some(("source", "采集任务")),
-        "delivery.manual" => Some(("delivery", "内容投递")),
-        "channel.test" => Some(("delivery", "渠道连通检测")),
-        _ => None,
-    }) else {
-        return;
+/// 终态操作 → 通知：把用户关心的动作翻成具体事件，其余只留日志。
+///
+/// Operation 成功不等于业务成功：采集要看任务终态、投递要看记录结果，所以这里
+/// 还会读取 `result` 里的细分状态，避免把「已提交」报成「已完成」。
+async fn notify_finished(
+    state: &AppState,
+    kind: &str,
+    status: &str,
+    result: Option<&Value>,
+    error: Option<String>,
+) {
+    let failed = status == "failed";
+    let partial = status == "partiallySucceeded";
+    let level = if failed || partial { "warn" } else { "info" };
+    let detail = error.unwrap_or_default();
+
+    struct Notice {
+        category: &'static str,
+        event: &'static str,
+        title: String,
+        message: String,
+        link: Option<String>,
+    }
+
+    let notice = match kind {
+        "collection.run" => {
+            let source_id = result
+                .and_then(|value| value["sourceId"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            let label = source_label(state, &source_id).await;
+            let task_status = result
+                .and_then(|value| value["status"].as_str())
+                .unwrap_or_default();
+            let task_error = result
+                .and_then(|value| value["error"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            let link = Some(match source_id.is_empty() {
+                true => "sources".to_string(),
+                false => format!("sources?query={source_id}"),
+            });
+            match task_status {
+                "done" => Notice {
+                    category: "source",
+                    event: "collection.completed",
+                    title: format!("采集完成：{label}"),
+                    message: "采集结果已入库".into(),
+                    link,
+                },
+                "failed" => Notice {
+                    category: "source",
+                    event: "collection.failed",
+                    title: format!("采集失败：{label}"),
+                    message: if task_error.is_empty() {
+                        "任务以失败结束".into()
+                    } else {
+                        task_error
+                    },
+                    link,
+                },
+                _ => Notice {
+                    category: "source",
+                    event: "collection.started",
+                    title: format!("采集已提交：{label}"),
+                    message: "任务已入队，完成后会再通知一次".into(),
+                    link,
+                },
+            }
+        }
+        "delivery.manual" => {
+            let record_status = result
+                .and_then(|value| value["status"].as_str())
+                .unwrap_or_default();
+            let succeeded = result
+                .and_then(|value| value["succeeded"].as_u64())
+                .unwrap_or(0);
+            let failed_targets = result
+                .and_then(|value| value["failed"].as_u64())
+                .unwrap_or(0);
+            let bad = failed || record_status == "failed" || (succeeded == 0 && failed_targets > 0);
+            Notice {
+                category: "delivery",
+                event: if bad {
+                    "delivery.failed"
+                } else {
+                    "content.delivered"
+                },
+                title: if bad {
+                    "内容投递失败".into()
+                } else {
+                    "内容投递完成".into()
+                },
+                message: if detail.is_empty() {
+                    format!("成功 {succeeded} 个目标，失败 {failed_targets} 个目标")
+                } else {
+                    detail.clone()
+                },
+                link: Some("delivery?tab=records".into()),
+            }
+        }
+        "channel.test" => Notice {
+            category: "delivery",
+            event: if failed {
+                "delivery.failed"
+            } else {
+                "system.notice"
+            },
+            title: if failed {
+                "渠道连通检测失败".into()
+            } else {
+                "渠道连通检测完成".into()
+            },
+            message: if detail.is_empty() {
+                "渠道可正常发送".into()
+            } else {
+                detail.clone()
+            },
+            link: Some("notifications?tab=push".into()),
+        },
+        "source.probe" | "source.analysis" => Notice {
+            category: "source",
+            event: if failed {
+                "source.unhealthy"
+            } else {
+                "system.notice"
+            },
+            title: match (kind, failed) {
+                ("source.probe", true) => "信源探测失败".into(),
+                ("source.probe", false) => "信源探测完成".into(),
+                (_, true) => "信源分析失败".into(),
+                (_, false) => "信源分析完成".into(),
+            },
+            message: if detail.is_empty() {
+                "访问链路可用".into()
+            } else {
+                detail.clone()
+            },
+            link: Some("sources".into()),
+        },
+        "settings.apply" | "settings.rollback" => {
+            let apply = kind == "settings.apply";
+            let generation = result
+                .and_then(|value| value["generation"].as_u64())
+                .unwrap_or(0);
+            let applied = result
+                .and_then(|value| value["applied"].as_array())
+                .map_or(0, Vec::len);
+            let restart = result
+                .and_then(|value| value["restartRequired"].as_array())
+                .map_or(0, Vec::len);
+            Notice {
+                category: "system",
+                event: if failed {
+                    "system.notice"
+                } else {
+                    "settings.changed"
+                },
+                title: match (apply, failed) {
+                    (true, true) => "配置应用失败".into(),
+                    (true, false) => "配置已更新".into(),
+                    (false, true) => "配置回滚失败".into(),
+                    (false, false) => "配置已回滚".into(),
+                },
+                message: if !detail.is_empty() {
+                    detail.clone()
+                } else {
+                    format!(
+                        "generation {generation} · {applied} 项已生效{}",
+                        if restart > 0 {
+                            format!("，{restart} 项需重启生效")
+                        } else {
+                            String::new()
+                        }
+                    )
+                },
+                link: Some("settings".into()),
+            }
+        }
+        "content.batch" | "content.replay" | "derivation.run" => Notice {
+            category: "content",
+            event: if failed {
+                "system.notice"
+            } else {
+                "content.produced"
+            },
+            title: match (kind, failed) {
+                ("content.batch", true) => "内容批量操作失败".into(),
+                ("content.batch", false) => "内容批量操作完成".into(),
+                ("content.replay", true) => "内容回放失败".into(),
+                ("content.replay", false) => "内容回放完成".into(),
+                (_, true) => "派生执行失败".into(),
+                (_, false) => "派生执行完成".into(),
+            },
+            message: if detail.is_empty() {
+                "已写入内容库".into()
+            } else {
+                detail.clone()
+            },
+            link: Some("content".into()),
+        },
+        "source.delete" | "adapter.draft" | "adapter.approve" | "binding.rebind"
+        | "tasks.batch" | "egressHost.reset" => Notice {
+            category: "system",
+            event: "system.notice",
+            title: format!(
+                "{}{}",
+                operation_label(kind),
+                if failed { "失败" } else { "完成" }
+            ),
+            message: if detail.is_empty() {
+                "操作已结束".into()
+            } else {
+                detail.clone()
+            },
+            link: Some(match kind {
+                "source.delete" | "adapter.draft" | "adapter.approve" | "binding.rebind" => {
+                    "sources".into()
+                }
+                "tasks.batch" => "tasks".into(),
+                _ => "logs".into(),
+            }),
+        },
+        "maintenance.reset" | "maintenance.factoryReset" => Notice {
+            category: "system",
+            event: "maintenance.reset",
+            title: match (kind, failed) {
+                ("maintenance.factoryReset", true) => "恢复出厂失败".into(),
+                ("maintenance.factoryReset", false) => "恢复出厂完成".into(),
+                (_, true) => "数据清理失败".into(),
+                (_, false) => "数据清理完成".into(),
+            },
+            message: if detail.is_empty() {
+                "业务数据已按所选范围清理".into()
+            } else {
+                detail.clone()
+            },
+            link: Some("logs?tab=audit".into()),
+        },
+        _ => {
+            // 未映射的操作只在失败时提醒：成功的只读/运维动作不占通知中心。
+            if !failed {
+                return;
+            }
+            Notice {
+                category: "system",
+                event: "system.notice",
+                title: format!("{}失败", operation_label(kind)),
+                message: detail,
+                link: None,
+            }
+        }
     };
-    let level = if status == "failed" { "warn" } else { "info" };
-    let status_text = match status {
-        "succeeded" => "已完成",
-        "partiallySucceeded" => "部分完成",
-        "failed" => "失败",
-        "cancelled" => "已取消",
+    crate::notifications::emit(
+        state,
+        notice.category,
+        notice.event,
+        level,
+        notice.title,
+        notice.message,
+        notice.link.as_deref(),
+    )
+    .await;
+}
+
+fn operation_label(kind: &str) -> &str {
+    match kind {
+        "source.delete" => "删除信源",
+        "source.probe" => "信源探测",
+        "source.analysis" => "信源分析",
+        "binding.rebind" => "能力重绑",
+        "adapter.draft" => "适配器草拟",
+        "adapter.approve" => "适配器批准",
+        "collection.run" => "采集",
+        "content.batch" => "内容批量操作",
+        "content.replay" => "内容回放",
+        "delivery.manual" => "内容投递",
+        "channel.test" => "渠道连通检测",
+        "egressHost.reset" => "出站主机复位",
+        "settings.apply" => "配置应用",
+        "settings.rollback" => "配置回滚",
+        "health.recompute" => "健康重算",
+        "logs.export" => "日志导出",
+        "tasks.batch" => "任务批量操作",
+        "task.run" => "任务执行",
+        "derivation.run" => "派生执行",
+        "maintenance.reset" => "数据清理",
+        "maintenance.factoryReset" => "恢复出厂",
         other => other,
-    };
-    let message = match error {
-        Some(error) if !error.is_empty() => format!("{status_text}（{error}）"),
-        _ => status_text.to_string(),
-    };
-    crate::notifications::emit(state, category, level, format!("{label}结束"), message).await;
+    }
+}
+
+async fn source_label(state: &AppState, source_id: &str) -> String {
+    let bare = source_id.trim_start_matches("source/");
+    crate::catalog::source_rows(state)
+        .await
+        .ok()
+        .and_then(|rows| {
+            rows.into_iter()
+                .find(|row| row["id"].as_str() == Some(bare))
+                .and_then(|row| row["name"].as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| bare.to_string())
 }
 
 async fn update(state: &AppState, id: &str, status: &str, progress: f64) {
@@ -219,6 +499,13 @@ async fn update(state: &AppState, id: &str, status: &str, progress: f64) {
             }),
         )
         .await;
+}
+
+/// 阶段性进度：长任务（清空/恢复出厂）在关键阶段推进百分比。
+///
+/// 控制台的任务卡片只认 `progress`：不推进就会从头到尾停在起始值，看起来像没在跑。
+pub(crate) async fn progress(state: &AppState, id: &str, value: f64) {
+    update(state, id, "running", value.clamp(0.0, 0.99)).await;
 }
 
 async fn finish(
@@ -245,11 +532,15 @@ async fn finish(
         .append_operation_event(id, status, "操作结束", result.as_ref())
         .await;
     let level = if status == "failed" { "error" } else { "info" };
+    // 落库文案用字典里的用户语言，避免日志里出现 `操作 failed` 这类裸程序值。
+    let status_label = dictionary::lookup("task.status", status)
+        .map(|entry| entry.label)
+        .unwrap_or(status);
     let _ = crate::observe::append_log(
         state,
         level,
         "operation",
-        &format!("操作 {status}"),
+        &format!("操作{status_label}"),
         json!({"status": status, "result": result, "error": error}),
         Some(id),
     )
@@ -755,7 +1046,7 @@ fn task_view(row: &TaskRow) -> Value {
         }
         other => other,
     };
-    json!({
+    let mut view = json!({
         "id": row.task_id,
         "kind": "collection",
         "status": status,
@@ -770,7 +1061,17 @@ fn task_view(row: &TaskRow) -> Value {
         "retryAt": row.retry_at,
         "error": row.last_error,
         "locator": row.locator,
-    })
+    });
+    crate::dictionary::decorate(
+        &mut view,
+        &[
+            ("kind", "task.kind"),
+            ("status", "task.status"),
+            ("queue", "task.queue"),
+            ("reason", "task.reason"),
+        ],
+    );
+    view
 }
 
 async fn batch_tasks(

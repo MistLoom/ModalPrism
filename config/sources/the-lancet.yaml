@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.thelancet.com/rssfeed/lancet_current.xml"
+admission: {}
+description: 柳叶刀最新一期目录与在线优先发表。
+id: source/the-lancet
+kind: source
+labels:
+  domain: 医疗
+  tier: T1
+  topic: 期刊
+name: The Lancet
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_health

@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://jamanetwork.com/rss/site_3/67.xml"
+admission: {}
+description: 美国医学会杂志最新一期目录。
+id: source/jama-current
+kind: source
+labels:
+  domain: 医疗
+  tier: T1
+  topic: 期刊
+name: JAMA Current Issue
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_health

@@ -94,7 +94,7 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
         };
         let etag = util::etag(&[&slug, &util::hash_short(&plan["doc"].to_string())]);
         let rule = delivery.get(&slug).cloned().unwrap_or(Value::Null);
-        plans.push(json!({
+        let mut row = json!({
             "id": slug,
             "name": plan["name"],
             "description": plan["description"],
@@ -116,7 +116,9 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
             "deliveryEnabled": rule["enabled"].clone(),
             "deliveryLastRunAt": rule["lastRunAt"].clone(),
             "etag": etag,
-        }));
+        });
+        crate::dictionary::decorate(&mut row, &[("queue", "task.queue")]);
+        plans.push(row);
     }
     Ok(plans)
 }
@@ -477,6 +479,25 @@ async fn create_job(
         None,
     )
     .await?;
+    crate::notifications::emit(
+        &state,
+        "plan",
+        "plan.started",
+        if failed.is_empty() { "info" } else { "warn" },
+        format!(
+            "采集作业已启动：{}",
+            map.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("一次性采集作业")
+        ),
+        format!(
+            "派发 {} 个信源 · 失败 {} 个",
+            dispatched.len(),
+            failed.len()
+        ),
+        Some("tasks"),
+    )
+    .await;
     Ok(util::ok(&json!({
         "planId": slug,
         "dispatched": dispatched,
@@ -783,7 +804,7 @@ fn run_view(row: &strata_client::TaskRow) -> Value {
         .plan_id
         .as_deref()
         .map(|id| id.strip_prefix("plan/").unwrap_or(id).to_string());
-    json!({
+    let mut view = json!({
         "id": format!("run_{}", row.task_id),
         "sourceId": source_id,
         // 计划归属来自任务 payload：信源与计划是采集记录仅有的两条上游线索。
@@ -802,7 +823,16 @@ fn run_view(row: &strata_client::TaskRow) -> Value {
         "createdAt": row.created_at,
         "updatedAt": row.lease_until.clone().unwrap_or_else(|| row.created_at.clone()),
         "error": row.last_error,
-    })
+    });
+    crate::dictionary::decorate(
+        &mut view,
+        &[
+            ("mode", "run.mode"),
+            ("status", "run.status"),
+            ("queue", "task.queue"),
+        ],
+    );
+    view
 }
 
 async fn get_run(
@@ -953,5 +983,7 @@ pub async fn execute_run(
         "mode": mode,
         "taskId": task_id,
         "status": row.status,
+        // 失败原因随结果回显：通知与操作详情都不必再回查队列。
+        "error": row.last_error,
     }))
 }

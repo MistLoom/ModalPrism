@@ -767,12 +767,24 @@ fn defaults() -> Map<String, Value> {
     values
 }
 
+/// 读取设置文档；缺失时按内置默认值重建后再读。
+///
+/// 设置是默认值的投影，每个读接口都依赖它。清空或恢复出厂中途失败会把它删掉，
+/// 此时重建比把「设置尚未初始化」扩散到整站更安全。
 async fn settings_doc(state: &AppState) -> Result<(Value, i64), ApiError> {
+    if let Some(doc) = state
+        .store
+        .get_document(SETTINGS_KIND, SETTINGS_ID)
+        .await?
+    {
+        return Ok((doc.body, doc.version));
+    }
+    seed(state).await?;
     let doc = state
         .store
         .get_document(SETTINGS_KIND, SETTINGS_ID)
         .await?
-        .ok_or_else(|| ApiError::internal("设置尚未初始化"))?;
+        .ok_or_else(|| ApiError::internal("设置无法初始化"))?;
     Ok((doc.body, doc.version))
 }
 
@@ -844,9 +856,23 @@ async fn config_status(State(state): State<Shared>) -> Result<Response, ApiError
         .into_iter()
         .map(|change| json!({"path": change.path}))
         .collect();
+    // 被跳过的非声明文件：不影响快照，但要让控制台能说清「这些文件没有生效」。
+    let warnings: Vec<Value> = store
+        .last_warnings()
+        .iter()
+        .map(|item| json!({"file": item.file, "line": item.line, "message": item.message}))
+        .collect();
+    // 已下线但还没被退役清理移走的目录（通常只在下一次启动前出现）。
+    let retired: Vec<Value> = config::retired_paths()
+        .into_iter()
+        .filter(|name| state.config_dir.join(name).exists())
+        .map(|name| json!({"path": name, "since": config::retired_since(name)}))
+        .collect();
     Ok(util::ok(&json!({
         "staleSnapshot": !reload_error.is_empty(),
         "reloadError": reload_error,
+        "warnings": warnings,
+        "retired": retired,
         "pendingRestart": pending_restart,
         "generation": state.services.config_generation(),
     })))

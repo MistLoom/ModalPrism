@@ -185,6 +185,7 @@ fn request(parts: Vec<PartBytes>, pipeline: Value, reason: TaskReason) -> RunReq
         reason,
         source: source_view("source/demo", "accessor/http").unwrap(),
         resource: Some(Rid::parse("r_01JAF3K8Z2X7Q9M4T6V0B5N1CE").unwrap()),
+        resource_alias: None,
         origin: None,
         locator: Locator::Url {
             url: "https://example.com/blog/post".into(),
@@ -196,6 +197,7 @@ fn request(parts: Vec<PartBytes>, pipeline: Value, reason: TaskReason) -> RunReq
         producer: producer(),
         specs: Default::default(),
         identities: empty_identities(),
+        prism: None,
     }
 }
 

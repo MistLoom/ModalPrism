@@ -95,7 +95,7 @@ export function ExternalPage() {
           <div className="kicker">external · 外部调用</div>
           <h1 className="page-title">外部调用</h1>
           <p className="page-lede">
-            按协议查阅：每个协议一段，入口、方法与可用示例都在段内；未启用的协议明确标注，不给不可用的指令。
+            按协议列出入口、方法与示例；未启用的协议标注为不可用。
           </p>
         </div>
         <div className="page-actions">
@@ -138,7 +138,7 @@ export function ExternalPage() {
               baseUrl={catalog.baseUrl}
             />
           ) : (
-            <Empty title="拿不到协议目录" text="确认 collector 在线后重试。" />
+            <Empty title="协议目录不可用" text="collector 在线后重试。" />
           )}
 
           {/* 通用约定不属于任何单一协议：收在页尾折叠区，不挡住按协议查阅。 */}
@@ -147,7 +147,7 @@ export function ExternalPage() {
               附：跨协议调用约定与上手步骤
             </summary>
             <div className="stack" style={{ gap: 12 }}>
-              <Card title="调用约定" sub="头部、错误、分页与异步语义，各协议共用" flush>
+              <Card title="调用约定" sub="请求头、错误、分页与异步语义由各协议共用" flush>
                 <div className="table-wrap">
                   <table className="table">
                     <thead>
@@ -176,7 +176,7 @@ export function ExternalPage() {
                 </div>
               </Card>
 
-              <Card title="上手步骤" sub="从确认服务在线到写入第一条声明" flush>
+              <Card title="上手步骤" sub="从服务在线到写入第一条声明" flush>
                 <div className="list">
                   {catalog.quickStart.map((step) => (
                     <div className="list-row" key={step.title}>
@@ -207,7 +207,7 @@ export function ExternalPage() {
           </details>
         </>
       ) : (
-        <Empty title="拿不到协议目录" text="确认 collector 在线后重试。" />
+        <Empty title="协议目录不可用" text="collector 在线后重试。" />
       )}
     </div>
   );
@@ -328,7 +328,7 @@ function ProtocolPanel({
       ) : null}
 
       {protocol.groups.length && groups.length === 0 ? (
-        <Empty title="没有匹配的接口" text="换个关键词，或清空检索看全部。" />
+        <Empty title="无匹配接口" text="调整关键词，或清空检索以查看全部。" />
       ) : null}
 
       {groups.map((group) => (

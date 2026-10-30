@@ -202,12 +202,18 @@ pub async fn append_audit(
     .await
 }
 
-/// 观测侧守护：轮询调度器 `skipReason`，把「计划命中停止/限额」补记为追加式审计事件，恢复时补记一次。
-/// 仅在状态跃迁触发；正常信源与未设额度计划零噪声。只依赖同 crate 的 `planner_statuses` 与 `append_audit`，
+/// 运行时守护：轮询调度器状态与任务终态，把状态跃迁补记为追加式审计与通知。
+///
+/// 覆盖四类关键事件：计划命中停止/恢复、信源健康降级/恢复、新的失败任务、当日产出增量。
+/// 只在跃迁时触发，稳态零噪声；首次轮询只建基线，不补发历史，避免重启后刷屏。
 /// 不改动派发/去重链路（保持 AccessTask/队列模型不变）。
 pub async fn watch_plan_stops(state: &Shared) {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
     let mut last: BTreeMap<String, String> = BTreeMap::new();
+    let mut health: BTreeMap<String, String> = BTreeMap::new();
+    let mut yields: BTreeMap<String, u64> = BTreeMap::new();
+    let mut seen_tasks: HashSet<String> = HashSet::new();
+    let mut primed = false;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(45)).await;
         if state.in_maintenance() || state.reset_in_progress() {
@@ -216,51 +222,236 @@ pub async fn watch_plan_stops(state: &Shared) {
         let Ok(statuses) = state.services.planner_statuses().await else {
             continue;
         };
+        let names = source_names(state).await;
         let mut current: BTreeMap<String, String> = BTreeMap::new();
-        for (source, status) in statuses {
-            let Some(reason) = status.skip_reason.as_deref() else {
-                continue;
-            };
-            if !matches!(
-                reason,
-                "quota-paused" | "quota-exhausted" | "budget" | "daily-cap"
-            ) {
-                continue;
-            }
-            if last.get(&source).map(String::as_str) != Some(reason) {
-                let _ = append_audit(
-                    state,
-                    "collection.plan.stop",
-                    "succeeded",
-                    "采集计划命中停止策略，暂停派发",
-                    json!({"sourceId": source, "reason": reason}),
-                    Some(Refs {
-                        source_id: Some(source.clone()),
-                        ..Refs::default()
-                    }),
+        let mut current_health: BTreeMap<String, String> = BTreeMap::new();
+        let mut current_yields: BTreeMap<String, u64> = BTreeMap::new();
+        let mut produced: Vec<(String, u64)> = Vec::new();
+        for (source, status) in &statuses {
+            let label = source_label(&names, source);
+            if let Some(reason) = status.skip_reason.as_deref()
+                && matches!(
+                    reason,
+                    "quota-paused" | "quota-exhausted" | "budget" | "daily-cap"
                 )
-                .await;
+            {
+                if last.get(source).map(String::as_str) != Some(reason) {
+                    let _ = append_audit(
+                        state,
+                        "collection.plan.stop",
+                        "succeeded",
+                        "采集计划命中停止策略，暂停派发",
+                        json!({"sourceId": source, "reason": reason}),
+                        Some(Refs {
+                            source_id: Some(source.clone()),
+                            ..Refs::default()
+                        }),
+                    )
+                    .await;
+                    if primed {
+                        crate::notifications::emit(
+                            state,
+                            "plan",
+                            "plan.stopped",
+                            "warn",
+                            format!("采集计划暂停：{label}"),
+                            format!("原因：{}", stop_label(reason)),
+                            Some(&format!("plans?target={source}")),
+                        )
+                        .await;
+                    }
+                }
+                current.insert(source.clone(), reason.to_string());
             }
-            current.insert(source, reason.to_string());
+            let current_health_value = status.health_status.clone();
+            if primed
+                && let Some(previous) = health.get(source)
+                && previous != &current_health_value
+            {
+                if health_bad(&current_health_value) {
+                    crate::notifications::emit(
+                        state,
+                        "source",
+                        "source.unhealthy",
+                        "warn",
+                        format!("信源异常：{label}"),
+                        status.last_error.clone().unwrap_or_else(|| {
+                            format!("健康状态：{}", health_label(&current_health_value))
+                        }),
+                        Some(&format!(
+                            "sources?query={}",
+                            source.trim_start_matches("source/")
+                        )),
+                    )
+                    .await;
+                } else if health_bad(previous)
+                    && matches!(current_health_value.as_str(), "ok" | "healthy")
+                {
+                    crate::notifications::emit(
+                        state,
+                        "source",
+                        "source.recovered",
+                        "info",
+                        format!("信源恢复：{label}"),
+                        "健康状态已回到正常范围".to_string(),
+                        Some(&format!(
+                            "sources?query={}",
+                            source.trim_start_matches("source/")
+                        )),
+                    )
+                    .await;
+                }
+            }
+            current_health.insert(source.clone(), current_health_value);
+            if primed
+                && let Some(previous) = yields.get(source)
+                && status.today_yield > *previous
+            {
+                produced.push((label, status.today_yield - *previous));
+            }
+            current_yields.insert(source.clone(), status.today_yield);
         }
-        for (source, previous) in &last {
-            if !current.contains_key(source) {
-                let _ = append_audit(
+        if primed {
+            if !produced.is_empty() {
+                let total: u64 = produced.iter().map(|(_, count)| *count).sum();
+                let detail = produced
+                    .iter()
+                    .take(3)
+                    .map(|(label, count)| format!("{label} +{count}"))
+                    .collect::<Vec<_>>()
+                    .join("，");
+                let suffix = if produced.len() > 3 { " 等" } else { "" };
+                crate::notifications::emit(
                     state,
-                    "collection.plan.resume",
-                    "succeeded",
-                    "采集计划恢复派发",
-                    json!({"sourceId": source, "previousReason": previous}),
-                    Some(Refs {
-                        source_id: Some(source.clone()),
-                        ..Refs::default()
-                    }),
+                    "content",
+                    "content.produced",
+                    "info",
+                    "内容入库",
+                    format!("{total} 条新内容：{detail}{suffix}"),
+                    Some("content"),
                 )
                 .await;
+            }
+            for (source, previous) in &last {
+                if !current.contains_key(source) {
+                    let _ = append_audit(
+                        state,
+                        "collection.plan.resume",
+                        "succeeded",
+                        "采集计划恢复派发",
+                        json!({"sourceId": source, "previousReason": previous}),
+                        Some(Refs {
+                            source_id: Some(source.clone()),
+                            ..Refs::default()
+                        }),
+                    )
+                    .await;
+                    crate::notifications::emit(
+                        state,
+                        "plan",
+                        "plan.resumed",
+                        "info",
+                        format!("采集计划恢复：{}", source_label(&names, source)),
+                        "停止条件已解除，恢复派发".to_string(),
+                        Some(&format!("plans?target={source}")),
+                    )
+                    .await;
+                }
             }
         }
         last = current;
+        health = current_health;
+        yields = current_yields;
+        // 失败任务：按任务号去重，只报本次新增的终态失败。
+        if let Ok(page) = state
+            .services
+            .queue_list(
+                &TaskFilter {
+                    status: Some("failed".to_string()),
+                    ..TaskFilter::default()
+                },
+                None,
+                200,
+            )
+            .await
+        {
+            let mut window = HashSet::new();
+            for row in &page.rows {
+                window.insert(row.task_id.clone());
+                if !primed || seen_tasks.contains(&row.task_id) {
+                    continue;
+                }
+                crate::notifications::emit(
+                    state,
+                    "source",
+                    "collection.failed",
+                    "warn",
+                    format!("采集失败：{}", source_label(&names, &row.source_id)),
+                    row.last_error
+                        .clone()
+                        .unwrap_or_else(|| "任务以失败结束".to_string()),
+                    Some("tasks?status=failed"),
+                )
+                .await;
+            }
+            seen_tasks.extend(window.clone());
+            if seen_tasks.len() > 4_000 {
+                seen_tasks = window;
+            }
+        }
+        primed = true;
     }
+}
+
+fn health_bad(status: &str) -> bool {
+    matches!(
+        status,
+        "degraded" | "failed" | "suspicious" | "misconfigured" | "configurationError"
+    )
+}
+
+fn health_label(status: &str) -> &str {
+    match status {
+        "ok" | "healthy" => "正常",
+        "degraded" => "能力受限",
+        "failed" => "失败",
+        "suspicious" => "疑似异常",
+        "misconfigured" | "configurationError" => "配置错误",
+        "paused" => "暂停",
+        other => other,
+    }
+}
+
+fn stop_label(reason: &str) -> &str {
+    match reason {
+        "quota-paused" => "额度暂停",
+        "quota-exhausted" => "额度耗尽",
+        "budget" => "预算用尽",
+        "daily-cap" => "达到每日上限",
+        other => other,
+    }
+}
+
+fn source_label(names: &std::collections::BTreeMap<String, String>, source: &str) -> String {
+    let slug = source.trim_start_matches("source/");
+    names.get(slug).cloned().unwrap_or_else(|| slug.to_string())
+}
+
+async fn source_names(state: &AppState) -> std::collections::BTreeMap<String, String> {
+    let mut names = std::collections::BTreeMap::new();
+    let Ok(list) = config::list(&state.config_dir) else {
+        return names;
+    };
+    for source in list["sources"].as_array().cloned().unwrap_or_default() {
+        let Some(slug) = source["slug"].as_str() else {
+            continue;
+        };
+        names.insert(
+            slug.to_string(),
+            source["name"].as_str().unwrap_or(slug).to_string(),
+        );
+    }
+    names
 }
 
 #[derive(Debug, Deserialize)]

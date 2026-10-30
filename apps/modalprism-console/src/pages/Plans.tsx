@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { IconHistory, IconPause, IconPlay, IconPlus, IconRefresh, IconTrash } from "../components/icons";
+import { RowSubject } from "../components/ListRow";
 import { Pager, slicePage } from "../components/Pager";
 import { RunsDrawer } from "../components/RunsDrawer";
 import { Card, Empty, Field, Loading, Modal, Problem, StatusBadge, useUi } from "../components/ui";
@@ -297,6 +298,27 @@ export function PlansPage() {
     }
   };
 
+  // 深链：从概览或信源跳到某份计划时，直接打开它的编辑面板。
+  useEffect(() => {
+    if (!plans) return;
+    const id = params.get("id");
+    if (!id) return;
+    const hit = plans.find((plan) => plan.id === id);
+    if (hit && editing?.id !== hit.id) startEdit(hit);
+  }, [plans, params, editing]);
+
+  // 打开计划编辑：同时在地址栏留下 `?id=`，刷新后还能回到同一份计划。
+  const openPlan = (plan: Plan) => {
+    startEdit(plan);
+    navigate(`plans?id=${encodeURIComponent(plan.id)}`);
+  };
+
+  // 关掉面板时清参数，避免刷新后又被重新打开。
+  const closePanel = () => {
+    setOpen(false);
+    if (params.get("id")) navigate("plans");
+  };
+
   const rows = useMemo(() => {
     const list = plans ?? [];
     if (!target) return list;
@@ -408,7 +430,7 @@ export function PlansPage() {
       ) : null}
       <Card
         title="采集计划"
-        sub="计划定义执行节律、数量上限、目标信源与投递目标；信源只声明取什么、怎么解析。"
+        sub="计划定义执行节律、数量上限、目标信源与投递目标；信源声明采集地址与解析适配器。"
         action={
           <div className="row" style={{ gap: 8 }}>
             <button type="button" className="btn btn-sm" onClick={() => void load()} disabled={loading}>
@@ -430,8 +452,8 @@ export function PlansPage() {
           <Problem error={error} onRetry={() => void load()} />
         ) : rows.length === 0 ? (
           <Empty
-            title={target ? "该信源还没有关联计划" : "还没有采集计划"}
-            text={target ? "到计划新建时为它选择节律，或查看全部计划。" : "新建一个计划，选择一个或多个信源并设定节律。"}
+            title={target ? "该信源暂无关联计划" : "暂无采集计划"}
+            text={target ? "可在计划页选择节律，或查看全部计划。" : "新建计划：选择信源并设置节律。"}
           />
         ) : (
           <div className="table-wrap">
@@ -473,7 +495,9 @@ export function PlansPage() {
                     </td>
                     <td className="w-name">
                       <div className="stack" style={{ gap: 2 }}>
-                        <strong className="cell-ellipsis" title={plan.name}>{plan.name}</strong>
+                        <RowSubject onClick={() => openPlan(plan)} title="编辑计划">
+                          {plan.name}
+                        </RowSubject>
                         <span className="small muted cell-ellipsis" title={plan.id}>{plan.id}</span>
                       </div>
                     </td>
@@ -501,9 +525,6 @@ export function PlansPage() {
                       <div className="row" style={{ gap: 4 }}>
                         <button type="button" className="btn btn-ghost btn-sm" title="采集记录" aria-label={`查看 ${plan.name} 的采集记录`} onClick={() => setRecord(plan)}>
                           <IconHistory size={14} />
-                        </button>
-                        <button type="button" className="btn btn-ghost btn-sm" disabled={busy === plan.id} onClick={() => startEdit(plan)}>
-                          编辑
                         </button>
                         {plan.enabled ? (
                           <button type="button" className="btn btn-ghost btn-sm" title="暂停计划" aria-label="暂停计划" disabled={busy === plan.id} onClick={() => void act(plan, "pause")}>
@@ -544,14 +565,14 @@ export function PlansPage() {
           title={mode === "job" ? "批量采集作业" : mode === "edit" ? "编辑采集计划" : "新建采集计划"}
           sub={
             mode === "job"
-              ? "选择信源立即执行一次采集，相当于只跑一次的计划。"
-              : "计划定义执行节律、数量上限、目标信源与投递目标；上限用于控制数据量。"
+              ? "选择信源立即执行一次采集（一次性作业）。"
+              : "计划定义执行节律、数量上限、目标信源与投递目标；数量上限用于控制数据量。"
           }
-          onClose={() => setOpen(false)}
+          onClose={closePanel}
           wide
           footer={
             <div className="row between">
-              <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>
+              <button type="button" className="btn btn-ghost" onClick={closePanel}>
                 取消
               </button>
               <button type="button" className="btn" disabled={busy === "create"} onClick={() => void submit()}>
@@ -568,7 +589,7 @@ export function PlansPage() {
               <label className="switch">
                 <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />
                 <span>
-                  {draft.enabled ? "创建/保存后立即启用采集" : "保持关闭，稍后在计划列表启用"}
+                  {draft.enabled ? "创建/保存后立即启用采集" : "默认关闭；可在计划列表启用"}
                 </span>
               </label>
             ) : null}
@@ -659,7 +680,7 @@ export function PlansPage() {
                     );
                   })}
                   {deliveryTargets.length === 0 ? (
-                    <span className="small muted">还没有可用目标：模型在系统设置登记，外部 API 与通知渠道在内容投递页维护。</span>
+                    <span className="small muted">暂无可用目标：模型在系统设置登记，外部 API 与通知渠道在内容投递页维护。</span>
                   ) : null}
                   <label className="switch">
                     <input

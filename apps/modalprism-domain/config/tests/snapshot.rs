@@ -82,6 +82,57 @@ fn options() -> LoadOptions {
 }
 
 #[test]
+fn retired_areas_are_registered_once() {
+    // 退役名单是加载器跳过、出厂基线剔除、启动清理与测试断言的同一份事实。
+    let paths = config::retired_paths();
+    assert!(paths.contains(&"workflows"), "{paths:?}");
+    let unique: std::collections::BTreeSet<_> = paths.iter().collect();
+    assert_eq!(paths.len(), unique.len(), "退役路径不得重复: {paths:?}");
+    let kinds = config::retired_kinds();
+    assert!(kinds.contains(&"workflow"), "{kinds:?}");
+    assert!(config::retired_since("workflows").is_some());
+    assert!(config::retired_since("sources").is_none());
+}
+
+#[test]
+fn extraneous_files_are_skipped_with_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    // 已下线功能留下的目录、随手放下的草稿都不该让整次加载失败，
+    // 否则一份杂项文件就能让系统起不来。
+    write(
+        dir.path(),
+        "workflows/1.yaml",
+        "id: workflow/1\nkind: workflow\nname: 遗留\n",
+    );
+    write(dir.path(), "notes.yaml", "foo: 1\n");
+    let (snapshot, warnings) = config::validate_with_warnings(dir.path(), &options()).unwrap();
+    assert!(snapshot.modules.contains_key("source/demo"));
+    assert!(
+        warnings.iter().any(|item| item.file == "notes.yaml"),
+        "草稿应记一条跳过提示: {warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|item| item.file.starts_with("workflows/")),
+        "遗留目录整棵跳过，不逐文件告警: {warnings:?}"
+    );
+    // 不带警告的调用方拿到的仍是同一份快照。
+    assert!(validate(dir.path(), &options()).is_ok());
+}
+
+#[test]
+fn stray_file_does_not_block_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    let store = ConfigStore::open(dir.path(), options()).unwrap();
+    write(dir.path(), "workflows/1.yaml", "kind: workflow\n");
+    store.reload().expect("遗留目录不应阻断热加载");
+    assert_eq!(store.snapshot().generation, 2);
+    assert!(store.last_error().is_none());
+    assert!(store.last_warnings().is_empty());
+}
+
+#[test]
 fn plan_kind_loads_and_checks_target_existence() {
     let dir = tempfile::tempdir().unwrap();
     scaffold(dir.path());

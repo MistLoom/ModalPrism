@@ -11,6 +11,7 @@ publish = false
 assembly = { path = "../../modalprism-collector/subsystems/assembly" }
 axum = { version = "0.8", features = ["multipart"] }
 config = { path = "../config" }
+dictionary = { path = "../dictionary" }
 egress = { path = "../../modalprism-collector/subsystems/egress" }
 encoding_rs.workspace = true
 jsonschema.workspace = true

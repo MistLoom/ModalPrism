@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+admission: {}
+description: 道琼斯旗下 MarketWatch 的头条市场新闻。
+id: source/marketwatch-top-stories
+kind: source
+labels:
+  domain: 金融
+  tier: T2
+  topic: 市场
+name: MarketWatch Top Stories
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_finance

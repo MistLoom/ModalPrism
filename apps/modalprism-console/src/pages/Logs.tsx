@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { IconDownload, IconRefresh } from "../components/icons";
+import { RowSubject } from "../components/ListRow";
 import { Pager } from "../components/Pager";
 import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, StructuredValue, Tabs, useUi } from "../components/ui";
 import {
@@ -11,8 +12,9 @@ import {
   listLogs,
   recomputeHealth,
 } from "../lib/api";
-import { relative, stamp } from "../lib/format";
+import { kindLabel, levelLabel, relative, stamp, statusLabel, streamLabel } from "../lib/format";
 import { useRoute } from "../lib/router";
+import { openSubject } from "../lib/subject";
 import type { HealthHistory, LogRecord } from "../lib/types";
 
 type Tab = "logs" | "events" | "audit" | "health";
@@ -20,7 +22,7 @@ type Tab = "logs" | "events" | "audit" | "health";
 export function LogsPage() {
   const { params } = useRoute();
   const { notify, run } = useUi();
-  const [tab, setTab] = useState<Tab>("logs");
+  const [tab, setTab] = useState<Tab>((params.get("tab") as Tab) || "logs");
   const [records, setRecords] = useState<LogRecord[] | null>(null);
   const [health, setHealth] = useState<HealthHistory[] | null>(null);
   const [page, setPage] = useState(1);
@@ -84,9 +86,9 @@ export function LogsPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">logs · 日志</div>
-          <h1 className="page-title">运行日志与审计记录</h1>
+          <h1 className="page-title">日志与审计</h1>
           <p className="page-lede">
-            三类观测流分工明确：日志可清理，事件只追加，审计不可修改。requestId、operationId、taskId、runId 可以互相追踪；其他页面只带过滤条件跳到这里。
+            日志可清理，事件只追加，审计不可修改。requestId、operationId、taskId、runId 可相互追踪；其他页面跳转时携带筛选条件。
           </p>
         </div>
         <div className="page-actions">
@@ -151,11 +153,9 @@ export function LogsPage() {
               setPage(1);
             }} aria-label="级别筛选">
             <option value="">全部级别</option>
-            <option value="trace">trace</option>
-            <option value="debug">debug</option>
-            <option value="info">info</option>
-            <option value="warn">warn</option>
-            <option value="error">error</option>
+            {["trace", "debug", "info", "warn", "error"].map((item) => (
+              <option key={item} value={item}>{levelLabel(item)}</option>
+            ))}
           </select>
         ) : null}
         <input className="input mono" style={{ maxWidth: 320 }} value={correlation} onChange={(event) => {
@@ -173,16 +173,21 @@ export function LogsPage() {
       </div>
 
       {tab === "health" ? (
-        health === null ? <Loading lines={5} /> : health.length === 0 ? <Card title="健康历史"><Empty title="还没有健康评估" text="点击“重算健康”生成第一条不可变记录。" /></Card> : (
+        health === null ? <Loading lines={5} /> : health.length === 0 ? <Card title="健康历史"><Empty title="暂无健康评估" text="选择「重算健康」生成第一条不可变记录。" /></Card> : (
           <div className="stack">
             <div className="grid cols-2">
               {health.map((item, index) => (
-                <Card key={`${item.evaluatedAt}-${index}`} title={stamp(item.evaluatedAt)} sub={`${item.sources.length} 个信源 · ${item.status}`} flush>
+                <Card key={`${item.evaluatedAt}-${index}`} title={stamp(item.evaluatedAt)} sub={`${item.sources.length} 个信源 · ${statusLabel(item.status)}`} flush>
                   <div className="list">
                     {item.sources.map((source) => (
                       <div className="list-row" key={source.sourceId}>
                         <span className="list-main">
-                          <span className="list-title mono">{source.sourceId}</span>
+                          <RowSubject
+                            onClick={() => openSubject({ kind: "source", id: source.sourceId })}
+                            title="查看这家信源"
+                          >
+                            <span className="list-title mono">{source.sourceId}</span>
+                          </RowSubject>
                           <span className="list-meta">{source.reason || "无异常"} · 今日 {source.todayYield ?? 0}</span>
                         </span>
                         <StatusBadge status={source.status} />
@@ -207,9 +212,9 @@ export function LogsPage() {
       ) : records === null ? (
         <Loading lines={5} />
       ) : records.length === 0 ? (
-        <Card title="记录"><Empty title="没有匹配的记录" text="调整关键词、级别或关联标识。" /></Card>
+        <Card title="记录"><Empty title="无匹配记录" text="调整关键词、级别或关联标识。" /></Card>
       ) : (
-        <Card title={tab === "audit" ? "审计事件" : tab === "events" ? "结构化事件" : "运行日志"} sub="点击一行查看完整关联字段" flush>
+        <Card title={tab === "audit" ? "审计事件" : tab === "events" ? "结构化事件" : "运行日志"} sub="选择一行查看完整关联字段" flush>
           <div className="table-wrap">
             <table className="table log-table">
               <thead><tr><th>时间</th><th>级别</th><th>种类</th><th>消息</th><th>关联</th></tr></thead>
@@ -217,8 +222,8 @@ export function LogsPage() {
                 {records.map((record) => (
                   <tr key={`${record.stream}-${record.cursor}`} onClick={() => setDetail(record)} style={{ cursor: "pointer" }}>
                     <td className="small muted">{stamp(record.timestamp)}</td>
-                    <td><span className={`level ${record.level}`}>{record.level}</span></td>
-                    <td><span className="tag">{record.kind}</span></td>
+                    <td><span className={`level ${record.level}`}>{levelLabel(record.level)}</span></td>
+                    <td><span className="tag" title={record.kind}>{kindLabel(record.kind)}</span></td>
                     <td className="message">{record.message}</td>
                     <td className="mono small">{record.operationId || record.taskId || record.runId || record.requestId || "—"}</td>
                   </tr>
@@ -260,14 +265,14 @@ function RecordDrawer({ record, onClose }: { record: LogRecord; onClose: () => v
   return (
     <Drawer
       title={record.message}
-      sub={`${record.kind} · ${stamp(record.timestamp)}`}
+      sub={`${kindLabel(record.kind)} · ${stamp(record.timestamp)}`}
       onClose={onClose}
       footer={<button type="button" className="btn" onClick={onClose}>关闭</button>}
     >
       <div className="stack" style={{ gap: 14 }}>
         <div className="detail-meta">
-          <span className={`level ${record.level}`}>{record.level}</span>
-          <span className="tag">{record.stream}</span>
+          <span className={`level ${record.level}`}>{levelLabel(record.level)}</span>
+          <span className="tag">{streamLabel(record.stream)}</span>
           <span>{relative(record.timestamp)}</span>
         </div>
         <dl className="kv">
@@ -329,7 +334,7 @@ function ExportModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal
       title="导出观测流"
-      sub="只包含本次选择的流与过滤结果；审计导出本身会写入审计"
+      sub="仅包含所选日志流与过滤结果；审计导出本身写入审计"
       onClose={onClose}
       wide
       footer={<><button type="button" className="btn" onClick={onClose}>关闭</button>{content !== null ? <button type="button" className="btn btn-primary" onClick={download}><IconDownload size={14} /> 下载</button> : <button type="button" className="btn btn-primary" onClick={() => void start()} disabled={busy}>{busy ? "导出中…" : "开始导出"}</button>}</>}
@@ -350,7 +355,7 @@ function ExportModal({ onClose }: { onClose: () => void }) {
             </select>
           </Field>
         </div>
-        {content !== null ? <textarea className="textarea export-box" readOnly value={content} /> : <div className="alert info">导出会继承页面脱敏规则，不包含密钥或代理凭据。</div>}
+        {content !== null ? <textarea className="textarea export-box" readOnly value={content} /> : <div className="alert info">导出沿用页面脱敏规则，不包含密钥或代理凭据。</div>}
       </div>
     </Modal>
   );

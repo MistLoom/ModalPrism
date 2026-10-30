@@ -388,8 +388,187 @@ pub fn registry_json() -> Value {
     json!({ "items": items })
 }
 
+// ---------------------------------------------------------------------------
+// 内置信源分类
+// ---------------------------------------------------------------------------
+// 分类与 `sourceType` 正交：类型由信源形状决定且是闭集，分类是用户自己的管理
+// 口径。这里固定「内置信源归到哪一类」，标识一经发布不再改动——信源正文的
+// `groupId` 引用它，改名只改显示名，不迁移成员。
+
+/// 一条内置分类的声明。
+pub struct BuiltinGroup {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+}
+
+/// 内置分类按领域归档：AI 拆成厂商、研究、媒体三档，金融与医疗按监管/期刊分，
+/// 科技单列，系统自带的接入类信源单独一组，避免大量未分组信源混在一起。
+pub const BUILTIN_GROUPS: &[BuiltinGroup] = &[
+    BuiltinGroup {
+        id: "grp_builtin_ai_labs",
+        name: "AI 厂商与实验室",
+        description: "模型厂商、开源组织与实验室的官方博客和产品更新。",
+    },
+    BuiltinGroup {
+        id: "grp_builtin_ai_research",
+        name: "AI 研究与论文",
+        description: "论文预印本与学术期刊中的人工智能研究。",
+    },
+    BuiltinGroup {
+        id: "grp_builtin_ai_media",
+        name: "AI 媒体与观点",
+        description: "科技媒体、独立作者与周刊的人工智能报道和分析。",
+    },
+    BuiltinGroup {
+        id: "grp_builtin_finance",
+        name: "金融监管与市场",
+        description: "央行、证券监管与主流财经媒体的公开信息。",
+    },
+    BuiltinGroup {
+        id: "grp_builtin_health",
+        name: "医疗与期刊",
+        description: "监管机构、顶级医学期刊与医疗媒体的公开信息。",
+    },
+    BuiltinGroup {
+        id: "grp_builtin_tech",
+        name: "科技媒体",
+        description: "综合科技媒体与工程媒体的深度报道。",
+    },
+    BuiltinGroup {
+        id: "grp_builtin_access",
+        name: "自有与接入",
+        description: "系统自身的推送入口、状态检索与公众号接入，默认停用或按需开启。",
+    },
+];
+
+/// 按标识取内置分类；用户自建分类返回 `None`。
+pub fn builtin_group(id: &str) -> Option<&'static BuiltinGroup> {
+    BUILTIN_GROUPS.iter().find(|group| group.id == id)
+}
+
+// ---------------------------------------------------------------------------
+// 内置信源归属
+// ---------------------------------------------------------------------------
+// 初始数据不只在仓库的 YAML 里，也在程序这一侧：`slug → 内置分类` 的清单既回答
+// 「哪些信源是自带的」，又作为出厂基线的指纹来源。新增或迁移内置信源时同步这里，
+// 出厂基线才会随版本重建，而不是被首次安装时的副本长期冻住。
+
+const AI_LABS: &str = "grp_builtin_ai_labs";
+const AI_RESEARCH: &str = "grp_builtin_ai_research";
+const AI_MEDIA: &str = "grp_builtin_ai_media";
+const FINANCE: &str = "grp_builtin_finance";
+const HEALTH: &str = "grp_builtin_health";
+const TECH: &str = "grp_builtin_tech";
+const ACCESS: &str = "grp_builtin_access";
+
+/// 一条内置信源的归属。
+pub struct BuiltinSource {
+    pub slug: &'static str,
+    pub group_id: &'static str,
+}
+
+const fn source(slug: &'static str, group_id: &'static str) -> BuiltinSource {
+    BuiltinSource { slug, group_id }
+}
+
+/// 随仓库提供的全部信源及其内置分类，与 `config/sources/` 一一对应（测试护栏）。
+pub const BUILTIN_SOURCES: &[BuiltinSource] = &[
+    source("aws-machine-learning", AI_LABS),
+    source("deepseek-updates", AI_LABS),
+    source("github-ai", AI_LABS),
+    source("google-ai-blog", AI_LABS),
+    source("google-deepmind", AI_LABS),
+    source("google-research", AI_LABS),
+    source("hugging-face", AI_LABS),
+    source("microsoft-research", AI_LABS),
+    source("mimo-blog", AI_LABS),
+    source("mistral", AI_LABS),
+    source("nvidia-blog", AI_LABS),
+    source("openai-news", AI_LABS),
+    source("arxiv-cs-ai", AI_RESEARCH),
+    source("berkeley-ai-research", AI_RESEARCH),
+    source("nature-machine-intelligence", AI_RESEARCH),
+    source("ars-technica-ai", AI_MEDIA),
+    source("import-ai", AI_MEDIA),
+    source("latent-space", AI_MEDIA),
+    source("mit-technology-review-ai", AI_MEDIA),
+    source("simon-willison", AI_MEDIA),
+    source("techcrunch-ai", AI_MEDIA),
+    source("the-decoder", AI_MEDIA),
+    source("the-verge-ai", AI_MEDIA),
+    source("ecb-press", FINANCE),
+    source("federal-reserve-press", FINANCE),
+    source("marketwatch-top-stories", FINANCE),
+    source("sec-press-releases", FINANCE),
+    source("fda-press-releases", HEALTH),
+    source("jama-current", HEALTH),
+    source("nature-medicine", HEALTH),
+    source("nejm-current", HEALTH),
+    source("stat-news", HEALTH),
+    source("the-lancet", HEALTH),
+    source("ieee-spectrum", TECH),
+    source("mit-technology-review", TECH),
+    source("wired", TECH),
+    source("inbound-items", ACCESS),
+    source("status-search", ACCESS),
+    source("wechat-account", ACCESS),
+];
+
+/// 内置信源应归属的内置分类；用户自建信源返回 `None`。
+pub fn builtin_source_group(slug: &str) -> Option<&'static str> {
+    BUILTIN_SOURCES
+        .iter()
+        .find(|source| source.slug == slug)
+        .map(|source| source.group_id)
+}
+
+/// 初始数据的声明形态版本：本版本把内置信源的节律从 `schedule` 迁到 2-3 个
+/// 默认关闭的示例计划（其余信源需自建计划）。形态变化必须让旧出厂基线重算，
+/// 否则恢复出厂又会带回旧的「隐式计划」。
+const INITIAL_DATA_REVISION: u64 = 3;
+
+/// 初始数据指纹：内置分类与信源清单的任何变化都会改变它。
+///
+/// 出厂基线用它判断自己是否还代表当前版本：指纹不同就整体重建，避免把首次
+/// 安装时的旧配置（少几个信源、没有分类归属）一直当成「出厂设置」。
+pub fn builtin_fingerprint() -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    fn feed(hash: &mut u64, text: &str) {
+        for byte in text.as_bytes() {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(PRIME);
+        }
+    }
+    let mut hash = OFFSET ^ INITIAL_DATA_REVISION;
+    for group in BUILTIN_GROUPS {
+        feed(&mut hash, group.id);
+        feed(&mut hash, group.name);
+        feed(&mut hash, group.description);
+    }
+    for source in BUILTIN_SOURCES {
+        feed(&mut hash, source.slug);
+        feed(&mut hash, source.group_id);
+    }
+    hash
+}
+
+/// 公开入口：摘掉内置信源遗留的 `schedule`（不新建计划）。
+///
+/// 实现属于配置迁移，详见 [`crate::migration::strip_builtin_schedules`]。
+pub fn strip_builtin_schedules(
+    dir: &std::path::Path,
+    options: &crate::LoadOptions,
+    slugs: &[&str],
+) -> Result<usize, crate::Error> {
+    crate::migration::strip_builtin_schedules(dir, options, slugs)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use serde_json::json;
 
@@ -399,6 +578,172 @@ mod tests {
             "access": { "accessor": accessor, "locator": locator },
             "pipeline": pipeline,
         })
+    }
+
+    #[test]
+    fn builtin_groups_are_unique_and_named() {
+        let mut seen = std::collections::BTreeSet::new();
+        for group in BUILTIN_GROUPS {
+            assert!(seen.insert(group.id), "内置分类标识重复: {}", group.id);
+            assert!(!group.name.trim().is_empty(), "{} 缺名称", group.id);
+            assert!(!group.description.trim().is_empty(), "{} 缺说明", group.id);
+        }
+    }
+
+    /// 仓库内置信源必须与清单一一对应：不漏、不多，且分类归属与清单一致。
+    #[test]
+    fn shipped_sources_match_builtin_manifest() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../config")
+            .canonicalize()
+            .expect("仓库 config 目录应存在");
+        let entries = crate::author::entries(&dir, "source").expect("读取内置信源");
+        assert!(!entries.is_empty(), "内置信源不应为空");
+        // 仓库里的初始数据必须整库通过校验：信源 + 计划 + 七个内置分类。
+        crate::validate(&dir, &crate::LoadOptions::default()).expect("仓库配置应通过校验");
+        let mut slugs: Vec<&str> = entries.iter().map(|entry| entry.slug.as_str()).collect();
+        let mut listed: Vec<&str> = BUILTIN_SOURCES.iter().map(|source| source.slug).collect();
+        slugs.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(
+            slugs, listed,
+            "内置信源清单应与 config/sources 目录一一对应；新增信源需同步 BUILTIN_SOURCES"
+        );
+        // 自带计划只留 2-3 个示例，全部默认关闭；信源不再带 schedule，未被示例
+        // 计划覆盖的信源不参与调度，需用户自建计划。
+        let plans = crate::author::entries(&dir, "plan").expect("读取内置计划");
+        assert!(
+            (2..=3).contains(&plans.len()),
+            "自带计划只保留 2-3 个示例，实际 {} 个",
+            plans.len()
+        );
+        let mut covered: std::collections::BTreeMap<&str, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for plan in &plans {
+            assert_eq!(
+                plan.doc["enabled"],
+                json!(false),
+                "{} 应默认关闭",
+                plan.slug
+            );
+            let targets = plan.doc["targets"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} 缺少 targets", plan.slug));
+            assert!(!targets.is_empty(), "{} 没有采集目标", plan.slug);
+            for target in targets {
+                let slug = target
+                    .as_str()
+                    .unwrap_or_default()
+                    .trim_start_matches("source/");
+                assert!(
+                    entries.iter().any(|entry| entry.slug == slug),
+                    "{} 的计划引用了不存在的信源 {slug}",
+                    plan.slug
+                );
+                covered.entry(slug).or_default().push(plan.slug.as_str());
+            }
+        }
+        for entry in entries {
+            let group_id = entry
+                .doc
+                .get("groupId")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(
+                builtin_group(group_id).is_some(),
+                "{} 的分类不在内置清单里",
+                entry.slug
+            );
+            assert_eq!(
+                Some(group_id),
+                builtin_source_group(&entry.slug),
+                "信源 {} 的分类与清单不一致",
+                entry.slug
+            );
+            assert!(
+                entry.doc.get("schedule").is_none(),
+                "{} 仍把节律写在信源里，应在计划中表达",
+                entry.slug
+            );
+            if let Some(covering) = covered.get(entry.slug.as_str()) {
+                assert_eq!(
+                    covering.len(),
+                    1,
+                    "{} 被多个计划覆盖，会重复派发: {covering:?}",
+                    entry.slug
+                );
+            }
+        }
+    }
+
+    /// 迁移兜底：只把内置信源遗留的 schedule/回填额度摘掉，**不新建计划**。
+    #[test]
+    fn strip_builtin_schedules_only_strips() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = crate::LoadOptions::default();
+        std::fs::create_dir_all(dir.path().join("presets")).unwrap();
+        for preset in crate::builtin_presets() {
+            std::fs::write(
+                dir.path().join("presets").join(preset.file_name),
+                preset.source,
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            dir.path().join("system.yaml"),
+            "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  gateway:\n    blob_backend: dir\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("accessors")).unwrap();
+        std::fs::write(
+            dir.path().join("accessors/rss.yaml"),
+            "id: accessor/rss\nkind: accessor\nname: rss\nimplementation: builtin:rss\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
+        )
+        .unwrap();
+        crate::author::create(
+            dir.path(),
+            &options,
+            &crate::author::Draft {
+                kind: "source".into(),
+                slug: "legacy".into(),
+                doc: json!({
+                    "name": "Legacy",
+                    "access": {"accessor": "accessor/rss", "locator": {"url": "https://example.com/feed"}},
+                    "pipeline": [],
+                    "schedule": {"interval": "2h"},
+                    "admission": {"initialBackfill": {"limit": 8, "maxAge": "365d"}},
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            strip_builtin_schedules(dir.path(), &options, &["legacy"]).expect("首次剥离"),
+            1
+        );
+        // 只剥离、不补计划：自带示例计划之外不批量生成。
+        assert!(
+            crate::author::entries(dir.path(), "plan")
+                .unwrap()
+                .is_empty()
+        );
+        let source = crate::author::entries(dir.path(), "source").unwrap();
+        assert!(source[0].doc.get("schedule").is_none());
+        assert!(
+            source[0]
+                .doc
+                .pointer("/admission/initialBackfill")
+                .is_none()
+        );
+        assert_eq!(
+            strip_builtin_schedules(dir.path(), &options, &["legacy"]).expect("幂等"),
+            0
+        );
+    }
+
+    #[test]
+    fn builtin_fingerprint_is_deterministic() {
+        assert_ne!(builtin_fingerprint(), 0);
+        assert_eq!(builtin_fingerprint(), builtin_fingerprint());
     }
 
     #[test]
@@ -465,7 +810,7 @@ mod tests {
 
     #[test]
     fn the_shipped_sources_all_validate() {
-        // 存量 23 源的六个代表形状都应零问题通过矩阵。
+        // 仓库自带的信源覆盖六个代表形状，都应零问题通过矩阵。
         let cases = [
             source(
                 "accessor/rss",

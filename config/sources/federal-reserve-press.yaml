@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.federalreserve.gov/feeds/press_all.xml"
+admission: {}
+description: 美联储全部新闻稿，含货币政策与银行监管决定。
+id: source/federal-reserve-press
+kind: source
+labels:
+  domain: 金融
+  tier: T1
+  topic: 央行
+name: Federal Reserve Press Releases
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_finance

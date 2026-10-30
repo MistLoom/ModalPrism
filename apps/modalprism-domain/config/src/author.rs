@@ -164,6 +164,36 @@ pub fn templates() -> Value {
                 "spec": {"mode": "html", "item": "article", "link": "a", "title": "a"}
             }),
         ),
+        template(
+            "adapter",
+            "adapter-smart",
+            "智能适配器",
+            "不写选择器也能跑：按内容识别结果推断条目；认不出时仍保留一条原文，采集不空转。",
+            json!({
+                "name": "新的智能解析器",
+                "implementation": "builtin:smart-discover",
+                "role": "search",
+                "consumes": [{"kind": "raw", "part_role": "document"}],
+                "produces": ["discovery"],
+                "limits": limits(30, 1, 0),
+                "spec": {"mode": "auto"}
+            }),
+        ),
+        template(
+            "adapter",
+            "adapter-smart-content",
+            "智能拆分器",
+            "把一份文档按识别区域拆成多份内容并留下区域索引；同类型多份各自独立。",
+            json!({
+                "name": "新的智能拆分器",
+                "implementation": "builtin:smart-content",
+                "role": "content",
+                "consumes": [{"kind": "raw", "part_role": "document"}],
+                "produces": [{"kind": "text"}, {"kind": "regions", "variant": "prism"}],
+                "limits": limits(30, 1, 0),
+                "spec": {"mode": "auto", "maxRegions": 32}
+            }),
+        ),
     ])
 }
 

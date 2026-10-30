@@ -684,6 +684,95 @@ async fn factory_reset_rebuilds_settings_and_clears_user_data() {
     running.shutdown().await.unwrap();
 }
 
+/// 遗留的 `config/workflows/` 曾经让整次配置校验失败，还会被出厂基线一次次复制回来。
+/// 现在它会被退役清理：live 与出厂基线都不再保留，恢复出厂不反弹。
+#[tokio::test]
+async fn factory_reset_tolerates_retired_config_dirs() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let legacy = "id: workflow/1\nkind: workflow\nname: 遗留\n";
+    write(config.path(), "workflows/1.yaml", legacy);
+    // 真实的残留就在出厂基线里：先把它造出来，再看恢复出厂会不会又带回来。
+    let factory = data.path().join("factory").join("config");
+    config_dir(&factory);
+    write(&factory, "workflows/1.yaml", legacy);
+    let running = modalprism_collector::boot(data.path(), config.path(), binds())
+        .await
+        .unwrap();
+    let base = format!("http://{}", running.http());
+    wait_http(&base).await;
+    let http = reqwest::Client::new();
+
+    // 启动已完成退役（断言在 assembly 的 boot 用例里）；这里模拟旧版本又写回一份遗留文件，
+    // 验证预演能提前看到它、执行后确实消失。
+    write(config.path(), "workflows/2.yaml", legacy);
+    let preview_response = http
+        .post(format!("{base}/api/v1/maintenance/factoryResetPreviews"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(preview_response.status(), 201);
+    let preview_etag = preview_response.headers()["etag"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let preview: Value = preview_response.json().await.unwrap();
+    assert!(preview["config"]["baselineAvailable"].as_bool().unwrap_or(false));
+    assert!(
+        preview["config"]["declarations"].as_u64().unwrap_or(0) > 0,
+        "预演应给出声明规模: {preview}"
+    );
+    let retired: Vec<&str> = preview["config"]["retiredPaths"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item["path"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(retired, vec!["workflows"], "预演应列出待退役目录: {preview}");
+    let response = http
+        .post(format!("{base}/api/v1/maintenance/factoryResets"))
+        .header("if-match", preview_etag)
+        .json(&json!({
+            "previewId": preview["id"],
+            "confirmationToken": preview["confirmationToken"],
+        }))
+        .send()
+        .await
+        .unwrap();
+    let finished = accepted(&http, &base, response).await;
+    assert_eq!(finished["status"], "succeeded", "{finished}");
+
+    // 遗留目录既不能留在 live 配置，也不能留在出厂基线里。
+    assert!(!config.path().join("workflows").exists(), "恢复出厂后不应再出现遗留目录");
+    assert!(
+        !data.path().join("factory").join("config").join("workflows").exists(),
+        "出厂基线里的遗留目录应已退役"
+    );
+
+    let settings = http
+        .get(format!("{base}/api/v1/settings/effective"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(settings.status(), 200, "设置应在恢复出厂后立即可读");
+    let status: Value = http
+        .get(format!("{base}/api/v1/system/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(status["status"], "maintenance", "{status}");
+
+    running.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn unknown_paths_use_the_standard_error_shape() {
     let data = tempfile::tempdir().unwrap();

@@ -18,6 +18,7 @@ members = [
     "apps/modalprism-domain/strata-gateway",
     "apps/modalprism-domain/strata-client",
     "apps/modalprism-domain/config",
+    "apps/modalprism-domain/dictionary",
     "apps/modalprism-domain/api",
     "apps/modalprism-domain/types",
     "apps/modalprism-domain/surface",
@@ -68,6 +69,7 @@ members = [
     "apps/modalprism-collector/ability/runner",
     "apps/modalprism-collector/ability/strata_queue",
     "apps/modalprism-collector/ability/strata_write",
+    "apps/modalprism-collector/ability/tool",
     "apps/modalprism-collector",
     "apps/modalprism-agent",
 ]

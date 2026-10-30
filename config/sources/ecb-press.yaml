@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.ecb.europa.eu/rss/press.html"
+admission: {}
+description: 欧洲央行新闻稿、货币政策决定与演讲。
+id: source/ecb-press
+kind: source
+labels:
+  domain: 金融
+  tier: T1
+  topic: 央行
+name: European Central Bank Press
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_finance

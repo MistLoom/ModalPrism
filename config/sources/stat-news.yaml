@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.statnews.com/feed/"
+admission: {}
+description: 生物医药与公共卫生领域的专业媒体报道。
+id: source/stat-news
+kind: source
+labels:
+  domain: 医疗
+  tier: T2
+  topic: 媒体
+name: STAT News
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_health

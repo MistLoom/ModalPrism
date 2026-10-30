@@ -78,9 +78,9 @@ async fn boot_exposes_only_the_read_surface() {
             "config_inspect",
             "health",
             "strata_read",
+            "tool",
             "type_article",
             "type_hotlist",
-            "web",
         ]
     );
     let catalog = running.gateway().catalog();
@@ -244,7 +244,8 @@ async fn mcp_face_opens_new_queries_and_refuses_writes() {
         "catalog_admin.list",
         "catalog_admin.templates",
         "strata_read.query",
-        "web.search",
+        "tool.search",
+        "tool.once",
     ] {
         assert!(
             names.iter().any(|name| name == expected),

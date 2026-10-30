@@ -10,8 +10,8 @@ use notify::event::EventKind;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::{Map, Value};
 
-use crate::error::{Diagnostics, Error};
-use crate::load::{LoadOptions, validate};
+use crate::error::{Diagnostic, Diagnostics, Error};
+use crate::load::{LoadOptions, validate_with_warnings};
 use crate::snapshot::Snapshot;
 
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_secs(2);
@@ -37,6 +37,8 @@ struct Inner {
     held: Arc<Snapshot>,
     pending: Vec<RestartChange>,
     last_error: Option<Diagnostics>,
+    /// 最近一次成功加载时跳过的非声明文件：只提示，不影响快照。
+    warnings: Vec<Diagnostic>,
 }
 
 pub struct ConfigStore {
@@ -48,7 +50,8 @@ pub struct ConfigStore {
 impl ConfigStore {
     pub fn open(dir: impl Into<PathBuf>, options: LoadOptions) -> Result<Self, Error> {
         let dir = dir.into();
-        let mut snapshot = validate(&dir, &options)?;
+        let (mut snapshot, warnings) = validate_with_warnings(&dir, &options)?;
+        log_warnings(&warnings);
         snapshot.generation = 1;
         let snapshot = Arc::new(snapshot);
         Ok(Self {
@@ -60,6 +63,7 @@ impl ConfigStore {
                 snapshot,
                 pending: Vec::new(),
                 last_error: None,
+                warnings,
             }),
         })
     }
@@ -80,9 +84,15 @@ impl ConfigStore {
         self.inner.read().expect("配置锁").last_error.clone()
     }
 
+    /// 最近一次成功加载时跳过的非声明文件。
+    pub fn last_warnings(&self) -> Vec<Diagnostic> {
+        self.inner.read().expect("配置锁").warnings.clone()
+    }
+
     pub fn reload(&self) -> Result<(), Error> {
-        match validate(&self.dir, &self.options) {
-            Ok(mut snapshot) => {
+        match validate_with_warnings(&self.dir, &self.options) {
+            Ok((mut snapshot, warnings)) => {
+                log_warnings(&warnings);
                 let mut inner = self.inner.write().expect("配置锁");
                 snapshot.generation = inner.snapshot.generation.saturating_add(1);
                 let (applied, pending) = project(&snapshot, &inner.held);
@@ -90,6 +100,7 @@ impl ConfigStore {
                 inner.applied = Arc::new(applied);
                 inner.pending = pending;
                 inner.last_error = None;
+                inner.warnings = warnings;
                 Ok(())
             }
             Err(error) => {
@@ -105,6 +116,17 @@ impl ConfigStore {
 pub struct WatchHandle {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+
+fn log_warnings(warnings: &[Diagnostic]) {
+    for warning in warnings {
+        tracing::warn!(
+            file = %warning.file,
+            line = warning.line,
+            message = %warning.message,
+            "配置项已跳过"
+        );
+    }
 }
 
 impl Drop for WatchHandle {

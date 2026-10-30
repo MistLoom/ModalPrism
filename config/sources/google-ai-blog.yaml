@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://blog.google/technology/ai/rss/"
+admission: {}
+description: Google 官方 AI 产品与研究公告。
+id: source/google-ai-blog
+kind: source
+labels:
+  domain: AI
+  tier: T1
+  topic: 官方
+name: Google AI Blog
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_ai_labs

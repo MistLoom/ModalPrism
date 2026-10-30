@@ -111,7 +111,7 @@ export function ProjectsPage() {
       await reload();
       // 建完即切入新项目：此后新建的信源、计划与采集记录都归它，页面随项目切换重挂载。
       setCurrentProjectId(project.id);
-      notify("ok", "项目已创建并切换", `${project.name} · 新建的信源与采集记录自动归入本项目`);
+      notify("ok", "项目已创建并切换", `${project.name} · 新建信源与采集记录归属本项目`);
     } catch (problem) {
       notify("bad", "创建项目失败", problem instanceof Error ? problem.message : undefined);
     } finally {
@@ -126,8 +126,8 @@ export function ProjectsPage() {
           <div className="kicker">projects · 项目</div>
           <h1 className="page-title">项目</h1>
           <p className="page-lede">
-            项目是数据归属的根：信源归属项目，内容、任务与采集记录由信源派生，所以切换项目就切换了整套数据。
-            共享只放开信源的跨项目只读，不会把它的内容与运行带过来。
+            项目是数据归属单元：信源归属项目，内容、任务与采集记录由信源派生。切换项目即切换数据范围。
+            共享仅开放信源的跨项目只读，不包含其内容与运行记录。
           </p>
         </div>
         <div className="page-actions">
@@ -169,7 +169,7 @@ export function ProjectsPage() {
                 </span>
                 <span className="small muted">
                   {item ? `共享引入 ${item.sources - item.owned} 个 · ` : ""}
-                  {item?.lastRunAt ? `最近采集 ${relative(item.lastRunAt)}` : "还没有采集记录"} · 建 {stamp(project.createdAt)}
+                  {item?.lastRunAt ? `最近采集 ${relative(item.lastRunAt)}` : "暂无采集记录"} · 建 {stamp(project.createdAt)}
                 </span>
               </button>
             );
@@ -204,7 +204,7 @@ export function ProjectsPage() {
       {creating ? (
         <Modal
           title="新建项目"
-          sub="只填项目名即可；之后新建的信源、计划与采集记录自动归入本项目。"
+          sub="仅需填写项目名；新建信源、计划与采集记录归属本项目。"
           onClose={() => setCreating(false)}
           footer={
             <>
@@ -319,7 +319,7 @@ function ProjectWorkbench({
       }
     >
       {error ? <Problem error={error} onRetry={() => void load()} /> : null}
-      {failed && !sources ? <div className="alert warn">项目数据没有取全，下方可能不完整；可点右上角刷新重试。</div> : null}
+      {failed && !sources ? <div className="alert warn">项目数据未完整加载，下方内容可能不完整；可刷新重试。</div> : null}
       {loading && !sources ? <Loading lines={4} /> : null}
 
       <div className="stack" style={{ gap: 16 }}>
@@ -342,7 +342,7 @@ function ProjectWorkbench({
           <div className="stat">
             <span className="stat-label">在途任务</span>
             <span className="stat-value">{stats ? stats.running + stats.queued : "…"}</span>
-            <span className="stat-note">{stats?.lastRunAt ? `最近采集 ${relative(stats.lastRunAt)}` : "还没有采集"}</span>
+            <span className="stat-note">{stats?.lastRunAt ? `最近采集 ${relative(stats.lastRunAt)}` : "暂无采集"}</span>
           </div>
         </div>
 
@@ -354,7 +354,7 @@ function ProjectWorkbench({
             action={<button type="button" className="btn btn-sm" onClick={() => navigate("sources")}>管理</button>}
           >
             {(sources ?? []).length === 0 ? (
-              <Empty title="还没有信源" text="新建信源会自动归属本项目；共享信源只读可见。" />
+              <Empty title="暂无信源" text="新建信源归属本项目；共享信源只读。" />
             ) : (
               <div className="list">
                 {[...owned, ...shared].slice(0, 8).map((source) => (
@@ -391,7 +391,7 @@ function ProjectWorkbench({
             action={<button type="button" className="btn btn-sm" onClick={() => navigate("plans")}>管理</button>}
           >
             {(plans === null ? <Loading lines={2} /> : plans.length === 0 ? (
-              <Empty title="还没有计划" text="计划按节律派发采集；也可以先手动采一次看看产出。" />
+              <Empty title="暂无计划" text="计划按节律派发采集，也可手动执行一次。" />
             ) : (
               <div className="list">
                 {(plans ?? []).slice(0, 8).map((plan) => (
@@ -424,12 +424,12 @@ function ProjectWorkbench({
 
         <Card
           title="最近采集"
-          sub="按信源与计划归组；点开看本次产出，再决定是否再采一次"
+          sub="按信源与计划归组；展开查看本次产出"
           flush
           action={<button type="button" className="btn btn-sm" onClick={onOpenRuns}>全部记录</button>}
         >
           {(runs === null ? <Loading lines={2} /> : runs.length === 0 ? (
-            <Empty title="还没有采集记录" text="计划触发与手动采集都会留在这里。" />
+            <Empty title="暂无采集记录" text="计划触发与手动采集记录。" />
           ) : (
             <div className="list">
               {(runs ?? []).map((run) => (
@@ -467,7 +467,7 @@ function ProjectWorkbench({
 
         <Card
           title="起步清单"
-          sub={wizard ? (wizard.status === "ready" ? "已就绪，无待办" : `${wizard.pending} 项待办，按数据实时计算`) : undefined}
+          sub={wizard ? (wizard.status === "ready" ? "已就绪，无待办" : `${wizard.pending} 项待办（按当前数据计算）`) : undefined}
           flush
           action={
             <div className="row" style={{ gap: 6 }}>
@@ -492,7 +492,7 @@ function ProjectWorkbench({
                       <span className="list-title">{step.title}</span>
                       <span className="list-meta">
                         {step.description ? <span>{step.description}</span> : null}
-                        {!step.met && step.hint ? <span>去哪儿做：{step.hint}</span> : null}
+                        {!step.met && step.hint ? <span>配置入口：{step.hint}</span> : null}
                       </span>
                     </span>
                     <span className="row" style={{ gap: 6 }}>

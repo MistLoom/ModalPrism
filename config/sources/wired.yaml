@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.wired.com/feed/rss"
+admission: {}
+description: WIRED 科技报道全文流。
+id: source/wired
+kind: source
+labels:
+  domain: 科技
+  tier: T2
+  topic: 媒体
+name: WIRED
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_tech

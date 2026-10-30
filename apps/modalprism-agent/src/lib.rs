@@ -93,9 +93,9 @@ impl Gateway for MethodTools {
         let (instance, method) = split_tool(request.instance.as_str())?;
         request.instance = instance;
         request.method = method;
-        // web.search / web.fetch / web.parse：代理到本机回环领域 API（只读）。
-        if request.instance.as_str() == "web" {
-            let data = web_proxy(request.method.as_str(), request.args.clone())
+        // tool.*：代理到本机回环领域 API 的工具面（只读方法 + 写白名单）。
+        if request.instance.as_str() == "tool" {
+            let data = tool_forward(request.method.as_str(), request.args.clone())
                 .await
                 .map_err(ability_support::Error::failed)?;
             return Ok(InvokeResponse {
@@ -141,19 +141,20 @@ fn mark_read_only(entry: &mut CatalogEntry) {
     }
 }
 
-/// web 工具 → 本机回环领域 API。只读投影：search / fetch / parse。
-fn web_provider() -> Arc<dyn ability_support::AbilityProvider> {
+/// 工具面能力：方法与参数由 `surface::TOOLS` 派生，与采集进程的 `ability/tool`
+/// 和 CLI 共用同一张表；调用统一转到 `POST /tools/{verb}`。
+fn tool_provider() -> Arc<dyn ability_support::AbilityProvider> {
     use ability_support::{AbilityId, CtxFnAbility, MethodMeta, StaticProvider};
     use serde_json::json;
 
     let manifest = ability_support::AbilityManifest {
-        id: AbilityId::new("web").unwrap(),
+        id: AbilityId::new("tool").unwrap(),
         depends: vec![],
         stateful: false,
         config_schema: json!({}),
-        methods: ["search", "fetch", "parse"]
+        methods: surface::TOOLS
             .iter()
-            .map(|method| MethodMeta::new(method, "", json!({ "type": "object" })))
+            .map(|tool| MethodMeta::new(tool.id, tool.summary, json!({ "type": "object" })))
             .collect(),
         events: vec![],
     };
@@ -165,7 +166,7 @@ fn web_provider() -> Arc<dyn ability_support::AbilityProvider> {
                 .map(|method| method.as_str().to_string())
                 .unwrap_or_default();
             Box::pin(async move {
-                let data = web_proxy(&method, args)
+                let data = tool_forward(&method, args)
                     .await
                     .map_err(ability_support::Error::failed)?;
                 Ok(data)
@@ -174,18 +175,18 @@ fn web_provider() -> Arc<dyn ability_support::AbilityProvider> {
     ))))
 }
 
-/// web 工具 → 本机回环领域 API 的 HTTP 代理。
-async fn web_proxy(method: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+/// 工具调用 → 本机回环领域 API 的 HTTP 转发。
+async fn tool_forward(verb: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    if surface::tool(verb).is_none() {
+        return Err(format!("工具面无动词 {verb}"));
+    }
     let base = std::env::var("MODALPRISM_HTTP").unwrap_or_else(|_| "http://127.0.0.1:17880".into());
-    let path = match method {
-        "search" => "/api/v1/search",
-        "fetch" => "/api/v1/fetch",
-        "parse" => "/api/v1/parse",
-        other => return Err(format!("web 能力无方法 {other}")),
-    };
     let client = reqwest::Client::new();
-    let response = client
-        .post(format!("{base}{path}"))
+    let mut request = client.post(format!("{base}/api/v1/tools/{verb}"));
+    if let Ok(project) = std::env::var("MODALPRISM_PROJECT") {
+        request = request.header("x-project-id", project);
+    }
+    let response = request
         .json(&body)
         .send()
         .await
@@ -196,7 +197,11 @@ async fn web_proxy(method: &str, body: serde_json::Value) -> Result<serde_json::
         .await
         .map_err(|error| format!("领域 API 响应解析失败: {error}"))?;
     if !status.is_success() {
-        return Err(format!("领域 API 返回 {status}: {value}"));
+        let message = value
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("工具调用失败");
+        return Err(format!("领域 API 返回 {status}: {message}"));
     }
     Ok(value)
 }
@@ -240,7 +245,7 @@ async fn link(root: Arc<ReadRoot>) -> Result<Arc<AbilityHost>, types::Error> {
         ("config_inspect", config_inspect::provider(Arc::clone(&ctx))),
         ("type_article", type_article::provider(Arc::clone(&ctx))),
         ("type_hotlist", type_hotlist::provider(Arc::clone(&ctx))),
-        ("web", web_provider()),
+        ("tool", tool_provider()),
     ];
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (id, provider) in providers {

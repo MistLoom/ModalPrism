@@ -43,3 +43,4 @@ pipeline:
 project: proj_default
 shared: true
 sourceType: search
+groupId: grp_builtin_access

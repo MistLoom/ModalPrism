@@ -43,6 +43,122 @@ impl Ability {
     }
 }
 
+/// 工具面的一个参数。`kind` 取值：string / number / boolean / object / array。
+pub struct ToolParam {
+    pub name: &'static str,
+    pub kind: &'static str,
+    pub required: bool,
+    pub summary: &'static str,
+}
+
+/// 工具面的一个动词。
+pub struct ToolSpec {
+    /// 动词名，也是 `POST /tools/{verb}` 的路径段与方法名。
+    pub id: &'static str,
+    pub summary: &'static str,
+    /// 是否可能写存储（写方法进 MCP 写白名单）。
+    pub write: bool,
+    pub params: &'static [ToolParam],
+}
+
+/// 工具面的唯一事实源：`ability/tool` 的 `ability.yml`、`GET /tools` 的目录、
+/// CLI 的参数解析与 MCP 的方法投影全部由这里派生，一处新增、处处同步。
+pub const TOOLS: &[ToolSpec] = &[
+    ToolSpec {
+        id: "catalog",
+        summary: "列出全部工具动词及其参数",
+        write: false,
+        params: &[],
+    },
+    ToolSpec {
+        id: "once",
+        summary: "一次完成 取数 → 识别 → 适配 → 写入或返回（类型未识别不失败）",
+        write: true,
+        params: &[
+            ToolParam { name: "url", kind: "string", required: false, summary: "要采集的地址" },
+            ToolParam { name: "text", kind: "string", required: false, summary: "直接给出的文本" },
+            ToolParam { name: "file", kind: "string", required: false, summary: "本地文件路径" },
+            ToolParam { name: "mode", kind: "string", required: false, summary: "preview（默认）或 store" },
+            ToolParam { name: "hint", kind: "string", required: false, summary: "content（默认）或 discover" },
+            ToolParam { name: "sourceId", kind: "string", required: false, summary: "归属信源，缺省为临时信源" },
+            ToolParam { name: "selectors", kind: "array", required: false, summary: "识别类型过滤" },
+            ToolParam { name: "pipeline", kind: "array", required: false, summary: "显式适配器流水线" },
+        ],
+    },
+    ToolSpec {
+        id: "probe",
+        summary: "只识别不落库：类型分布、区域与建议声明",
+        write: false,
+        params: &[
+            ToolParam { name: "url", kind: "string", required: false, summary: "要探测的地址" },
+            ToolParam { name: "text", kind: "string", required: false, summary: "直接给出的文本" },
+            ToolParam { name: "file", kind: "string", required: false, summary: "本地文件路径" },
+            ToolParam { name: "selectors", kind: "array", required: false, summary: "识别类型过滤" },
+        ],
+    },
+    ToolSpec {
+        id: "save",
+        summary: "把探测结论固化为信源声明",
+        write: true,
+        params: &[
+            ToolParam { name: "name", kind: "string", required: true, summary: "信源名称" },
+            ToolParam { name: "url", kind: "string", required: true, summary: "信源地址" },
+            ToolParam { name: "accessor", kind: "string", required: false, summary: "访问器 id" },
+            ToolParam { name: "pipeline", kind: "array", required: false, summary: "适配器流水线" },
+            ToolParam { name: "schedule", kind: "object", required: false, summary: "调度间隔" },
+        ],
+    },
+    ToolSpec {
+        id: "fetch",
+        summary: "按地址取回正文",
+        write: false,
+        params: &[
+            ToolParam { name: "url", kind: "string", required: true, summary: "要取回的地址" },
+            ToolParam { name: "maxBytes", kind: "number", required: false, summary: "正文上限" },
+        ],
+    },
+    ToolSpec {
+        id: "search",
+        summary: "用已配置的搜索引擎检索",
+        write: false,
+        params: &[
+            ToolParam { name: "query", kind: "string", required: true, summary: "关键词" },
+            ToolParam { name: "engine", kind: "string", required: false, summary: "引擎 id" },
+            ToolParam { name: "limit", kind: "number", required: false, summary: "返回条数" },
+        ],
+    },
+    ToolSpec {
+        id: "parse",
+        summary: "对文本或地址做结构化识别",
+        write: false,
+        params: &[
+            ToolParam { name: "text", kind: "string", required: false, summary: "待识别文本" },
+            ToolParam { name: "url", kind: "string", required: false, summary: "待识别地址" },
+            ToolParam { name: "selectors", kind: "array", required: false, summary: "识别类型过滤" },
+        ],
+    },
+    ToolSpec {
+        id: "read",
+        summary: "读取已入库内容的详情或单面数据",
+        write: false,
+        params: &[
+            ToolParam { name: "contentId", kind: "string", required: true, summary: "内容标识" },
+            ToolParam { name: "facet", kind: "string", required: false, summary: "数据面类型" },
+            ToolParam { name: "variant", kind: "string", required: false, summary: "数据面变体" },
+        ],
+    },
+];
+
+/// 按动词名取工具声明。
+pub fn tool(id: &str) -> Option<&'static ToolSpec> {
+    TOOLS.iter().find(|item| item.id == id)
+}
+
+/// 工具面的全部动词名，与声明顺序一致。
+pub fn tool_ids() -> Vec<&'static str> {
+    TOOLS.iter().map(|item| item.id).collect()
+}
+
 /// 采集进程安装的全部能力。
 pub const COLLECTOR: &[Ability] = &[
     Ability {
@@ -146,6 +262,13 @@ pub const COLLECTOR: &[Ability] = &[
         read_only: &[],
     },
     Ability {
+        id: "tool",
+        methods: &[
+            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+        ],
+        read_only: &["catalog", "fetch", "parse", "probe", "read", "search"],
+    },
+    Ability {
         id: "type_article",
         methods: &["on_commit", "project"],
         read_only: &["on_commit", "project"],
@@ -224,6 +347,12 @@ pub const COLLECTOR_OPS: &[Exposure] = &[
         id: "type_article",
         methods: &["project"],
     },
+    Exposure {
+        id: "tool",
+        methods: &[
+            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+        ],
+    },
 ];
 
 /// 只读进程安装的全部能力。
@@ -273,12 +402,13 @@ pub const AGENT: &[Ability] = &[
         methods: &["on_commit", "project"],
         read_only: &["on_commit", "project"],
     },
-    // 对外表面的 HTTP 工具投影：search / fetch / parse 全部只读，
-    // 由只读进程代理到本机回环领域 API；破坏性与设置类操作不在此面。
+    // 对外表面的工具投影：一个能力对 CLI / MCP / HTTP 三面，写方法只进写白名单。
     Ability {
-        id: "web",
-        methods: &["fetch", "parse", "search"],
-        read_only: &["fetch", "parse", "search"],
+        id: "tool",
+        methods: &[
+            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+        ],
+        read_only: &["catalog", "fetch", "parse", "probe", "read", "search"],
     },
 ];
 
@@ -350,6 +480,13 @@ pub const CONSOLE: &[Exposure] = &[
         id: "type_article",
         methods: &["project"],
     },
+    // 控制台的调试入口走同一个工具面：试取/试搜/试解析/单次采集都从 `tool` 出。
+    Exposure {
+        id: "tool",
+        methods: &[
+            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+        ],
+    },
 ];
 
 /// 只读进程的 MCP 面。
@@ -385,17 +522,24 @@ pub const AGENT_MCP: &[Exposure] = &[
         methods: &["project"],
     },
     Exposure {
-        id: "web",
-        methods: &["search", "fetch", "parse"],
+        id: "tool",
+        methods: &["catalog", "fetch", "parse", "probe", "read", "search"],
     },
 ];
 
 /// MCP 面的白名单写方法。只收可恢复写（声明文件草稿：新建 / 改写 / 启停，落盘前校验），
 /// 破坏性删除（remove）、系统设置类写（proxy）与采集驱动类写一律不在此面。
-pub const AGENT_MCP_WRITES: &[Exposure] = &[Exposure {
-    id: "catalog_admin",
-    methods: &["create", "toggle", "update"],
-}];
+pub const AGENT_MCP_WRITES: &[Exposure] = &[
+    Exposure {
+        id: "catalog_admin",
+        methods: &["create", "toggle", "update"],
+    },
+    // 单次采集与声明固化：可恢复写（内容追加、声明草稿），且必须先通过回环 API 的项目校验。
+    Exposure {
+        id: "tool",
+        methods: &["once", "save"],
+    },
+];
 
 /// MCP 面写白名单是否放开这个方法。未声明的方法一律不放行。
 pub fn mcp_write_allowed(id: &str, method: &str) -> bool {
@@ -486,6 +630,29 @@ mod tests {
             for method in ability.read_only {
                 assert!(ability.has(method), "{} 的只读方法未声明", ability.id);
             }
+        }
+    }
+
+    #[test]
+    fn tool_verbs_come_from_one_table() {
+        let declared = ability(COLLECTOR, "tool").expect("采集进程必须安装 tool 能力");
+        let ids = tool_ids();
+        let mut declared_methods = declared.methods.to_vec();
+        let mut ids_sorted = ids.clone();
+        declared_methods.sort_unstable();
+        ids_sorted.sort_unstable();
+        assert_eq!(
+            declared_methods, ids_sorted,
+            "tool 能力的方法集必须与 TOOLS 表完全一致"
+        );
+        // 只读声明同样由表派生：写动词不得声明为只读。
+        for spec in TOOLS {
+            assert_eq!(
+                declared.is_read_only(spec.id),
+                !spec.write,
+                "动词 {} 的读写声明与 TOOLS 表不一致",
+                spec.id
+            );
         }
     }
 }

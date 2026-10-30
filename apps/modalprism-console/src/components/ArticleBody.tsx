@@ -14,7 +14,7 @@ export function ArticleBody({ html, base, bodyKind, mediaType }: {
 }) {
   const safe = useMemo(() => sanitizeArticleHtml(html, base ?? ""), [html, base]);
   if (!safe) {
-    return <Empty title="没有可读正文" text="这条内容只有结构化字段或附件，去掉脚本与样式后没有可展示的文字。" />;
+    return <Empty title="没有可读正文" text="该内容仅含结构化字段或附件，无可展示正文。" />;
   }
   const label = isHtmlBody(bodyKind, mediaType, html) ? "网页正文" : bodyKind === "md" ? "Markdown" : "纯文本";
   return (

@@ -4,9 +4,11 @@ import { IconAlert, IconPause, IconPlay, IconRefresh, IconTrash } from "../compo
 import { Pager, slicePage } from "../components/Pager";
 import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, StructuredValue, useUi } from "../components/ui";
 import { batchTasks, listPlans, listQueues, listSources, listSourceTypes, listTasks, pauseQueue, purgeTasks, resumeQueue, runDerivations, runTask } from "../lib/api";
+import { t } from "../lib/dictionary";
 import { count, kindLabel, relative, stamp, statusLabel } from "../lib/format";
 import { ProjectScopeBadge } from "../lib/project";
 import { navigate, useRoute } from "../lib/router";
+import { subjectFromLocation } from "../lib/subject";
 import type { Plan, Queue, SourceTypeRecord, Task } from "../lib/types";
 
 // 任务扫描窗口：与后端队列扫描口径一致，超出部分提示「N+」。
@@ -71,6 +73,27 @@ export function TasksPage() {
     setSelection([]);
     void load();
   }, [load]);
+
+  // 深链：从概览或搜索结果跳过来时，直接打开对应任务的详情。
+  useEffect(() => {
+    if (!tasks) return;
+    const id = subjectFromLocation("task");
+    if (!id) return;
+    const hit = tasks.find((task) => task.id === id);
+    if (hit) setDetail(hit);
+  }, [tasks]);
+
+  // 打开任务详情：同时在地址栏留下 `?id=`，刷新或分享后能回到同一任务。
+  const openTask = (task: Task) => {
+    setDetail(task);
+    navigate(`tasks?id=${encodeURIComponent(task.id)}`);
+  };
+
+  // 关闭详情时清掉深链参数，避免刷新后又被重新打开。
+  const closeTask = () => {
+    setDetail(null);
+    if (subjectFromLocation("task")) navigate("tasks");
+  };
 
   const planBySource = useMemo(() => {
     const map = new Map<string, Plan>();
@@ -204,9 +227,9 @@ export function TasksPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">tasks · 任务</div>
-          <h1 className="page-title">跨采集、生产、发布与维护的执行记录</h1>
+          <h1 className="page-title">任务与执行记录</h1>
           <p className="page-lede">
-            任务展示业务状态，内部租约与句柄不进入界面。批量动作逐项执行并保留成功项；活动租约不会被直接删除。
+            采集、内容加工与投递的任务状态和执行记录。内部租约与句柄不展示；批量操作逐项执行并保留成功项。
           </p>
         </div>
         <div className="page-actions">
@@ -229,7 +252,7 @@ export function TasksPage() {
         {queues.map((queue) => (
           <div className={`queue-card${queue.paused ? " is-paused" : ""}`} key={queue.id}>
             <div className="queue-head">
-              <span className="queue-name mono">{queue.id}</span>
+              <span className="queue-name">{t("task.queue", queue.id, queue.id)}</span>
               <span className={`badge ${queue.paused || queue.stalled ? "warn" : "ok"}`}>
                 {queue.paused ? "暂停" : queue.stalled ? queue.reason || "排队受阻" : "运行中"}
               </span>
@@ -355,12 +378,16 @@ export function TasksPage() {
                     </td>
                     <td>
                       <div className="cell-main">
-                        <span className="source-name">
+                        <button
+                          type="button"
+                          className="row-subject"
+                          onClick={() => openTask(task)}
+                        >
                           {task.title || task.sourceId || task.id}
-                          {typeOfTask(task) ? (
-                            <span className="badge neutral" style={{ marginLeft: 6 }}>{typeLabelOf(typeOfTask(task))}</span>
-                          ) : null}
-                        </span>
+                        </button>
+                        {typeOfTask(task) ? (
+                          <span className="badge neutral">{typeLabelOf(typeOfTask(task))}</span>
+                        ) : null}
                         <span className="source-sub mono">{task.id}</span>
                       </div>
                     </td>
@@ -372,7 +399,7 @@ export function TasksPage() {
                         {task.attempt && task.attempt > 1 ? <span className="source-sub">第 {task.attempt} 次</span> : null}
                       </div>
                     </td>
-                    <td className="mono small">{task.queue || "—"}</td>
+                    <td className="mono small">{task.queue ? t("task.queue", task.queue) : "—"}</td>
                     <td className="small muted">{relative(task.createdAt)}</td>
                     <td className="small">
                       {task.error ? (
@@ -387,7 +414,6 @@ export function TasksPage() {
                           <IconPlay size={12} /> 立即执行
                         </button>
                       ) : null}
-                      <button type="button" className="btn btn-sm" onClick={() => setDetail(task)}>详情</button>
                     </td>
                   </tr>
                 ))}
@@ -414,7 +440,7 @@ export function TasksPage() {
         <TaskDrawer
           task={detail}
           planLabel={planOfTask(detail)?.name ?? planOfTask(detail)?.id ?? detail.planId ?? null}
-          onClose={() => setDetail(null)}
+          onClose={closeTask}
         />
       ) : null}
       {purgeOpen ? (
@@ -532,13 +558,13 @@ function TaskDrawer({ task, planLabel, onClose }: { task: Task; planLabel: strin
             <StatusBadge status={task.status} />
             <span className="mono">{task.id}</span>
             <span>{kindLabel(task.kind)}</span>
-            {task.queue ? <span>队列 {task.queue}</span> : null}
+            {task.queue ? <span>队列 {t("task.queue", task.queue)}</span> : null}
           </div>
         </div>
         <dl className="kv">
           <dt>来源</dt><dd className="mono">{task.sourceId ? task.sourceId.replace(/^source\//, "") : "—"}</dd>
           <dt>采集计划</dt><dd>{planLabel || "—"}</dd>
-          <dt>原因</dt><dd>{task.reason || "—"}</dd>
+          <dt>原因</dt><dd>{task.reason ? t("task.reason", task.reason) : "—"}</dd>
           <dt>创建</dt><dd>{stamp(task.createdAt)}</dd>
           <dt>更新</dt><dd>{stamp(task.updatedAt)}</dd>
           <dt>重试时间</dt><dd>{stamp(task.retryAt)}</dd>

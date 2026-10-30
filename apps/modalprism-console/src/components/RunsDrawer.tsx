@@ -137,7 +137,7 @@ export function RunsDrawer({
       await run(operation, `手动采集 ${sourceName(activeRun.sourceId)}`);
       setProduced({});
       await load();
-      notify("ok", "已发起采集", "完成后可在这里刷新查看本次产出。");
+      notify("ok", "已发起采集", "完成后可刷新查看本次产出。");
     } catch (problem) {
       notify("bad", "采集失败", problem instanceof Error ? problem.message : undefined);
     } finally {
@@ -183,14 +183,14 @@ export function RunsDrawer({
       {loading && !runs ? <Loading lines={6} /> : null}
       {runs && runs.length === 0 ? (
         <Empty
-          title="还没有采集记录"
-          text="计划触发的采集与手动采集都会留在这里；第一次采集完成后即可回看产出。"
+          title="暂无采集记录"
+          text="计划触发与手动采集的记录；首次采集完成后可查看产出。"
           action={<button type="button" className="btn btn-sm" onClick={() => void collectAgain()} disabled={!activeRun}>立即采集一次</button>}
         />
       ) : null}
       {runs && runs.length > 0 ? (
         <div className="split-2 runs-layout">
-          <Card title="采集记录" sub="按时间倒序；点一行看这次产出" flush>
+          <Card title="采集记录" sub="按时间倒序；选择一行查看本次产出" flush>
             <div className="list">
               {(runs ?? []).map((item) => (
                 <button
@@ -244,13 +244,13 @@ export function RunsDrawer({
               }
             >
               {!activeRun ? (
-                <Empty title="先选一条采集记录" text="左侧任意一行都会指定这次运行的上游与产出。" />
+                <Empty title="先选一条采集记录" text="左侧选择一行，查看该次运行的上游与产出。" />
               ) : loadingItems ? (
                 <div className="card-body"><Loading lines={3} /></div>
               ) : (produced[activeRun.id] ?? []).length === 0 ? (
                 <Empty
                   title="这次没有新增内容"
-                  text={activeRun.status === "failed" ? "本次运行失败，没有产出；可查看错误后再采集一次。" : "没有新条目入库，或它们早于最近 100 条内容。重复采集的更新不计入本次新增。"}
+                  text={activeRun.status === "failed" ? "本次运行失败，无产出；查看错误后可重新采集。" : "无新增条目，或新增条目早于最近 100 条内容。重复采集的更新不计入新增。"}
                 />
               ) : (
                 <div className="list">
@@ -275,7 +275,7 @@ export function RunsDrawer({
                 </div>
               )}
               <div className="card-body small muted" style={{ paddingTop: 8 }}>
-                归属口径：该信源在本次运行开始时到下一次运行之前的入库内容；重复采集的更新不计入。
+                统计范围：本次运行开始至下一次运行前入库的内容；重复采集的更新不计入。
               </div>
             </Card>
 
@@ -308,7 +308,7 @@ export function RunsDrawer({
                       </div>
                     )
                   ) : (
-                    <span className="small muted">这条内容只有结构化字段，完整信息请打开内容详情。</span>
+                    <span className="small muted">该内容仅含结构化字段，完整信息见内容详情。</span>
                   )}
                 </div>
               </Card>

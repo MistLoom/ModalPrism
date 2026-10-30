@@ -29,6 +29,21 @@ pub fn routes() -> Router<Shared> {
             get(get_item).patch(patch_item).delete(delete_item),
         )
         .route("/content/items/{contentId}/body", get(get_body))
+        .route("/content/items/{contentId}/facets", get(list_facets))
+        .route(
+            "/content/items/{contentId}/facets/{kind}",
+            get(get_facet_kind),
+        )
+        .route(
+            "/content/items/{contentId}/facets/{kind}/{variant}",
+            get(get_facet_variant),
+        )
+        // 二进制流另起一段路径：静态段与 `{variant}` 同层注册会互相遮挡。
+        .route("/content/items/{contentId}/blobs/{kind}", get(get_blob_kind))
+        .route(
+            "/content/items/{contentId}/blobs/{kind}/{variant}",
+            get(get_blob_variant),
+        )
         .route("/content/items/{contentId}/versions", get(list_versions))
         .route("/content/items/{contentId}/lineage", get(get_lineage))
         .route("/content/items/{contentId}/relations", get(list_relations))
@@ -93,14 +108,42 @@ fn content_where(
     }
 }
 
-fn content_query(
-    search: Option<&str>,
-    source_id: Option<&str>,
-    status: Option<&str>,
-    allowed_sources: Option<&[String]>,
-    limit: usize,
-) -> StrataQuery {
-    let mut has_facets = Vec::new();
+/// 列表投影用的具名结构变体：承载标题与摘要，必须逐个取。
+/// 顺序即优先序：同一份内容有多种结构时，取靠前的一种作为主类型。
+const NAMED_STRUCT_VARIANTS: &[&str] = &["article", "hotlist", "item", "discovery", "page", "jsonld"];
+
+/// 内容面的种类：判断「这条资源是不是内容」与类型徽标都以此为准。
+const CONTENT_KINDS: &[FacetKind] = &[
+    FacetKind::Raw,
+    FacetKind::Html,
+    FacetKind::Xml,
+    FacetKind::Md,
+    FacetKind::Text,
+    FacetKind::Json,
+    FacetKind::Yaml,
+    FacetKind::Struct,
+    FacetKind::Image,
+    FacetKind::Audio,
+    FacetKind::Video,
+    FacetKind::File,
+];
+
+/// 内部面：描述加工过程，不作为内容存在的依据，也不进类型徽标。
+const INTERNAL_FACETS: &[&str] = &["detect", "regions", "links", "embedding"];
+
+fn variant_name(variant: &str) -> &'static str {
+    match variant {
+        "article" => "article",
+        "hotlist" => "hotlist",
+        "item" => "item",
+        "page" => "page",
+        "jsonld" => "jsonld",
+        _ => "discovery",
+    }
+}
+
+/// 内容列表与详情共用的投影：字段 + 具名结构变体 + 每种内容面的存在性。
+fn content_select() -> Vec<SelectItem> {
     let mut select = vec![
         SelectItem::Field("rid".into()),
         SelectItem::Field("seq".into()),
@@ -109,21 +152,71 @@ fn content_query(
         SelectItem::Field("sourceId".into()),
         SelectItem::Field("createdAt".into()),
     ];
-    select.push(SelectItem::Facet(FacetSelector {
-        kind: FacetKind::Struct,
-        variant: Some("article".into()),
-        fields: Vec::new(),
-    }));
-    select.push(SelectItem::Facet(FacetSelector {
-        kind: FacetKind::Struct,
-        variant: Some("hotlist".into()),
-        fields: Vec::new(),
-    }));
-    select.push(SelectItem::Facet(FacetSelector {
-        kind: FacetKind::Struct,
-        variant: Some("discovery".into()),
-        fields: Vec::new(),
-    }));
+    for variant in NAMED_STRUCT_VARIANTS {
+        select.push(SelectItem::Facet(FacetSelector {
+            kind: FacetKind::Struct,
+            variant: Some((*variant).to_string()),
+            fields: Vec::new(),
+        }));
+    }
+    // `variant: None` 投影该种类的任意变体（键为种类名），用来表达「有哪些类数据」。
+    for kind in CONTENT_KINDS {
+        select.push(SelectItem::Facet(FacetSelector {
+            kind: kind.clone(),
+            variant: None,
+            fields: Vec::new(),
+        }));
+    }
+    select
+}
+
+/// 行上的内容面：`kind` 或 `kind:variant`，已剔除内部面。
+fn content_facets(row: &Value) -> Vec<String> {
+    let Some(map) = row.as_object() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for key in map.keys() {
+        let (kind, variant) = match key.split_once(':') {
+            Some((kind, variant)) => (kind, Some(variant)),
+            None => (key.as_str(), None),
+        };
+        if !CONTENT_KINDS.iter().any(|item| item.as_str() == kind) {
+            continue;
+        }
+        if variant.is_some_and(|item| INTERNAL_FACETS.contains(&item)) {
+            continue;
+        }
+        out.push(key.clone());
+    }
+    out.sort();
+    out
+}
+
+fn has_content(row: &Value) -> bool {
+    !content_facets(row).is_empty()
+}
+
+/// 主结构面：标题、摘要与「主类型」都从这里取。
+fn primary_struct(row: &Value) -> Option<(&'static str, &Value)> {
+    for variant in NAMED_STRUCT_VARIANTS {
+        let key = format!("/struct:{variant}/value");
+        if let Some(value) = row.pointer(&key) {
+            return Some((variant_name(variant), value));
+        }
+    }
+    row.pointer("/struct/value").map(|value| ("struct", value))
+}
+
+fn content_query(
+    search: Option<&str>,
+    source_id: Option<&str>,
+    status: Option<&str>,
+    allowed_sources: Option<&[String]>,
+    limit: usize,
+) -> StrataQuery {
+    let mut has_facets = Vec::new();
+    let select = content_select();
 
     let r#where = content_where(source_id, status, allowed_sources);
 
@@ -175,13 +268,14 @@ fn content_query(
 /// 总数计数上限：本地单机规模内精确；达到上限按上限返回（前端显示为封顶值）。
 const COUNT_CAP: usize = 5_000;
 
-/// 计数专用查询：与内容列表共享 where 语义，但只取 rid 并按单一 struct 变体过滤。
+/// 计数专用查询：与内容列表共享 where 语义，但只取 rid，按「面是否存在」过滤。
 fn content_count_query(
     search: Option<&str>,
     source_id: Option<&str>,
     status: Option<&str>,
     allowed_sources: Option<&[String]>,
-    variant: &str,
+    kind: FacetKind,
+    variant: Option<&str>,
 ) -> StrataQuery {
     let select = vec![SelectItem::Field("rid".into())];
     let r#where = content_where(source_id, status, allowed_sources);
@@ -195,7 +289,7 @@ fn content_count_query(
             search: Some(Search {
                 text: Some(text.to_string()),
                 vector: None,
-                variant: Some(variant.to_string()),
+                variant: variant.map(str::to_string),
                 k: COUNT_CAP as u32,
             }),
             as_of: None,
@@ -209,8 +303,8 @@ fn content_count_query(
         from: QueryFrom::Resources,
         r#where,
         has_facets: vec![FacetSelector {
-            kind: FacetKind::Struct,
-            variant: Some(variant.into()),
+            kind,
+            variant: variant.map(str::to_string),
             fields: Vec::new(),
         }],
         select,
@@ -224,7 +318,7 @@ fn content_count_query(
     }
 }
 
-/// 内容总数：文章 / 热榜 / 发现三种变体分别计数后按 rid 去重合并（与列表的事后过滤同语义）。
+/// 内容总数：内容可能只有原始面（历史数据）或结构化面（当前链路），两次查询合并去重。
 pub(crate) async fn item_count(
     state: &AppState,
     search: Option<&str>,
@@ -233,7 +327,7 @@ pub(crate) async fn item_count(
     allowed_sources: Option<&[String]>,
 ) -> Result<usize, ApiError> {
     let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for variant in ["article", "hotlist", "discovery"] {
+    for kind in [FacetKind::Struct, FacetKind::Raw] {
         let result = state
             .services
             .strata()
@@ -242,7 +336,8 @@ pub(crate) async fn item_count(
                 source,
                 status,
                 allowed_sources,
-                variant,
+                kind,
+                None,
             ))
             .await
             .map_err(ApiError::from)?;
@@ -264,11 +359,18 @@ pub(crate) async fn variant_counts(
     allowed_sources: Option<&[String]>,
 ) -> Result<Vec<Value>, ApiError> {
     let mut items = Vec::new();
-    for variant in ["article", "hotlist", "discovery"] {
+    for variant in NAMED_STRUCT_VARIANTS {
         let result = state
             .services
             .strata()
-            .query(content_count_query(None, None, None, allowed_sources, variant))
+            .query(content_count_query(
+                None,
+                None,
+                None,
+                allowed_sources,
+                FacetKind::Struct,
+                Some(variant),
+            ))
             .await
             .map_err(ApiError::from)?;
         let mut ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -348,30 +450,18 @@ fn source_of(
     (String::new(), String::new())
 }
 
-fn struct_variant(row: &Value) -> &'static str {
-    if row.get("struct:article").is_some() {
-        "article"
-    } else if row.get("struct:hotlist").is_some() {
-        "hotlist"
-    } else if row.get("struct:discovery").is_some() {
-        "discovery"
-    } else {
-        "article"
-    }
+/// 具名结构变体：只在已知变体存在时返回，供写回定位；未知面返回 None。
+fn struct_variant(row: &Value) -> Option<&'static str> {
+    NAMED_STRUCT_VARIANTS
+        .iter()
+        .find(|variant| row.get(&format!("struct:{variant}")).is_some())
+        .map(|variant| variant_name(variant))
 }
 
 fn item_view(row: &Value, names: &BTreeMap<String, String>) -> Value {
-    let struct_article = row.pointer("/struct:article/value");
-    let struct_hotlist = row.pointer("/struct:hotlist/value");
-    let struct_discovery = row.pointer("/struct:discovery/value");
-    let (kind, struct_value) = if struct_article.is_some() {
-        ("article", struct_article)
-    } else if struct_hotlist.is_some() {
-        ("hotlist", struct_hotlist)
-    } else if struct_discovery.is_some() {
-        ("discovery", struct_discovery)
-    } else {
-        ("structured", None)
+    let (kind, struct_value) = match primary_struct(row) {
+        Some((kind, value)) => (kind, Some(value)),
+        None => ("struct", None),
     };
     let title = struct_value
         .and_then(|value| {
@@ -411,13 +501,15 @@ fn item_view(row: &Value, names: &BTreeMap<String, String>) -> Value {
         })
         .unwrap_or_default();
     let tombstone = row["tombstone"].as_bool().unwrap_or(false);
+    let facets = content_facets(row);
+    let facet_count = facets.len();
     let etag = util::etag(&[
         "content",
         row["rid"].as_str().unwrap_or_default(),
         &row["seq"].to_string(),
         if tombstone { "tombstoned" } else { "active" },
     ]);
-    json!({
+    let mut view = json!({
         "id": row["rid"],
         "kind": kind,
         "title": title,
@@ -429,8 +521,18 @@ fn item_view(row: &Value, names: &BTreeMap<String, String>) -> Value {
         "publishedAt": published,
         "createdAt": row["createdAt"],
         "struct": struct_value.cloned().unwrap_or(Value::Null),
+        "facetKinds": facets,
+        "facetCount": facet_count,
         "etag": etag,
-    })
+    });
+    // 列表直接给可读文案：界面与 CLI/MCP 拿到的都是同一套词。
+    // 主类型先查变体域（article/hotlist/discovery/page/jsonld），无名变体（struct）再按数据面类型查。
+    crate::dictionary::decorate(&mut view, &[("kind", "facet.variant")]);
+    crate::dictionary::decorate(
+        &mut view,
+        &[("kind", "facet.kind"), ("status", "content.status")],
+    );
+    view
 }
 
 async fn list_items(
@@ -539,11 +641,7 @@ async fn list_items(
     let mut rows: Vec<Value> = result
         .rows
         .iter()
-        .filter(|row| {
-            row.get("struct:article").is_some()
-                || row.get("struct:hotlist").is_some()
-                || row.get("struct:discovery").is_some()
-        })
+        .filter(|row| has_content(row))
         .map(|row| item_view(row, &names))
         .collect();
     let window = rows.len();
@@ -580,35 +678,46 @@ async fn read_row(state: &AppState, rid: &Rid, project_id: &str) -> Result<Value
     Ok(row)
 }
 
+/// 内容详情的可复用读取：工具面 `tool.read` 与 `GET /content/items/{id}` 共用。
+pub(crate) async fn detail_value(
+    state: &AppState,
+    content_id: &str,
+    project_id: &str,
+) -> Result<Value, ApiError> {
+    let rid = rid_of(content_id)?;
+    let row = read_row(state, &rid, project_id).await?;
+    let names = source_names(state).await?;
+    let mut item = item_view(&row, &names);
+    item["body"] = body_of(state, &rid).await?;
+    let kinds = state
+        .services
+        .strata()
+        .kinds(&rid, true)
+        .await
+        .map_err(ApiError::from)?;
+    item["facets"] = json!(
+        kinds
+            .iter()
+            .map(|summary| json!({
+                "kind": summary.kind.as_str(),
+                "variant": summary.variant,
+                "version": summary.latest,
+                "versions": summary.versions,
+                "mediaType": summary.media_type,
+                "size": summary.size,
+            }))
+            .collect::<Vec<_>>()
+    );
+    Ok(item)
+}
+
 /// 按 rid 取内容行，不做项目过滤；不存在返回 None。
 async fn row_of(state: &AppState, rid: &Rid) -> Result<Option<Value>, ApiError> {
     let spec = StrataQuery {
         from: QueryFrom::Resources,
         r#where: serde_json::from_value::<Expr>(json!({"eq": ["rid", rid.as_str()]})).ok(),
         has_facets: Vec::new(),
-        select: vec![
-            SelectItem::Field("rid".into()),
-            SelectItem::Field("seq".into()),
-            SelectItem::Field("tombstone".into()),
-            SelectItem::Field("labels".into()),
-            SelectItem::Field("sourceId".into()),
-            SelectItem::Field("createdAt".into()),
-            SelectItem::Facet(FacetSelector {
-                kind: FacetKind::Struct,
-                variant: Some("article".into()),
-                fields: Vec::new(),
-            }),
-            SelectItem::Facet(FacetSelector {
-                kind: FacetKind::Struct,
-                variant: Some("hotlist".into()),
-                fields: Vec::new(),
-            }),
-            SelectItem::Facet(FacetSelector {
-                kind: FacetKind::Struct,
-                variant: Some("discovery".into()),
-                fields: Vec::new(),
-            }),
-        ],
+        select: content_select(),
         expand: Vec::new(),
         search: None,
         as_of: None,
@@ -623,14 +732,7 @@ async fn row_of(state: &AppState, rid: &Rid) -> Result<Option<Value>, ApiError> 
         .query(spec)
         .await
         .map_err(ApiError::from)?;
-    let row = page
-        .rows
-        .into_iter()
-        .find(|row| {
-            row.get("struct:article").is_some()
-                || row.get("struct:hotlist").is_some()
-                || row.get("struct:discovery").is_some()
-        });
+    let row = page.rows.into_iter().find(|row| has_content(row));
     Ok(row)
 }
 
@@ -675,37 +777,225 @@ async fn get_item(
     project: crate::ActiveProject,
     Path(content_id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let rid = rid_of(&content_id)?;
-    let row = read_row(&state, &rid, project.id()).await?;
-    let names = source_names(&state).await?;
-    let mut item = item_view(&row, &names);
-    let body = body_of(&state, &rid).await?;
-    item["body"] = body;
-    let kinds = state
-        .services
-        .strata()
-        .kinds(&rid, true)
-        .await
-        .map_err(ApiError::from)?;
-    item["facets"] = json!(
-        kinds
-            .iter()
-            .map(|summary| json!({
-                "kind": summary.kind.as_str(),
-                "variant": summary.variant,
-                "version": summary.latest,
-                "versions": summary.versions,
-                "mediaType": summary.media_type,
-                "size": summary.size,
-            }))
-            .collect::<Vec<_>>()
-    );
+    let item = detail_value(&state, &content_id, project.id()).await?;
     let mut response = util::ok(&item);
     if let Ok(value) = item["etag"].as_str().unwrap_or("").parse() {
         response
             .headers_mut()
             .insert(axum::http::header::ETAG, value);
     }
+    Ok(response)
+}
+
+/// 数据面明细：这条内容由哪些面组成。
+async fn list_facets(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    Path(content_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let rid = rid_of(&content_id)?;
+    read_row(&state, &rid, project.id()).await?;
+    let kinds = state
+        .services
+        .strata()
+        .kinds(&rid, true)
+        .await
+        .map_err(ApiError::from)?;
+    let items: Vec<Value> = kinds
+        .iter()
+        .map(|summary| {
+            json!({
+                "kind": summary.kind.as_str(),
+                "variant": summary.variant,
+                "version": summary.latest,
+                "versions": summary.versions,
+                "mediaType": summary.media_type,
+                "size": summary.size,
+            })
+        })
+        .collect();
+    Ok(util::ok(&json!({ "items": items, "total": items.len() })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FacetQuery {
+    #[serde(default)]
+    version: Option<u64>,
+}
+
+async fn get_facet_kind(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    Path((content_id, kind)): Path<(String, String)>,
+    Query(query): Query<FacetQuery>,
+) -> Result<Response, ApiError> {
+    read_facet(&state, &content_id, &kind, None, project.id(), query).await
+}
+
+async fn get_facet_variant(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    Path((content_id, kind, variant)): Path<(String, String, String)>,
+    Query(query): Query<FacetQuery>,
+) -> Result<Response, ApiError> {
+    read_facet(
+        &state,
+        &content_id,
+        &kind,
+        Some(variant.as_str()),
+        project.id(),
+        query,
+    )
+    .await
+}
+
+/// 单个数据面：文本、结构化值或附件引用。项目可见性沿用详情同一门禁。
+async fn read_facet(
+    state: &AppState,
+    content_id: &str,
+    kind: &str,
+    variant: Option<&str>,
+    project_id: &str,
+    query: FacetQuery,
+) -> Result<Response, ApiError> {
+    let payload = facet_value(state, content_id, kind, variant, project_id, query.version).await?;
+    Ok(util::ok(&payload))
+}
+
+/// 单面内容的可复用读取：工具面 `tool.read` 与 facet 端点共用同一实现。
+pub(crate) async fn facet_value(
+    state: &AppState,
+    content_id: &str,
+    kind: &str,
+    variant: Option<&str>,
+    project_id: &str,
+    version: Option<u64>,
+) -> Result<Value, ApiError> {
+    let rid = rid_of(content_id)?;
+    read_row(state, &rid, project_id).await?;
+    let kind = FacetKind::parse(kind)
+        .map_err(|_| ApiError::validation("kind", "format", "未知的数据面类型"))?;
+    let reference = FacetRef {
+        rid: rid.clone(),
+        kind: kind.clone(),
+        variant: variant.map(str::to_string),
+        version: version.map(VersionSel::Exact).unwrap_or(VersionSel::Latest),
+    };
+    let facet = state
+        .services
+        .strata()
+        .get(&reference, false)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| {
+            ApiError::not_found(format!("{} 的 {} 面", rid.as_str(), kind.as_str()))
+        })?;
+    Ok(json!({
+        "kind": kind.as_str(),
+        "variant": reference.variant.clone(),
+        "version": facet.version,
+        "contentHash": facet.content_hash,
+        "mediaType": facet.media_type,
+        "size": facet.size,
+        "text": facet.text,
+        "value": facet.value,
+        "blob": facet.blob,
+    }))
+}
+
+async fn get_blob_kind(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    Path((content_id, kind)): Path<(String, String)>,
+    Query(query): Query<FacetQuery>,
+) -> Result<Response, ApiError> {
+    read_blob(&state, &content_id, &kind, None, project.id(), query).await
+}
+
+async fn get_blob_variant(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    Path((content_id, kind, variant)): Path<(String, String, String)>,
+    Query(query): Query<FacetQuery>,
+) -> Result<Response, ApiError> {
+    read_blob(
+        &state,
+        &content_id,
+        &kind,
+        Some(variant.as_str()),
+        project.id(),
+        query,
+    )
+    .await
+}
+
+/// 附件字节：图片/音视频/文件的原始内容，带真实媒体类型。
+/// 文本面同样可按字节取，避免前端为「可下载」再造一条路径。
+async fn read_blob(
+    state: &AppState,
+    content_id: &str,
+    kind: &str,
+    variant: Option<&str>,
+    project_id: &str,
+    query: FacetQuery,
+) -> Result<Response, ApiError> {
+    let rid = rid_of(content_id)?;
+    read_row(state, &rid, project_id).await?;
+    let kind = FacetKind::parse(kind)
+        .map_err(|_| ApiError::validation("kind", "format", "未知的数据面类型"))?;
+    let reference = FacetRef {
+        rid: rid.clone(),
+        kind: kind.clone(),
+        variant: variant.map(str::to_string),
+        version: query
+            .version
+            .map(VersionSel::Exact)
+            .unwrap_or(VersionSel::Latest),
+    };
+    let facet = state
+        .services
+        .strata()
+        .get(&reference, false)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| {
+            ApiError::not_found(format!("{} 的 {} 面", rid.as_str(), kind.as_str()))
+        })?;
+    let bytes = match (facet.bytes, facet.text) {
+        (Some(bytes), _) => bytes.to_vec(),
+        (None, Some(text)) => text.into_bytes(),
+        (None, None) => {
+            return Err(ApiError::not_found(format!(
+                "{} 的 {} 面没有二进制内容",
+                rid.as_str(),
+                kind.as_str()
+            )));
+        }
+    };
+    let summary = state
+        .services
+        .strata()
+        .kinds(&rid, true)
+        .await
+        .map_err(ApiError::from)?;
+    let media_type = summary
+        .iter()
+        .find(|item| item.kind == kind && (variant.is_none() || item.variant.as_deref() == variant))
+        .and_then(|item| item.media_type.clone())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    if let Ok(value) = media_type.parse() {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_TYPE, value);
+    }
+    response
+        .headers_mut()
+        .insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("private, max-age=300"),
+        );
     Ok(response)
 }
 
@@ -980,8 +1270,8 @@ async fn patch_item(
     }
     if let Some(title) = util::optional_text(map, "title")?
         && let Some(value) = current["struct"].as_object().cloned()
+        && let Some(variant) = struct_variant(&row)
     {
-        let variant = struct_variant(&row);
         let mut next = value;
         if let Some(hints) = next.get_mut("hints").and_then(Value::as_object_mut) {
             hints.insert("title".into(), Value::String(title.clone()));

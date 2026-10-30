@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { IconCheck, IconPlus, IconRefresh, IconTrash } from "../components/icons";
+import { RowSubject } from "../components/ListRow";
 import { PlatformIcon } from "../components/platforms";
 import { Card, Empty, Field, Loading, Modal, Problem, StatusBadge, inlineValue, useUi } from "../components/ui";
 import {
@@ -38,6 +39,7 @@ import type {
   CliCandidate,
   EffectiveSettings,
   ModelResource,
+  Operation,
   PromptResource,
   ResetPreview,
   SearchPlatform,
@@ -86,6 +88,10 @@ export function SettingsPage() {
   const [preview, setPreview] = useState<ResetPreview | null>(null);
   const [factory, setFactory] = useState(false);
   const [reportId, setReportId] = useState<string | null>(null);
+  // 已提交但未结束的清空/恢复出厂操作：用于危险区持续提示，避免“点了没反应”。
+  const [resetOp, setResetOp] = useState<Operation | null>(null);
+  // 提交锁：状态更新是异步的，连点会发出两次 POST（第二次 409），用 ref 兑住。
+  const submitting = useRef(false);
   const [modelSelection, setModelSelection] = useState<string[]>([]);
 
   const load = useCallback(async () => {
@@ -225,25 +231,34 @@ export function SettingsPage() {
   }
 
   async function confirmReset() {
-    if (!preview) return;
+    if (!preview || busy || submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     let started = false;
+    const label = factory ? "恢复出厂设置" : "分域清空";
     try {
       const operation = factory
         ? await createFactoryReset(preview, preview.confirmationToken)
         : await createReset(preview, preview.confirmationToken);
       started = true;
-      const finished = await run(operation, factory ? "恢复出厂设置" : "分域清空");
-      const summary = (finished.resultSummary ?? {}) as Record<string, unknown>;
-      setReportId(String(summary.reportId ?? "") || null);
+      // 202 即已受理：立刻关掉确认弹窗并给出反馈，随后才等终态。
+      // 否则弹窗会一直盖住左下角的操作进度卡片，看起来像“点了没反应”。
       setPreview(null);
       setFactory(false);
+      setResetOp(operation);
+      notify("ok", `${label}已提交`, "正在排空任务并清理数据，进度见左下角任务卡片。");
+      const finished = await run(operation, label);
+      const summary = (finished.resultSummary ?? {}) as Record<string, unknown>;
+      setReportId(String(summary.reportId ?? "") || null);
       await load();
     } catch (problem) {
+      // 提交前的失败（令牌/ETag 不一致）需要提示；提交后的失败 run 已提示过。
       if (!started) {
         notify("bad", "执行失败", problem instanceof Error ? problem.message : undefined);
       }
     } finally {
+      submitting.current = false;
+      setResetOp(null);
       setBusy(false);
     }
   }
@@ -280,14 +295,14 @@ export function SettingsPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">settings · 系统设置</div>
-          <h1 className="page-title">集中、可校验、可回滚的运行策略</h1>
+          <h1 className="page-title">系统设置</h1>
           <p className="page-lede">
-            设置是面向用户的有效值，不是配置文件的镜像。每次应用生成新代际；模型、提示词与 Skill 都是版本化资源，生成物在批准前不会启用。
+            设置展示当前生效值，应用后生成新版本。模型、提示词与 Skill 为版本化资源，生成物需批准后启用。
           </p>
         </div>
         <div className="page-actions">
           <StatusBadge status={effective ? "online" : "degraded"} />
-          <span className="small muted">当前代际 <strong className="mono">G-{effective?.generation ?? "—"}</strong></span>
+          <span className="small muted">当前版本 <strong className="mono">G-{effective?.generation ?? "—"}</strong></span>
           <button type="button" className="btn" onClick={() => void load()} disabled={loading}>
             <IconRefresh size={14} /> 刷新
           </button>
@@ -364,7 +379,7 @@ export function SettingsPage() {
                     className="btn btn-sm btn-danger"
                     disabled={busy}
                     onClick={() => {
-                      if (!window.confirm(`删除选中的 ${modelSelection.length} 个模型？被默认模型或工作流引用的会失败。`)) return;
+                      if (!window.confirm(`删除选中的 ${modelSelection.length} 个模型？被默认模型或工作流引用的模型将删除失败。`)) return;
                       void batchModels("delete");
                     }}
                   >
@@ -373,8 +388,8 @@ export function SettingsPage() {
                   <button type="button" className="btn btn-sm" onClick={() => setModelSelection([])}>清除选择</button>
                 </div>
               ) : null}
-              <Card title="模型资源" sub="密钥支持环境变量引用或直接填写（值只写不读）；删除被版本引用的模型会被拒绝" action={<button type="button" className="btn btn-sm" onClick={() => setModelOpen(true)}><IconPlus size={12} /> 登记模型</button>} flush>
-                {models.length === 0 ? <Empty title="还没有模型" text="登记一个 OpenAI 兼容端点、本机服务或命令行模型。" /> : (
+              <Card title="模型资源" sub="密钥支持环境变量引用或直接填写（仅写入，不回读）；被版本引用的模型不可删除" action={<button type="button" className="btn btn-sm" onClick={() => setModelOpen(true)}><IconPlus size={12} /> 登记模型</button>} flush>
+                {models.length === 0 ? <Empty title="暂无模型" text="登记 OpenAI 兼容端点、本机服务或命令行模型。" /> : (
                   <div className="list">
                     <div className="list-row" style={{ borderBottom: "1px solid var(--line-soft)" }}>
                       <input
@@ -398,7 +413,9 @@ export function SettingsPage() {
                           }
                         />
                         <span className="list-main">
-                          <span className="list-title">{model.name}</span>
+                          <RowSubject onClick={() => setModelEditing(model)} title="编辑模型">
+                            {model.name}
+                          </RowSubject>
                           <span className="list-meta">
                             <span className="mono">{model.id}</span>
                             <span>{model.kind}</span>
@@ -426,7 +443,6 @@ export function SettingsPage() {
                         >
                           {rowTesting === model.id ? "测试中…" : "测试"}
                         </button>
-                        <button type="button" className="btn btn-sm" onClick={() => setModelEditing(model)}>编辑</button>
                       </div>
                     ))}
                   </div>
@@ -440,16 +456,18 @@ export function SettingsPage() {
           {section === "prompts" || section === "skills" ? (
             <Card
               title={section === "prompts" ? "提示词" : "Skill"}
-              sub="稳定身份 + 版本；被运行引用的版本不可修改"
+              sub="标识固定、按版本管理；被运行引用的版本不可修改"
               action={<button type="button" className="btn btn-sm" onClick={() => setPromptOpen(section === "prompts" ? "prompt" : "skill")}><IconPlus size={12} /> 新建</button>}
               flush
             >
-              {(section === "prompts" ? prompts : skills).length === 0 ? <Empty title="还没有内容" /> : (
+              {(section === "prompts" ? prompts : skills).length === 0 ? <Empty title="暂无内容" /> : (
                 <div className="list">
                   {(section === "prompts" ? prompts : skills).map((item) => (
                     <div className="list-row" key={item.id}>
                       <span className="list-main">
-                        <span className="list-title">{item.name}{item.builtin ? <span className="tag" style={{ marginLeft: 6 }}>内置</span> : null}</span>
+                        <RowSubject onClick={() => setVersionFor(item)} title="查看版本并新建">
+                          {item.name}{item.builtin ? <span className="tag" style={{ marginLeft: 6 }}>内置</span> : null}
+                        </RowSubject>
                         <span className="list-meta"><span>{item.description}</span><span>{item.versions.length} 个版本</span><span className="mono">{item.latestVersionId}</span></span>
                       </span>
                       <button type="button" className="btn btn-sm" onClick={() => setVersionFor(item)}>新版本</button>
@@ -461,11 +479,11 @@ export function SettingsPage() {
           ) : null}
 
           {section === "history" ? (
-            <Card title="变更历史" sub="回滚创建新代际，不删除历史" flush>
-              {history.length === 0 ? <Empty title="还没有历史" /> : (
+            <Card title="变更历史" sub="回滚生成新版本，保留历史" flush>
+              {history.length === 0 ? <Empty title="暂无历史" /> : (
                 <div className="table-wrap">
                   <table className="table">
-                    <thead><tr><th>代际</th><th>摘要</th><th>应用时间</th><th>回滚来源</th><th /></tr></thead>
+                    <thead><tr><th>版本</th><th>摘要</th><th>应用时间</th><th>回滚来源</th><th /></tr></thead>
                     <tbody>
                       {history.map((item) => (
                         <tr key={item.generation}>
@@ -488,6 +506,7 @@ export function SettingsPage() {
           {section === "maintenance" ? (
             <MaintenanceCard
               busy={busy}
+              pending={resetOp}
               onPreview={(domains) => void previewResetDomains(domains)}
               onFactory={() => void previewFactory()}
               reportId={reportId}
@@ -510,6 +529,7 @@ export function SettingsPage() {
         <ResetModal
           preview={preview}
           factory={factory}
+          busy={busy}
           onClose={() => { setPreview(null); setFactory(false); }}
           onConfirm={() => void confirmReset()}
         />
@@ -635,7 +655,7 @@ function DiffModal({ diff, onClose, onApply }: { diff: Record<string, unknown>; 
             </div>
           </div>
         ))}
-        {restart.length ? <div className="alert warn">需要重启的字段：{restart.join("、")}。应用后 generation 已创建，但列出的项在 collector 重启后生效。</div> : null}
+        {restart.length ? <div className="alert warn">需要重启的字段：{restart.join("、")}。应用后已生成新版本，所列字段在 collector 重启后生效。</div> : null}
       </div>
     </Modal>
   );
@@ -838,7 +858,7 @@ function ModelModal({ initial, onClose, onDone }: { initial?: ModelResource; onC
   return (
     <Modal
       title={editing ? `编辑模型 · ${initial?.name ?? ""}` : "登记模型"}
-      sub="密钥可选环境变量引用或直接填写；直接填写的值只写不读，不出现在列表、日志或差异里"
+      sub="密钥支持环境变量引用或直接填写；直接填写的值仅写入，不出现在列表、日志与差异中"
       onClose={onClose}
       wide
       footer={<>
@@ -1127,10 +1147,29 @@ function VersionModal({ resource, onClose, onDone }: { resource: PromptResource;
   );
 }
 
-function MaintenanceCard({ busy, onPreview, onFactory, reportId }: { busy: boolean; onPreview: (domains: string[]) => void; onFactory: () => void; reportId: string | null }) {
+function MaintenanceCard({
+  busy,
+  pending,
+  onPreview,
+  onFactory,
+  reportId,
+}: {
+  busy: boolean;
+  pending: Operation | null;
+  onPreview: (domains: string[]) => void;
+  onFactory: () => void;
+  reportId: string | null;
+}) {
   const [domains, setDomains] = useState<string[]>([]);
   return (
     <div className="stack" style={{ gap: 16 }}>
+      {pending ? (
+        <div className="alert warn">
+          {pending.kind === "maintenance.factoryReset" ? "恢复出厂" : "清空"}已提交（
+          <code>{pending.operationId}</code>），正在排空任务并清理数据。
+          进度见左下角任务卡片，完成后本页会自动刷新。
+        </div>
+      ) : null}
       <Card title="分域清空" sub="预演只统计数量；确认后永久删除所选域的元数据与对象">
         <div className="stack" style={{ gap: 12 }}>
           <div className="domain-grid">
@@ -1142,7 +1181,7 @@ function MaintenanceCard({ busy, onPreview, onFactory, reportId }: { busy: boole
             ))}
           </div>
           <div className="row">
-            <button type="button" className="btn btn-primary" disabled={busy || domains.length === 0} onClick={() => onPreview(domains)}>预演清空</button>
+            <button type="button" className="btn btn-primary" disabled={busy || pending !== null || domains.length === 0} onClick={() => onPreview(domains)}>预演清空</button>
             <span className="small muted">选择内容会自动加入派生数据、生产输入与无引用对象。预演后需要在弹窗中再次确认才会真实删除。</span>
           </div>
         </div>
@@ -1153,7 +1192,9 @@ function MaintenanceCard({ busy, onPreview, onFactory, reportId }: { busy: boole
           覆盖元数据库、对象与暂存、派生索引、外部对象以及用户信源、模型、提示词、Skill 与设置历史；环境变量与其中的密钥逐字节保留。
         </p>
         <div className="row">
-          <button type="button" className="btn btn-danger" disabled={busy} onClick={onFactory}>预演恢复出厂</button>
+          <button type="button" className="btn btn-danger" disabled={busy || pending !== null} onClick={onFactory}>
+            {pending ? "执行中…" : "预演恢复出厂"}
+          </button>
           {reportId ? <span className="small muted">最近报告 <code>{reportId}</code></span> : null}
         </div>
       </div>
@@ -1161,14 +1202,35 @@ function MaintenanceCard({ busy, onPreview, onFactory, reportId }: { busy: boole
   );
 }
 
-function ResetModal({ preview, factory, onClose, onConfirm }: { preview: ResetPreview; factory: boolean; onClose: () => void; onConfirm: () => void }) {
+function ResetModal({
+  preview,
+  factory,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  preview: ResetPreview;
+  factory: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
   return (
     <Modal
       title={factory ? "确认恢复出厂" : "确认清空"}
       sub="执行需要预演令牌、ETag 与范围一致"
       onClose={onClose}
       wide
-      footer={<><button type="button" className="btn" onClick={onClose}>取消</button><button type="button" className="btn btn-danger" onClick={onConfirm}>{factory ? "恢复出厂" : "执行清空"}</button></>}
+      footer={
+        <>
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>
+            取消
+          </button>
+          <button type="button" className="btn btn-danger" disabled={busy} onClick={onConfirm}>
+            {busy ? "提交中…" : factory ? "恢复出厂" : "执行清空"}
+          </button>
+        </>
+      }
     >
       <div className="stack" style={{ gap: 12 }}>
         <dl className="kv">
@@ -1176,6 +1238,16 @@ function ResetModal({ preview, factory, onClose, onConfirm }: { preview: ResetPr
           <dt>令牌有效期</dt><dd>{stamp(preview.expiresAt)}</dd>
           <dt>存储可达</dt><dd>{preview.storageReachable ? "是" : "否"}</dd>
         </dl>
+        {factory && preview.config ? (
+          <div className={preview.config.baselineAvailable ? "alert" : "alert bad"}>
+            {preview.config.baselineAvailable
+              ? `配置将回到出厂基线，重建 ${preview.config.declarations} 份声明`
+              : "出厂基线缺失或无法加载，恢复出厂会保留当前配置"}
+            {preview.config.retiredPaths.length
+              ? `；同时退役遗留目录 ${preview.config.retiredPaths.map((item) => item.path).join("、")}`
+              : ""}
+          </div>
+        ) : null}
         {preview.dependencies.length ? <div className="alert warn">自动加入：{preview.dependencies.map((item) => `${item.domain}（${item.reason}）`).join("；")}</div> : null}
         <div className="table-wrap">
           <table className="table">
@@ -1187,7 +1259,7 @@ function ResetModal({ preview, factory, onClose, onConfirm }: { preview: ResetPr
             </tbody>
           </table>
         </div>
-        <div className="alert bad">这是不可逆操作。确认令牌只在本页有效；关闭后需要重新预演。执行完成后会核对业务域是否归零。</div>
+        <div className="alert bad">这是不可逆操作。确认令牌只在本页有效；关闭后需要重新预演。提交后弹窗会关闭，执行进度在左下角任务卡片中。</div>
       </div>
     </Modal>
   );

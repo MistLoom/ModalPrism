@@ -5,11 +5,13 @@ import {
   IconClose,
   IconFlask,
   IconHistory,
+  IconPencil,
   IconPlay,
   IconPlus,
   IconRefresh,
   IconTrash,
 } from "../components/icons";
+import { RowSubject } from "../components/ListRow";
 import { RunsDrawer } from "../components/RunsDrawer";
 import { Card, Drawer, Empty, Field, Loading, Modal, Problem, StatusBadge, StructuredValue, Tabs, useUi } from "../components/ui";
 import { FilterPanel, SortHeader, sortRows, useSort } from "../components/Table";
@@ -17,11 +19,14 @@ import { Pager, slicePage } from "../components/Pager";
 import {
   analyzeSource,
   approveAdapterDraft,
+  assignSourcesToGroup,
   createAdapterDraft,
   createCollectionRun,
   createPlan,
   createSource,
+  createSourceGroup,
   deleteSource,
+  deleteSourceGroup,
   disableSource,
   enableSource,
   listAdapterDrafts,
@@ -29,17 +34,19 @@ import {
   listAccessMethods,
   listPlans,
   listSources,
+  listSourceGroups,
   listSourceTypes,
   probeSource,
   rejectAdapterDraft,
   shareSource,
   unshareSource,
   updateSource,
+  updateSourceGroup,
 } from "../lib/api";
-import { relative, statusLabel, statusTone } from "../lib/format";
+import { relative, statusLabel, statusTone, stopReasonLabel } from "../lib/format";
 import { useCurrentProject } from "../lib/project";
 import { navigate, useRoute } from "../lib/router";
-import type { NamedResource, Operation, Plan, Schedule, Source, SourceInput, SourcePayload, SourceTypeRecord } from "../lib/types";
+import type { NamedResource, Operation, Plan, Schedule, Source, SourceGroup, SourceInput, SourcePayload, SourceTypeRecord } from "../lib/types";
 
 const EMPTY: SourceInput = {
   name: "",
@@ -65,6 +72,9 @@ produces: [discovery]
 limits:
   timeout: 30s
   concurrency: 1`;
+
+/** 上次所在的分类：分类是长期工作范围，下次打开还在原处。 */
+const GROUP_STORAGE = "modalprism.sourceGroup";
 
 export function SourcesPage() {
   const { params } = useRoute();
@@ -93,12 +103,17 @@ export function SourcesPage() {
   const [pageSize, setPageSize] = useState(20);
   const [tab, setTab] = useState<"list" | "adapters">((params.get("tab") === "adapters" ? "adapters" : "list"));
   const [flag, setFlag] = useState<"all" | "enabled" | "disabled" | "shared" | "alert">("all");
+  // 分类是工作范围，不是筛选：选中分类即进入它的管理范围，并沿用到下次打开。
+  const [groups, setGroups] = useState<SourceGroup[]>([]);
+  const [groupId, setGroupId] = useState(() => params.get("group") ?? window.localStorage.getItem(GROUP_STORAGE) ?? "all");
+  const [groupModal, setGroupModal] = useState<"new" | SourceGroup | null>(null);
+  const [assignOpen, setAssignOpen] = useState(false);
   const { sort, toggle } = useSort();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [sourcePage, planPage, methodPage, adapterPage, draftPage, typePage] = await Promise.all([
+      const [sourcePage, planPage, methodPage, adapterPage, draftPage, typePage, groupPage] = await Promise.all([
         // 项目隔离由后端按 x-project-id 处理；"全部"显式请求 scope=all 取消过滤。
         listSources({ limit: 200, scope: scope === "all" ? "all" : undefined }),
         listPlans({ limit: 200 }),
@@ -106,6 +121,8 @@ export function SourcesPage() {
         listAdapters(),
         listAdapterDrafts(),
         listSourceTypes(),
+        // “全部项目”时一并取消分类过滤：共享信源的分类才回显得出来。
+        listSourceGroups(scope === "all" ? { scope: "all" } : {}),
       ]);
       setSources(sourcePage.items);
       setPlans(planPage.items);
@@ -113,6 +130,7 @@ export function SourcesPage() {
       setAdapters(adapterPage.items);
       setDrafts(draftPage.items);
       setTypes(typePage.items);
+      setGroups(groupPage.items);
       setError(null);
     } catch (problem) {
       setError(problem);
@@ -125,6 +143,15 @@ export function SourcesPage() {
     void load();
   }, [load]);
 
+  // 深链：从内容详情、日志健康或概览跳过来时，直接打开这家信源的编辑面板。
+  useEffect(() => {
+    if (!sources) return;
+    const id = params.get("id");
+    if (!id) return;
+    const hit = sources.find((source) => source.id === id || source.id === id.replace(/^source\//, ""));
+    if (hit) setEditing(hit);
+  }, [sources, params]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(params.get("query") ?? search), 200);
     return () => window.clearTimeout(timer);
@@ -133,8 +160,14 @@ export function SourcesPage() {
 
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    // 项目可见性已由后端按活跃项目过滤（含共享信源），这里只做本地关键词/健康/类型筛选。
+    // 分类先定工作范围，其余条件才在范围内收窄；两者语义不同，不互相覆盖。
+    const localGroup = (source: Source) =>
+      source.groupId && groups.some((group) => group.id === source.groupId) ? source.groupId : "";
     const filtered = (sources ?? []).filter((source) => {
+      if (groupId !== "all") {
+        const own = localGroup(source);
+        if (groupId === "none" ? own !== "" : own !== groupId) return false;
+      }
       if (typeFilter !== "all" && source.sourceType !== typeFilter) return false;
       if (health !== "all" && source.health !== health) return false;
       if (flag === "enabled" && !source.enabled) return false;
@@ -162,7 +195,7 @@ export function SourcesPage() {
       }
       return "";
     });
-  }, [sources, search, health, typeFilter, flag, sort, plans]);
+  }, [sources, search, health, typeFilter, flag, sort, plans, groupId, groups]);
 
   // 类型 id → 产品命名的展示映射，来自后端注册表（不在前端复刻矩阵）。
   const typeLabelOf = useMemo(() => {
@@ -173,11 +206,36 @@ export function SourcesPage() {
 
   const pagedRows = useMemo(() => slicePage(rows, page, pageSize), [rows, page, pageSize]);
 
+  // 分类 id → 名称；只认当前项目的分类，他项目共享来的信源按未分组处理。
+  const groupNameOf = useMemo(() => {
+    const map = new Map(groups.map((group) => [group.id, group.name]));
+    return (source: Source) => (source.groupId && map.has(source.groupId) ? map.get(source.groupId) ?? "" : "");
+  }, [groups]);
+
+  const scopeGroup = groupId === "all" || groupId === "none" ? null : groups.find((group) => group.id === groupId) ?? null;
+
+  const groupCounts = useMemo(() => {
+    const per = new Map<string, number>();
+    let ungrouped = 0;
+    for (const source of sources ?? []) {
+      const own = source.groupId && groups.some((group) => group.id === source.groupId) ? source.groupId : "";
+      if (own) per.set(own, (per.get(own) ?? 0) + 1);
+      else ungrouped += 1;
+    }
+    return { per, ungrouped, total: sources?.length ?? 0 };
+  }, [sources, groups]);
+
+  // 记忆里的分类可能已被删除：回到全部，避免空范围。
+  useEffect(() => {
+    if (groupId === "all" || groupId === "none" || !groups.length) return;
+    if (!groups.some((group) => group.id === groupId)) setGroupId("all");
+  }, [groups, groupId]);
+
   // 筛选集变化后当前页可能越界，回到第一页。
   useEffect(() => {
     setPage(1);
     setSelection([]);
-  }, [search, health, typeFilter, scope, flag, sources?.length]);
+  }, [search, health, typeFilter, scope, flag, sources?.length, groupId]);
 
   // 计划归计划页管理：信源页只呈现关联数量，点击跳转过滤。
   const planCountOf = (sourceId: string) =>
@@ -263,6 +321,56 @@ export function SourcesPage() {
     );
   }
 
+  // 进入分类即切换工作范围：地址栏与本地记忆同时留存，刷新或下次打开仍在原分类。
+  function selectGroup(next: string) {
+    setGroupId(next);
+    setPage(1);
+    setSelection([]);
+    window.localStorage.setItem(GROUP_STORAGE, next);
+    navigate(next === "all" ? "sources" : `sources?group=${encodeURIComponent(next)}`);
+  }
+
+  // 分类管理动作与筛选无关：批量改变归属后当前范围可能变空，重载即可。
+  async function moveSelection(target: string | null) {
+    if (!selection.length) return;
+    setBusy("assign");
+    try {
+      const result = await assignSourcesToGroup({ groupId: target, sourceIds: selection });
+      setSelection([]);
+      setAssignOpen(false);
+      notify(
+        result.skipped.length ? "warn" : "ok",
+        `已移动 ${result.updated.length} 个信源`,
+        result.skipped.length ? `${result.skipped.length} 个未移动：${result.skipped[0].reason}` : undefined,
+      );
+      await load();
+    } catch (problem) {
+      notify("bad", "移动信源失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeGroup(group: SourceGroup) {
+    if (group.builtin) {
+      notify("bad", "内置分类不可删除", "可改名，或把成员移出后自建分类。");
+      return;
+    }
+    const members = groupCounts.per.get(group.id) ?? 0;
+    if (!window.confirm(`删除分类「${group.name}」？其中 ${members} 个信源会退回未分组。`)) return;
+    setBusy(`group-${group.id}`);
+    try {
+      await deleteSourceGroup(group.id);
+      notify("ok", "分类已删除", "成员已退回未分组，信源本身不受影响。");
+      if (groupId === group.id) selectGroup("all");
+      await load();
+    } catch (problem) {
+      notify("bad", "删除分类失败", problem instanceof Error ? problem.message : undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function probe(source: Source) {
     setBusy(`probe-${source.id}`);
     let started = false;
@@ -284,9 +392,9 @@ export function SourcesPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">sources · 信源</div>
-          <h1 className="page-title">信源清单与适配器</h1>
+          <h1 className="page-title">信源</h1>
           <p className="page-lede">
-            信源声明取什么、怎么解析；执行节律、数量上限与停止条件在「计划」页管理。手动采集与探测共用同一条执行核心；所有修改都经过配置校验与热加载。
+            信源声明采集地址与解析适配器；执行节律、数量上限与停止条件由计划管理。左侧分类用于长期管理，筛选仅收窄当前视图。修改经配置校验后热加载。
           </p>
         </div>
         <div className="page-actions">
@@ -315,6 +423,86 @@ export function SourcesPage() {
 
       {tab === "list" ? (
       <>
+      <div className="source-layout">
+        <aside className="source-rail" aria-label="信源分类">
+          <div className="source-rail-head">
+            <span>分类</span>
+            <button type="button" className="btn btn-sm" onClick={() => setGroupModal("new")}>
+              <IconPlus size={12} /> 新建
+            </button>
+          </div>
+          <div className={`source-rail-row${groupId === "all" ? " is-active" : ""}`}>
+            <button type="button" className="source-rail-pick" onClick={() => selectGroup("all")}>
+              <span className="source-rail-name">全部信源</span>
+              <span className="source-rail-count">{groupCounts.total}</span>
+            </button>
+          </div>
+          {groups.map((group) => (
+            <div key={group.id} className={`source-rail-row${groupId === group.id ? " is-active" : ""}`}>
+              <button
+                type="button"
+                className="source-rail-pick"
+                onClick={() => selectGroup(group.id)}
+                title={group.description || group.name}
+              >
+                <span className="source-rail-name">
+                  {group.name}
+                  {group.builtin ? <span className="source-rail-tag">内置</span> : null}
+                </span>
+                <span className="source-rail-count">{groupCounts.per.get(group.id) ?? 0}</span>
+              </button>
+              <button
+                type="button"
+                className="source-rail-edit"
+                aria-label={`编辑分类 ${group.name}`}
+                onClick={() => setGroupModal(group)}
+              >
+                <IconPencil size={13} />
+              </button>
+            </div>
+          ))}
+          <div className={`source-rail-row${groupId === "none" ? " is-active" : ""}`}>
+            <button type="button" className="source-rail-pick" onClick={() => selectGroup("none")}>
+              <span className="source-rail-name">未分组</span>
+              <span className="source-rail-count">{groupCounts.ungrouped}</span>
+            </button>
+          </div>
+          <p className="source-rail-note">分类用于长期管理；筛选仅收窄当前视图，不改变归属。</p>
+        </aside>
+
+        <div className="source-main">
+      {scopeGroup || groupId === "none" ? (
+        <div className="scope-band">
+          <div className="scope-copy">
+            <span className="scope-kicker">正在管理分类</span>
+            <strong>{scopeGroup ? scopeGroup.name : "未分组"}</strong>
+            {scopeGroup?.description ? <span className="small muted">{scopeGroup.description}</span> : null}
+          </div>
+          <span className="fill" />
+          <span className="small muted">
+            {scopeGroup ? groupCounts.per.get(scopeGroup.id) ?? 0 : groupCounts.ungrouped} 个信源
+          </span>
+          {scopeGroup ? (
+            <>
+              <button type="button" className="btn btn-sm" onClick={() => setGroupModal(scopeGroup)}>
+                <IconPencil size={12} /> 重命名
+              </button>
+              {scopeGroup.builtin ? (
+                <span className="small muted">内置分类不可删除</span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  disabled={busy === `group-${scopeGroup.id}`}
+                  onClick={() => void removeGroup(scopeGroup)}
+                >
+                  <IconTrash size={12} /> 删除分类
+                </button>
+              )}
+            </>
+          ) : null}
+        </div>
+      ) : null}
       <div className="toolbar-band">
         <label className="search">
           <span className="muted" aria-hidden="true">⌕</span>
@@ -382,12 +570,20 @@ export function SourcesPage() {
           <button type="button" className="btn btn-sm" disabled={busy === "batch"} onClick={() => void batchAct("批量停用", (source) => (source.enabled ? disableSource(source.id, source.etag) : Promise.resolve()))}>
             批量停用
           </button>
+          <button type="button" className="btn btn-sm" disabled={busy === "assign"} onClick={() => setAssignOpen(true)}>
+            移入分类…
+          </button>
+          {scopeGroup || groupId === "none" ? (
+            <button type="button" className="btn btn-sm" disabled={busy === "assign"} onClick={() => void moveSelection(null)}>
+              移出分类
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn btn-sm btn-danger"
             disabled={busy === "batch"}
             onClick={() => {
-              if (!window.confirm(`删除选中的 ${selection.length} 个信源？引用它们的声明必须先行处理。`)) return;
+              if (!window.confirm(`删除选中的 ${selection.length} 个信源？需先处理引用它们的声明。`)) return;
               void batchAct("批量删除", (source) => deleteSource(source.id, source.etag));
             }}
           >
@@ -404,8 +600,8 @@ export function SourcesPage() {
           </div>
         ) : rows.length === 0 ? (
           <Empty
-            title={sources?.length ? "没有匹配的信源" : "还没有信源"}
-            text={sources?.length ? "调整关键词或健康筛选。" : "从模板新建一个订阅源，或让 AI 先分析目标地址。"}
+            title={sources?.length ? "无匹配信源" : "暂无信源"}
+            text={sources?.length ? "调整关键词或健康筛选。" : "从模板新建订阅源，或用 AI 分析目标地址。"}
             action={<button type="button" className="btn btn-primary btn-sm" onClick={() => setEditing("new")}>新建信源</button>}
           />
         ) : (
@@ -451,20 +647,23 @@ export function SourcesPage() {
                       </td>
                       <td>
                         <div className="cell-main">
-                          <span className="source-name">
+                          <RowSubject onClick={() => setEditing(source)} title="编辑信源">
                             {source.name}
                             <span className="badge neutral" style={{ marginLeft: 6 }}>{typeLabelOf(source.sourceType)}</span>
                             {source.shared ? <span className="badge neutral" style={{ marginLeft: 6 }}>已共享</span> : null}
-                          </span>
+                            {groupId === "all" && groupNameOf(source) ? (
+                              <span className="badge neutral" style={{ marginLeft: 6 }}>{groupNameOf(source)}</span>
+                            ) : null}
+                          </RowSubject>
                           <span className="source-sub mono">{source.id} · {source.endpoint || (source.channel ? `频道 ${source.channel}` : "")}</span>
                         </div>
                       </td>
                       <td>
                         <div className="cell-main">
                           <StatusBadge status={source.health} />
-                          {source.stopReason ? <span className="source-sub">命中限额/停止：{source.stopReason}</span> : null}
+                          {source.stopReason ? <span className="source-sub">命中限额/停止：{stopReasonLabel(source.stopReason)}</span> : null}
                           {source.alert && source.sourceType === "web" ? (
-                            <span className="source-sub" style={{ color: "var(--danger)" }}>疑似改版失效，请检查页面结构</span>
+                            <span className="source-sub" style={{ color: "var(--danger)" }}>疑似页面改版导致失效，请检查页面结构</span>
                           ) : null}
                         </div>
                       </td>
@@ -504,9 +703,6 @@ export function SourcesPage() {
                                 <IconFlask size={12} /> 探测
                               </button>
                             )}
-                            <button type="button" className="btn btn-sm" onClick={() => setEditing(source)}>
-                              编辑
-                            </button>
                             <button
                               type="button"
                               className="btn btn-sm"
@@ -530,7 +726,7 @@ export function SourcesPage() {
                               className="icon-btn"
                               aria-label={`删除 ${source.name}`}
                               onClick={() => {
-                                if (!window.confirm(`删除信源「${source.name}」？引用它的声明必须先行处理。`)) return;
+                                if (!window.confirm(`删除信源「${source.name}」？需先处理引用它的声明。`)) return;
                                 void perform("删除信源", async () => deleteSource(source.id, source.etag));
                               }}
                             >
@@ -564,6 +760,8 @@ export function SourcesPage() {
           />
         ) : null}
       </Card>
+        </div>
+      </div>
       </>
       ) : null}
 
@@ -571,7 +769,7 @@ export function SourcesPage() {
       <div className="stack" style={{ gap: 16 }}>
         <Card
           title="可用适配器"
-          sub="适配器负责把信源原始响应解析成条目；下面列出当前可勾选的适配器与各自用在哪类信源"
+          sub="适配器将信源原始响应解析为条目；以下为当前可选适配器及其适用信源类型"
           action={
             <button type="button" className="btn btn-sm" onClick={() => setEditing("new")}>
               <IconPlus size={12} /> 用适配器新建信源
@@ -622,7 +820,7 @@ export function SourcesPage() {
 
         <Card
           title="AI 生成草稿"
-          sub="AI 生成的适配器在批准前不会写入配置；批准后可与内置适配器一样勾选"
+          sub="AI 生成的适配器需批准后写入配置，并可与内置适配器一样选用"
           action={
             <button type="button" className="btn btn-sm" onClick={() => setDraftOpen(true)}>
               <IconPlus size={12} /> 新建草稿
@@ -631,7 +829,7 @@ export function SourcesPage() {
           flush
         >
           {drafts.length === 0 ? (
-            <Empty title="没有适配器草稿" text="先做一次信源分析，再根据页面结构生成适配器。" />
+            <Empty title="暂无适配器草稿" text="先执行信源分析，再根据页面结构生成适配器。" />
           ) : (
             <div className="list">
               {drafts.map((draft) => {
@@ -686,10 +884,33 @@ export function SourcesPage() {
           )}
         </Card>
 
-        <Card title="声明示例" sub="自定义适配器写成一份 YAML，放进 config/adapters 即参与校验与勾选">
+        <Card title="声明示例" sub="自定义适配器以 YAML 声明放入 config/adapters，参与校验与选用">
           <div className="code">{ADAPTER_EXAMPLE}</div>
         </Card>
       </div>
+      ) : null}
+
+      {groupModal ? (
+        <GroupModal
+          group={groupModal === "new" ? null : groupModal}
+          onClose={() => setGroupModal(null)}
+          onSaved={async (saved) => {
+            const created = groupModal === "new";
+            setGroupModal(null);
+            await load();
+            if (created) selectGroup(saved.id);
+          }}
+        />
+      ) : null}
+
+      {assignOpen ? (
+        <AssignGroupModal
+          groups={groups}
+          count={selection.length}
+          busy={busy === "assign"}
+          onClose={() => setAssignOpen(false)}
+          onConfirm={(target) => void moveSelection(target)}
+        />
       ) : null}
 
       {editing ? (
@@ -698,7 +919,13 @@ export function SourcesPage() {
           methods={methods}
           adapters={adapters}
           types={types}
-          onClose={() => setEditing(null)}
+          groups={groups}
+          defaultGroupId={scopeGroup?.id ?? ""}
+          onClose={() => {
+            setEditing(null);
+            // 深链打开的编辑面板关掉后清参数，避免刷新又被重新打开。
+            if (params.get("id")) navigate("sources");
+          }}
           onAnalyze={() => setAnalysis(true)}
           onSaved={async () => {
             setEditing(null);
@@ -738,6 +965,8 @@ function SourceDrawer({
   methods,
   adapters,
   types,
+  groups,
+  defaultGroupId,
   onClose,
   onAnalyze,
   onSaved,
@@ -746,6 +975,9 @@ function SourceDrawer({
   methods: NamedResource[];
   adapters: NamedResource[];
   types: SourceTypeRecord[];
+  groups: SourceGroup[];
+  /** 在当前分类里新建时默认归入该分类。 */
+  defaultGroupId: string;
   onClose: () => void;
   onAnalyze: () => void;
   onSaved: () => void | Promise<void>;
@@ -762,8 +994,10 @@ function SourceDrawer({
           endpoint: source.endpoint,
           channel: source.channel ?? "",
           schedule: { ...source.schedule },
+          // 他项目共享来的分类不在本项目的分类清单里，表单按未分组处理。
+          groupId: source.groupId && groups.some((group) => group.id === source.groupId) ? source.groupId : "",
         }
-      : { ...EMPTY, adapterIds: [...EMPTY.adapterIds], schedule: { ...EMPTY.schedule } },
+      : { ...EMPTY, adapterIds: [...EMPTY.adapterIds], schedule: { ...EMPTY.schedule }, groupId: defaultGroupId },
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -934,10 +1168,22 @@ function SourceDrawer({
         <Field label="名称" htmlFor="source-name">
           <input id="source-name" className="input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如 Hugging Face Blog" />
         </Field>
-        <Field label="信源类型" hint="先定类型：地址/频道与可选的接入方式、适配器都随类型收窄">
+        <Field label="信源类型" hint="信源类型决定地址或频道、接入方式与适配器选项">
           <select className="select" value={form.sourceType ?? "feed"} onChange={(event) => changeType(event.target.value)}>
             {types.map((item) => (
               <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="分类" hint="只影响管理归组，不改变采集方式；可在信源页批量调整成员">
+          <select
+            className="select"
+            value={form.groupId ?? ""}
+            onChange={(event) => setForm({ ...form, groupId: event.target.value })}
+          >
+            <option value="">未分组</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>{group.name}</option>
             ))}
           </select>
         </Field>
@@ -946,7 +1192,7 @@ function SourceDrawer({
             <input id="source-channel" className="input mono" value={form.channel ?? ""} onChange={(event) => setForm({ ...form, channel: event.target.value })} placeholder="items" />
           </Field>
         ) : (
-          <Field label="地址" hint="只接受 http/https。单 URL 采集会替换这个地址，但不会改写声明。" htmlFor="source-endpoint">
+          <Field label="地址" hint="仅接受 http/https。单 URL 采集替换该地址，不修改声明。" htmlFor="source-endpoint">
             <input id="source-endpoint" className="input" value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value })} placeholder="https://example.com/feed.xml" />
           </Field>
         )}
@@ -962,8 +1208,8 @@ function SourceDrawer({
             label="采集节奏"
             hint={
               source
-                ? "节律已由采集计划承载，请到「计划」页调整这条信源所属计划的节律与额度。"
-                : "信源不再承载节律：创建后会生成一个默认关闭的同名计划，确认无误再到「计划」页启用。"
+                ? "节律由采集计划管理；在「计划」页调整该信源所属计划的节律与额度。"
+                : "信源不承载节律；创建后生成默认关闭的同名计划，可在「计划」页启用。"
             }
           >
             <div className="row">
@@ -973,7 +1219,7 @@ function SourceDrawer({
             </div>
           </Field>
         </div>
-        <Field label="适配器" hint="适配器负责把原始响应解析为内容；可多选并按顺序执行">
+        <Field label="适配器" hint="适配器将原始响应解析为内容；可多选并按顺序执行">
           <div className="stack" style={{ gap: 6 }}>
             {adapterOptions.map((adapter) => (
               <label key={adapter.id} className="switch" style={{ justifyContent: "space-between" }}>
@@ -993,9 +1239,9 @@ function SourceDrawer({
         {source ? (
           <dl className="kv">
             <dt>信源标识</dt><dd className="mono">{source.id}</dd>
-            <dt>健康状态</dt><dd>{source.health || "—"}{source.healthReason ? ` · ${source.healthReason}` : ""}</dd>
+            <dt>健康状态</dt><dd>{statusLabel(source.health)}{source.healthReason ? ` · ${source.healthReason}` : ""}</dd>
             <dt>关联引用</dt><dd>{typeof source.references === "number" ? source.references : "—"}</dd>
-            <dt>配置版本</dt><dd className="mono">{source.etag}</dd>
+            <dt>配置版本</dt><dd className="mono">{source.etag?.replace(/"/g, "")}</dd>
           </dl>
         ) : null}
       </div>
@@ -1019,7 +1265,7 @@ function AnalyzeModal({ onClose, onUse }: { onClose: () => void; onUse: (proposa
       const finished = await run(operation, "AI 信源分析");
       const summary = (finished.resultSummary ?? {}) as Record<string, unknown>;
       setResult(summary);
-      notify("ok", "分析完成", "草稿需要人工确认后才会创建信源。");
+      notify("ok", "分析完成", "草稿需人工确认后创建信源。");
     } catch (problem) {
       setError(problem);
     } finally {
@@ -1032,7 +1278,7 @@ function AnalyzeModal({ onClose, onUse }: { onClose: () => void; onUse: (proposa
   return (
     <Modal
       title="AI 分析信源"
-      sub="使用系统设置里的默认模型与版本化提示词；结果只作为草稿"
+      sub="使用系统设置中的默认模型与版本化提示词；结果为草稿"
       onClose={onClose}
       wide
       footer={
@@ -1061,11 +1307,122 @@ function AnalyzeModal({ onClose, onUse }: { onClose: () => void; onUse: (proposa
         {busy ? <Loading lines={3} /> : null}
         {result ? (
           <>
-            <div className="alert info">模型给出的是草稿；请核对接入方式、地址与风险，再保存信源。</div>
+            <div className="alert info">模型输出为草稿；保存前需核对接入方式、地址与风险。</div>
             <StructuredValue value={proposal} />
           </>
         ) : null}
       </div>
+    </Modal>
+  );
+}
+
+function GroupModal({
+  group,
+  onClose,
+  onSaved,
+}: {
+  group: SourceGroup | null;
+  onClose: () => void;
+  onSaved: (saved: SourceGroup) => void | Promise<void>;
+}) {
+  const { notify } = useUi();
+  const [name, setName] = useState(group?.name ?? "");
+  const [description, setDescription] = useState(group?.description ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    if (!name.trim()) {
+      setError("分类名不能为空");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = group
+        ? await updateSourceGroup(group.id, { name: name.trim(), description })
+        : await createSourceGroup({ name: name.trim(), description });
+      notify("ok", group ? "分类已更新" : "分类已创建");
+      await onSaved(saved);
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={group ? "编辑分类" : "新建分类"}
+      sub="分类用于长期管理信源；不改变采集方式，与筛选不同"
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn" onClick={onClose}>取消</button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
+            {busy ? "保存中…" : "保存"}
+          </button>
+        </>
+      }
+    >
+      <div className="stack" style={{ gap: 12 }}>
+        {error ? <div className="alert bad">{error}</div> : null}
+        {group?.builtin ? (
+          <div className="alert info">内置分类随仓库提供，可改名、改说明与移出成员；不支持删除。</div>
+        ) : null}
+        <Field label="分类名称">
+          <input
+            className="input"
+            value={name}
+            maxLength={40}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="例如 金融数据"
+          />
+        </Field>
+        <Field label="说明" hint="可选；说明该分类收录的信源范围">
+          <textarea className="textarea" value={description} onChange={(event) => setDescription(event.target.value)} />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+function AssignGroupModal({
+  groups,
+  count,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  groups: SourceGroup[];
+  count: number;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (target: string | null) => void;
+}) {
+  const [target, setTarget] = useState("");
+  return (
+    <Modal
+      title="移动到分类"
+      sub={`已选择 ${count} 个信源；他项目共享信源只读，将被跳过`}
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn" onClick={onClose}>取消</button>
+          <button type="button" className="btn btn-primary" disabled={busy || count === 0} onClick={() => onConfirm(target || null)}>
+            {busy ? "移动中…" : "移动"}
+          </button>
+        </>
+      }
+    >
+      <Field label="目标分类" hint="选择「未分组」将成员移出当前分类">
+        <select className="select" value={target} onChange={(event) => setTarget(event.target.value)}>
+          <option value="">未分组</option>
+          {groups.map((group) => (
+            <option key={group.id} value={group.id}>{group.name}</option>
+          ))}
+        </select>
+      </Field>
     </Modal>
   );
 }

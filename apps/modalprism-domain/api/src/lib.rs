@@ -10,6 +10,7 @@ mod channels;
 mod collection;
 mod content;
 pub mod delivery;
+pub mod dictionary;
 mod error;
 pub mod external;
 mod maintenance;
@@ -22,9 +23,11 @@ mod preconditions;
 mod projects;
 pub mod search;
 mod settings;
+mod source_groups;
 mod store;
 mod surface;
 mod system;
+pub mod tools;
 mod util;
 mod wizard;
 
@@ -101,10 +104,20 @@ impl AppState {
             parse_hook: std::sync::OnceLock::new(),
             monitor_hook: std::sync::OnceLock::new(),
         });
-        settings::seed(&state).await?;
-        projects::seed(&state).await?;
-        maintenance::ensure_factory_snapshot(&state).await?;
-        observe::append_audit(
+        // 初始化步骤全部降级为「可失败但不停机」：设置、默认项目与出厂快照都能在
+        // 后续请求里按需重建（见 settings_doc / ensure_factory_snapshot），把单个
+        // 初始化失败升级成整个领域 API 启不来并不划算。
+        retire_documents(&state).await;
+        if let Err(error) = settings::seed(&state).await {
+            tracing::error!(detail = %error.message, "默认设置初始化失败，将在首次读取时重建");
+        }
+        if let Err(error) = projects::seed(&state).await {
+            tracing::error!(detail = %error.message, "默认项目初始化失败");
+        }
+        if let Err(error) = maintenance::ensure_factory_snapshot(&state).await {
+            tracing::warn!(detail = %error.message, "出厂快照建立失败，恢复出厂将不可用");
+        }
+        if let Err(error) = observe::append_audit(
             &state,
             "system.start",
             "succeeded",
@@ -112,7 +125,10 @@ impl AppState {
             json!({"version": API_VERSION}),
             None,
         )
-        .await?;
+        .await
+        {
+            tracing::warn!(detail = %error.message, "启动审计写入失败");
+        }
         let resume = Arc::clone(&state);
         tokio::spawn(async move {
             crate::operations::recover_interrupted(resume).await;
@@ -161,6 +177,39 @@ impl AppState {
     }
 }
 
+/// 清掉已下线功能遗留的元数据。
+///
+/// 配置目录里的已下线声明由组合根在启动时退役（见 assembly 的 recover），对应的文档
+/// kind 也必须一起作废——否则库里留着一批没有任何读取方的数据，恢复出厂才清掉。
+/// 名单来自 `config::retired_kinds`，这里不再自己维护一份。
+async fn retire_documents(state: &Shared) {
+    let mut removed = 0u64;
+    for kind in config::retired_kinds() {
+        match state.store.delete_kind(kind).await {
+            Ok(count) => removed += count,
+            Err(error) => {
+                tracing::warn!(kind, detail = %error.message, "已下线数据清理失败");
+            }
+        }
+    }
+    if removed == 0 {
+        return;
+    }
+    tracing::warn!(removed, "已下线功能的数据已清理");
+    if let Err(error) = observe::append_audit(
+        state,
+        "config.retire",
+        "succeeded",
+        "清理已下线功能数据",
+        json!({"documents": removed}),
+        None,
+    )
+    .await
+    {
+        tracing::warn!(detail = %error.message, "退役审计写入失败");
+    }
+}
+
 /// 组装 `/api/v1` 路由。
 pub fn router(state: Shared) -> Router {
     let api = Router::new()
@@ -178,6 +227,8 @@ pub fn router(state: Shared) -> Router {
         .merge(wizard::routes())
         .merge(search::routes())
         .merge(surface::routes())
+        .merge(dictionary::routes())
+        .merge(tools::routes())
         .merge(preconditions::routes())
         .merge(settings::routes())
         .merge(operations::routes())
@@ -347,10 +398,13 @@ async fn maintenance_guard(State(state): State<Shared>, request: Request, next: 
     let path = request.uri().path().to_string();
     let writable = method != Method::GET && method != Method::HEAD && method != Method::OPTIONS;
     // 维护期间只保留取消/重试入口；新的清空、预演与写入全部阻断。
+    // 维护端点自身保持可达：上次清空/恢复出厂失败后，控制台要能重新预演再执行，
+    // 而不是只能重启进程。
     let allowed = path.contains(":cancel")
         || path.contains(":retry")
         || path.contains("/cancel")
-        || path.contains("/retry");
+        || path.contains("/retry")
+        || path.contains("/maintenance/");
     if writable && state.in_maintenance() && !allowed {
         return ApiError::maintenance().into_response();
     }

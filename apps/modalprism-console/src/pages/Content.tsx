@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ArticleBody } from "../components/ArticleBody";
+import { FacetExplorer } from "../components/FacetExplorer";
 import { IconRefresh, IconTrash } from "../components/icons";
 import { ManualDeliveryModal } from "../components/ManualDelivery";
 import { Pager } from "../components/Pager";
@@ -21,6 +22,7 @@ import {
   replaySnapshot,
 } from "../lib/api";
 import { isHtmlBody } from "../lib/article";
+import { facetKindLabel } from "../lib/facets";
 import { contentKindLabel, relative, stamp } from "../lib/format";
 import { ProjectScopeBadge } from "../lib/project";
 import { navigate } from "../lib/router";
@@ -154,7 +156,7 @@ export function ContentPage() {
           <div className="kicker">content · 内容</div>
           <h1 className="page-title">内容库</h1>
           <p className="page-lede">
-            删除会一并移除派生数据与关联对象，且不可恢复。版本与关联信息都在详情里；按快照重建只追加新版本，不改动历史。
+            删除会移除派生数据与关联对象，不可恢复。版本与关联信息见详情；按快照重建只追加新版本，不修改历史。
           </p>
         </div>
         <div className="page-actions">
@@ -233,7 +235,7 @@ export function ContentPage() {
           <span className="small muted">{total} 条</span>
         </div>
       ) : (
-        <div className="alert info">快照是库级版本（跨项目共享的只读记录）；重建是后台任务，只重放当前项目自有信源的内容，不改动历史快照。</div>
+        <div className="alert info">快照为库级版本（跨项目共享的只读记录）；重建为后台任务，仅重放当前项目自有信源的内容，不修改历史快照。</div>
       )}
 
       {selection.length > 0 && tab !== "snapshots" ? (
@@ -260,7 +262,7 @@ export function ContentPage() {
           {loading && !snapshots ? (
             <div className="card-body"><Loading lines={5} /></div>
           ) : (snapshots ?? []).length === 0 ? (
-            <Empty title="还没有快照" text="第一次提交后出现。" />
+            <Empty title="暂无快照" text="首次提交后出现。" />
           ) : (
             <div className="list">
               {(snapshots ?? []).map((snapshot) => (
@@ -294,8 +296,8 @@ export function ContentPage() {
             <div className="card-body"><Loading lines={6} /></div>
           ) : (items ?? []).length === 0 ? (
             <Empty
-              title="没有匹配的内容"
-              text="调整检索词或来源筛选；采集完成后内容会自动入库。"
+              title="无匹配内容"
+              text="调整检索词或来源筛选；采集完成后内容自动入库。"
             />
           ) : (
             <div className="content-list">
@@ -314,10 +316,19 @@ export function ContentPage() {
                     className="content-main"
                     style={{ border: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}
                     onClick={() => setDetail(item.id)}
+                    aria-label={`打开 ${item.title}`}
                   >
                     <span className="content-title">{item.title}</span>
                     <span className="content-meta">
                       <span className="tag">{contentKindLabel(item.kind)}</span>
+                      {item.facetCount && item.facetCount > 1 ? (
+                        <span
+                          className="tag"
+                          title={Array.from(new Set((item.facetKinds ?? []).map((facet) => facetKindLabel(facet.split(":")[0])))).join("、")}
+                        >
+                          包含 {item.facetKinds?.length ?? item.facetCount} 类数据
+                        </span>
+                      ) : null}
                       <span>{item.sourceName}</span>
                       <span title={stamp(item.publishedAt ?? "")}>{item.publishedAt ? `发布 ${relative(item.publishedAt)}` : "发布 未披露"}</span>
                       <span>收录 {relative(item.createdAt)}</span>
@@ -333,7 +344,7 @@ export function ContentPage() {
                       className="btn btn-sm btn-danger"
                       onClick={() =>
                         void (async () => {
-                          if (!window.confirm(`永久删除「${item.title}」？关联的派生数据与无引用对象会一并移除。`)) return;
+                          if (!window.confirm(`永久删除「${item.title}」？关联的派生数据与无引用对象将一并移除。`)) return;
                           let started = false;
                           try {
                             const meta = await getContent(item.id);
@@ -351,7 +362,6 @@ export function ContentPage() {
                     >
                       删除
                     </button>
-                    <button type="button" className="btn btn-sm" onClick={() => setDetail(item.id)}>详情</button>
                   </div>
                 </div>
               ))}
@@ -500,7 +510,15 @@ function ContentDrawer({ id, onClose, onChanged }: { id: string; onClose: () => 
             ]}
           />
           {tab === "body" ? (
-            detail.body?.text ? (
+            detail.facets?.length ? (
+              // 数据面浏览器：同一条内容的多形态数据（正文/结构化/附件/区域索引）都能单独查看。
+              <FacetExplorer
+                contentId={detail.id}
+                facets={detail.facets}
+                base={contentUrl(detail)}
+                preferred={{ kind: detail.body?.kind, variant: detail.body?.variant }}
+              />
+            ) : detail.body?.text ? (
               isHtmlBody(detail.body.kind, detail.body.mediaType, detail.body.text) ? (
                 // 采集正文多为原始网页 HTML：按白名单重建后渲染，避免把标签源码当文本展示。
                 <ArticleBody
@@ -519,7 +537,7 @@ function ContentDrawer({ id, onClose, onChanged }: { id: string; onClose: () => 
             ) : detail.struct ? (
               <StructuredValue value={detail.struct} />
             ) : (
-              <Empty title="没有可读正文" text="这条内容可能只有结构化字段或附件。" />
+              <Empty title="没有可读正文" text="该内容可能仅含结构化字段或附件。" />
             )
           ) : null}
           {tab === "versions" ? (
@@ -619,7 +637,7 @@ function ReplayModal({ snapshots, selected, onClose }: { snapshots: Snapshot[]; 
   return (
     <Modal
       title="按快照重建"
-      sub="用选定快照的结构化字段生成当前版本；历史快照保持只读"
+      sub="以选定快照的结构化字段生成当前版本；历史快照保持只读"
       onClose={onClose}
       footer={
         <>
@@ -645,7 +663,7 @@ function ReplayModal({ snapshots, selected, onClose }: { snapshots: Snapshot[]; 
             <option value="selected">仅已选内容（{selected.length}）</option>
           </select>
         </Field>
-        <div className="alert warn">重建是后台任务；失败的条目保持原样，成功的会追加新版本并记录关联。</div>
+        <div className="alert warn">重建为后台任务；失败条目保持原状，成功条目追加新版本并记录关联。</div>
       </div>
     </Modal>
   );

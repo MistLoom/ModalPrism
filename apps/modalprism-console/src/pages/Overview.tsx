@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { IconAlert, IconChevronRight, IconHistory, IconPause, IconPlay, IconRefresh } from "../components/icons";
+import { RowSubject } from "../components/ListRow";
 import { RunsDrawer } from "../components/RunsDrawer";
 import { SettingsCheck } from "../components/SettingsCheck";
 import { Card, Drawer, Empty, Loading, Problem, StatusBadge, StructuredValue, useUi } from "../components/ui";
@@ -17,10 +18,19 @@ import {
   retryOperation,
   systemOverview,
 } from "../lib/api";
-import { contentKindLabel, count, relative, stamp, statusTone } from "../lib/format";
+import { contentKindLabel, count, kindLabel, monitorAbilityLabel, monitorKindLabel, monitorPhaseLabel, operationEventLabel, refKindLabel, relative, stamp, statusLabel, statusTone } from "../lib/format";
 import { ProjectScopeBadge } from "../lib/project";
 import { navigate } from "../lib/router";
+import { openSubject, subjectFromLocation, type SubjectKind } from "../lib/subject";
 import type { CollectionRun, MonitorSummary, Operation, Overview, Plan, Source } from "../lib/types";
+
+/** 操作关联资源里能在别处打开的主体；其余类型只回日志。 */
+const REF_SUBJECTS: Partial<Record<string, SubjectKind>> = {
+  source: "source",
+  content: "content",
+  plan: "plan",
+  task: "task",
+};
 
 const RUN_LABELS: Record<string, string> = {
   succeeded: "成功",
@@ -102,6 +112,15 @@ export function OverviewPage() {
     return (id: string) => map.get(id) ?? id;
   }, [plans]);
 
+  // 深链：`?run=` 直接展开那次采集运行的速览（其他页面的「运行」主体就落在这里）。
+  useEffect(() => {
+    if (!runs.length) return;
+    const runId = subjectFromLocation("run");
+    if (!runId) return;
+    const hit = runs.find((item) => item.id === runId);
+    if (hit) setRecord({ sourceId: hit.sourceId, runId: hit.id, title: `采集记录 · ${sourceName(hit.sourceId)}` });
+  }, [runs, sourceName]);
+
   async function toggleQueue(queueId: string, paused: boolean) {
     setQueueBusy(queueId);
     try {
@@ -128,7 +147,7 @@ export function OverviewPage() {
           <div className="kicker">overview · 运行总览</div>
           <h1 className="page-title">运行总览</h1>
           <p className="page-lede">
-            先处理阻碍采集与投递的事项，再决定是否扩大范围。每一行都能在这里展开看上下游；需要动手时再进对应页面。
+            采集、内容加工与投递的运行状态、待处理事项与近期记录。
           </p>
         </div>
         <div className="page-actions">
@@ -147,14 +166,20 @@ export function OverviewPage() {
         <>
           <div className="stat-grid">
             <Stat label="信源" value={data.counts.sources} note={`${data.counts.enabledSources} 个启用 · ${data.counts.healthySources} 个正常`} onClick={() => navigate("sources")} />
-            <Stat label="待处理" value={data.counts.attention} note="健康、发布与告警" onClick={() => navigate("logs?level=warn")} alert={data.counts.attention > 0} />
+            <Stat
+              label="待处理"
+              value={data.counts.unreadNotifications}
+              note={data.counts.attention > 0 ? `${data.counts.attention} 项信源异常` : "未读通知与系统事件"}
+              onClick={() => navigate("notifications")}
+              alert={data.counts.unreadNotifications > 0 || data.counts.attention > 0}
+            />
             <Stat label="执行中任务" value={data.counts.tasksRunning} note={`${data.counts.tasksQueued} 个排队`} onClick={() => navigate("tasks?status=running")} />
             <Stat label="已入库内容" value={data.counts.content} note={`${data.counts.tombstoned} 条历史残留待清理`} onClick={() => navigate("content")} />
           </div>
 
           <Card
             title="实时运行监测"
-            sub="来自框架内置监测：在途调用、最近事件与队列水位"
+            sub="框架内置监测：在途调用、最近事件与队列水位"
             action={<span className="small muted">每 5 秒刷新</span>}
             flush
           >
@@ -189,8 +214,8 @@ export function OverviewPage() {
                       (monitor.chains ?? []).slice(0, 6).map((chain, index) => (
                         <div className="monitor-row" key={`${chain.chain_id ?? index}`}>
                           <span className={`dot ${chain.running === false ? "warn" : "ok"}`} />
-                          <span className="mono small">
-                            {chain.instance ?? chain.ability_id ?? "—"}.{chain.method ?? "—"}
+                          <span className="small">
+                            {monitorAbilityLabel(chain.instance ?? chain.ability_id, chain.method) || "—"}
                           </span>
                           <span className="fill" />
                           <span className="small muted">{chain.started_at ? relative(chain.started_at) : "—"}</span>
@@ -201,16 +226,16 @@ export function OverviewPage() {
                   <div className="stack" style={{ gap: 6 }}>
                     <span className="small muted">最近事件</span>
                     {(monitor.events ?? []).length === 0 ? (
-                      <span className="small muted">还没有事件；有调用时会出现在这里</span>
+                      <span className="small muted">暂无事件</span>
                     ) : (
                       (monitor.events ?? []).slice(-6).reverse().map((event, index) => (
                         <div className="monitor-row" key={`${event.seq ?? index}`}>
                           <span className={`dot ${event.error ? "bad" : "ok"}`} />
-                          <span className="mono small">
-                            {event.instance ?? "—"}.{event.method ?? event.kind ?? "—"}
+                          <span className="small" title={`${event.instance ?? ""}${event.method ? `.${event.method}` : ""} · ${event.kind ?? ""}`}>
+                            {monitorAbilityLabel(event.instance, event.method) || monitorKindLabel(event.kind)}
                           </span>
                           <span className="fill" />
-                          <span className="small muted">{event.phase ?? event.kind ?? ""}</span>
+                          <span className="small muted">{monitorPhaseLabel(event.phase) || monitorKindLabel(event.kind)}</span>
                         </div>
                       ))
                     )}
@@ -221,9 +246,9 @@ export function OverviewPage() {
           </Card>
 
           <div className="split-2">
-            <Card title="需要注意" sub="按影响排序；点击进入已过滤的页面" flush>
+            <Card title="需要注意" sub="按影响排序；选择一项进入对应页面" flush>
               {data.attention.length === 0 ? (
-                <Empty title="没有需要立即处理的事项" text="采集、生产与投递都在正常范围内。" />
+                <Empty title="无需处理事项" text="采集、内容加工与投递状态正常。" />
               ) : (
                 <div className="card-body" style={{ display: "grid", gap: 0 }}>
                   {data.attention.map((item) => (
@@ -235,7 +260,7 @@ export function OverviewPage() {
                       onClick={() => {
                         if (item.kind === "source") navigate(`sources?query=${encodeURIComponent(item.id ?? "")}`);
                         else if (item.kind === "publication") navigate("tasks?kind=publication&status=failed");
-                        else navigate("logs?level=warn");
+                        else navigate("notifications");
                       }}
                     >
                       <span style={{ color: item.status === "failed" ? "var(--danger)" : "var(--warn)", marginTop: 2 }}>
@@ -253,9 +278,9 @@ export function OverviewPage() {
               )}
             </Card>
 
-            <Card title="队列" sub="暂停只影响下一轮执行；可在这里直接操作" flush>
+            <Card title="队列" sub="暂停仅影响下一轮执行" flush>
               {data.queues.length === 0 ? (
-                <Empty title="还没有队列" text="调度器执行第一次后出现。" />
+                <Empty title="暂无队列" text="调度器首次执行后出现。" />
               ) : (
                 <div className="card-body">
                   <div className="queue-grid">
@@ -300,14 +325,14 @@ export function OverviewPage() {
           <div className="split-2">
             <Card
               title="最近采集"
-              sub="点开看这次运行的上下游与产出"
+              sub="展开查看本次运行的上下游与产出"
               action={<button type="button" className="btn btn-sm" onClick={() => navigate("plans")}>计划</button>}
               flush
             >
               {runs.length === 0 ? (
                 <Empty
-                  title="还没有采集记录"
-                  text="计划触发与手动采集都会留在这里。"
+                  title="暂无采集记录"
+                  text="计划触发与手动采集记录。"
                   action={<button type="button" className="btn btn-primary btn-sm" onClick={() => navigate("sources")}>去信源</button>}
                 />
               ) : (
@@ -342,12 +367,12 @@ export function OverviewPage() {
 
             <Card
               title="信源健康"
-              sub="最近一批信源的产出与下一次运行"
+              sub="近期信源产出与下一次运行"
               action={<button type="button" className="btn btn-sm" onClick={() => navigate("sources")}>全部信源</button>}
               flush
             >
               {data.sources.length === 0 ? (
-                <Empty title="还没有信源" text="在信源页新建或导入一份订阅源。" action={<button type="button" className="btn btn-primary btn-sm" onClick={() => navigate("sources?new=1")}>新建信源</button>} />
+                <Empty title="暂无信源" text="在信源页新建或导入订阅源。" action={<button type="button" className="btn btn-primary btn-sm" onClick={() => navigate("sources?new=1")}>新建信源</button>} />
               ) : (
                 <div className="list">
                   {data.sources.map((source) => (
@@ -377,9 +402,9 @@ export function OverviewPage() {
           </div>
 
           <div className="split-2">
-            <Card title="最近操作" sub="点开看进度、失败原因与关联资源" action={<button type="button" className="btn btn-sm" onClick={() => navigate("logs")}>日志</button>} flush>
+            <Card title="最近操作" sub="展开查看进度、失败原因与关联资源" action={<button type="button" className="btn btn-sm" onClick={() => navigate("logs")}>日志</button>} flush>
               {data.recentOperations.length === 0 ? (
-                <Empty title="还没有操作" text="采集、投递与维护都会留下 Operation。" />
+                <Empty title="暂无操作" text="采集、投递与维护记录为 Operation。" />
               ) : (
                 <div className="list">
                   {data.recentOperations.map((operation) => (
@@ -391,14 +416,14 @@ export function OverviewPage() {
                       onClick={() => setOperationId(operation.operationId)}
                     >
                       <span className="list-main">
-                        <span className="list-title">{operation.kind}</span>
+                        <span className="list-title">{kindLabel(operation.kind)}</span>
                         <span className="list-meta">
                           <span className="mono">{operation.operationId.slice(0, 14)}</span>
                           <span>{relative(operation.createdAt)}</span>
-                          <span className="mono">{operation.resourceRefs.map((ref) => `${ref.kind}:${ref.id}`).join("、") || "无关联资源"}</span>
+                          <span className="mono">{operation.resourceRefs.map((ref) => `${refKindLabel(ref.kind)}：${ref.id}`).join("、") || "无关联资源"}</span>
                         </span>
                       </span>
-                      <span className={`badge ${statusTone(operation.status)}`}>{operation.status}</span>
+                      <span className={`badge ${statusTone(operation.status)}`}>{statusLabel(operation.status)}</span>
                       <IconChevronRight size={14} />
                     </button>
                   ))}
@@ -408,7 +433,7 @@ export function OverviewPage() {
 
             <Card title="内容形态" sub="只统计当前可见内容" flush>
               {data.contentKinds.length === 0 ? (
-                <Empty title="还没有内容" text="信源第一次采集完成后出现。" />
+                <Empty title="暂无内容" text="信源首次采集完成后出现。" />
               ) : (
                 <div className="card-body grid cols-fill">
                   {data.contentKinds.map((kind) => (
@@ -489,8 +514,8 @@ function OperationDrawer({ id, onClose }: { id: string; onClose: () => void }) {
 
   return (
     <Drawer
-      title={operation?.kind ?? "操作详情"}
-      sub={operation ? `${operation.status} · ${stamp(operation.createdAt)}` : id}
+      title={operation ? kindLabel(operation.kind) : "操作详情"}
+      sub={operation ? `${statusLabel(operation.status)} · ${stamp(operation.createdAt)}` : id}
       onClose={onClose}
       wide
       footer={
@@ -512,7 +537,7 @@ function OperationDrawer({ id, onClose }: { id: string; onClose: () => void }) {
       ) : (
         <div className="stack" style={{ gap: 14 }}>
           <div className="row wrap" style={{ gap: 8 }}>
-            <span className={`badge ${statusTone(operation.status)}`}>{operation.status}</span>
+            <span className={`badge ${statusTone(operation.status)}`}>{statusLabel(operation.status)}</span>
             <span className="small muted">进度 {Math.round(operation.progress * 100)}%</span>
             {operation.completedAt ? <span className="small muted">完成于 {stamp(operation.completedAt)}</span> : null}
             {operation.retryOf ? <span className="small muted">重试自 {operation.retryOf}</span> : null}
@@ -534,26 +559,26 @@ function OperationDrawer({ id, onClose }: { id: string; onClose: () => void }) {
               <Empty title="没有关联资源" text="这个操作不指向具体资源。" />
             ) : (
               <div className="list">
-                {operation.resourceRefs.map((ref) => (
-                  <div className="list-row" key={`${ref.kind}:${ref.id}`}>
-                    <span className="list-main">
-                      <span className="list-title">{ref.id}</span>
-                      <span className="list-meta"><span>{ref.kind}</span></span>
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => {
-                        if (ref.kind === "source") navigate(`sources?query=${encodeURIComponent(ref.id)}`);
-                        else if (ref.kind === "content") navigate(`content?id=${encodeURIComponent(ref.id)}`);
-                        else if (ref.kind === "plan") navigate(`plans?query=${encodeURIComponent(ref.id)}`);
-                        else navigate("logs");
-                      }}
-                    >
-                      查看
-                    </button>
-                  </div>
-                ))}
+                {operation.resourceRefs.map((ref) => {
+                  const kind = REF_SUBJECTS[ref.kind];
+                  return (
+                    <div className="list-row" key={`${ref.kind}:${ref.id}`}>
+                      <span className="list-main">
+                        <RowSubject
+                          onClick={() =>
+                            kind
+                              ? openSubject({ kind, id: ref.id })
+                              : navigate(`logs?correlationId=${encodeURIComponent(id)}`)
+                          }
+                          title="打开关联资源"
+                        >
+                          {ref.id}
+                        </RowSubject>
+                        <span className="list-meta"><span>{refKindLabel(ref.kind)}</span></span>
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Card>
@@ -574,7 +599,7 @@ function OperationDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                     <span className="list-main">
                       <span className="list-title">{String(event.message ?? event.kind ?? "事件")}</span>
                       <span className="list-meta">
-                        {event.kind ? <span>{String(event.kind)}</span> : null}
+                        {event.kind ? <span>{operationEventLabel(String(event.kind))}</span> : null}
                         {event.createdAt ? <span>{stamp(String(event.createdAt))}</span> : null}
                       </span>
                     </span>

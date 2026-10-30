@@ -1,0 +1,20 @@
+access:
+  accessor: accessor/rss
+  locator:
+    url: "https://www.technologyreview.com/feed/"
+admission: {}
+description: MIT 科技评论全站内容（不限 AI 主题）。
+id: source/mit-technology-review
+kind: source
+labels:
+  domain: 科技
+  tier: T1
+  topic: 媒体
+name: MIT Technology Review
+pipeline:
+  - run:
+      - adapter/feed-items
+project: proj_default
+shared: true
+sourceType: feed
+groupId: grp_builtin_tech

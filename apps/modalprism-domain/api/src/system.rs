@@ -146,6 +146,8 @@ async fn overview(
             "enabledSources": sources.iter().filter(|source| source["enabled"].as_bool().unwrap_or(false)).count(),
             "healthySources": healthy,
             "attention": attention.len(),
+            // 「待处理」以未读通知为准：与通知中心同一口径，点进去能看到同数条目。
+            "unreadNotifications": crate::notifications::unread_count(&state).await,
             "content": content_total,
             "tombstoned": content_tombstoned,
             "tasksQueued": tasks_queued,

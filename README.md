@@ -1,6 +1,8 @@
 # ModalPrism
 
-A multi-source data collection system written in Rust: it collects data from RSS, web pages, JS-rendered pages, APIs, pushes, and other sources and stores it verbatim — heterogeneous multi-modal content, append-only and replayable.
+A multi-source data collection system written in Rust, with vector storage and multi-modal support: it collects data from RSS, web pages, dynamic pages, APIs, pushes, and other sources and stores it verbatim — heterogeneous multi-modal content, append-only and replayable.
+
+Built on the [LEAF](https://github.com/MistLoom/LEAF/) framework: a lightweight Rust framework for the AI ecosystem, where one Ability serves agents, MCP, CLI, Skills, tools, and HTTP at the same time.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-ed9e28?logo=rust&logoColor=white)](#quick-start)
@@ -11,10 +13,10 @@ A multi-source data collection system written in Rust: it collects data from RSS
 ## Highlights
 
 - **One-command start, lightweight runtime**: a single binary with no external services; the first run initializes storage, and one command brings up collection, delivery, and query together.
-- **Built-in sources, collecting out of the box**: 20+ source configs ship with the repository (mostly AI/tech sites); RSS/Atom, web list & detail pages, JS-rendered pages, open APIs, metered/paid APIs, search engines, inbound pushes, and local files all run in one process.
+- **Built-in sources, plans ready out of the box**: 39 source configs and 3 example collection plans (disabled by default; two multi-source plans plus one query plan) ship with the repository across AI, finance, health, and technology, pre-filed into seven built-in groups (AI vendors and labs, AI research and papers, AI media and commentary, finance regulation and markets, health and journals, technology media, own and inbound). A disabled plan never collects; the examples only demonstrate cadence and quota — other sources start collecting once you create a plan for them. RSS/Atom, web list & detail pages, JS-rendered pages, open APIs, metered/paid APIs, search engines, inbound pushes, and local files all run in one process.
 - **Queryable the moment it lands — no glue code**: filter, full-text, and vector search fused in one query interface, business code never writes SQL; text, structured data, images, and media are addressable resources with automatic de-duplication.
-- **Multiple protocols, one capability surface**: HTTP API, MCP tools, and a SKILL script expose the same abilities method by method — see the support matrix under Public API.
-- **Visual console**: twelve first-class pages — overview, projects, sources, plans, tasks, content, delivery, notifications, external calls, logs, debugging tools, settings — with source-authoring forms, sortable and filterable tables, per-plan delivery targets, manual and automatic delivery, and per-platform notification setup.
+- **Multiple protocols, one capability surface**: HTTP API, MCP tools, and a SKILL script share sources, content, and config; content delivery, notification management, and runtime monitoring are served over HTTP only — see the support matrix under Public API.
+- **Visual console**: twelve first-class pages — overview, projects, sources, plans, tasks, content, delivery, notifications, external calls, logs, debugging tools, settings — with source-authoring forms, sortable and filterable tables, user-defined source groups that act as a scoped workspace (seven built-in groups file the shipped sources, with batch move in and out), per-plan delivery targets, manual and automatic delivery, and per-platform notification setup, with live monitoring on the overview page.
 - **Raw data kept byte-for-byte — append-only, replayable**: reprocess what you already have when a policy or recognition changes, instead of re-crawling.
 - **End-to-end lineage**: every derived layer records who produced it and with what config — auditable data, traceable origins.
 - **Centralized traffic governance**: rate limiting, circuit breaking, robots compliance, private-network protection; paid calls get budgets and duplicate-request merging.
@@ -24,7 +26,7 @@ A multi-source data collection system written in Rust: it collects data from RSS
 
 Three steps from cold start to queryable data:
 
-1. Start the collector — the first run initializes storage and the built-in sources start collecting on their own cadence (command in the [Quick start](#quick-start)).
+1. Start the collector — the first run initializes storage; built-in sources and their plans are ready, plans start disabled, and you enable them from the Plans page after confirming the cadence (command in the [Quick start](#quick-start)).
 2. Open the console at `http://127.0.0.1:5178` — all twelve pages are ready immediately.
 3. Query what has landed:
 
@@ -38,7 +40,7 @@ curl -s "http://127.0.0.1:17880/api/v1/content/items?query=agent&limit=1"
     {
       "id": "r_01ARZ3NDEKTSV4RRFFQ69G5FAV",
       "title": "New methods for training reliable reasoning models",
-      "sourceId": "openai-news",
+      "sourceId": "source/openai-news",
       "status": "active",
       "tags": ["ai", "research"],
       "publishedAt": "2026-09-14T04:00:00Z"
@@ -50,7 +52,7 @@ curl -s "http://127.0.0.1:17880/api/v1/content/items?query=agent&limit=1"
 
 ## Positioning
 
-Tools like Firecrawl, Crawl4AI, and RSSHub solve "extract once" or "emit a feed". ModalPrism covers the full chain — scheduling, access, adaptation, storage, and query — and turns what it collects into durable data assets.
+Tools like Firecrawl, Crawl4AI, and RSSHub solve "extract once" or "emit a feed". ModalPrism covers the full chain — scheduling, access, adaptation, storage, delivery, and query — and turns what it collects into durable data assets.
 
 | | ModalPrism | Firecrawl / Crawl4AI | RSSHub | Colly / Crawlee |
 |---|---|---|---|---|
@@ -67,7 +69,7 @@ Tools like Firecrawl, Crawl4AI, and RSSHub solve "extract once" or "emit a feed"
 ## Features
 
 ### One model for heterogeneous sources
-Sources, accessors, and adapters are all declared in YAML; the repository ships 23 source configs (mostly AI/tech sites). Accessors fetch; adapters interpret; they compose freely — the same raw payload can be processed by multiple adapters for different purposes.
+Sources, accessors, and adapters are all declared in YAML; the repository ships 39 source configs and 3 example collection plans (disabled by default) spanning AI, finance, health, and technology. Accessors fetch; adapters interpret; they compose freely — the same raw payload can be processed by multiple adapters for different purposes.
 
 ### Raw data is append-only and replayable
 Accessors never explain content. Saved originals stay byte-for-byte intact, so any capture can be replayed. Recognition and classification results reference the source by byte spans instead of editing it; facets grow as immutable versions; every derived layer records lineage back to the module, version, and config that produced it.
@@ -82,13 +84,13 @@ A typed query DSL fuses metadata filtering, full-text, and vector search over co
 Every outbound request — including a headless browser's sub-requests — goes through one gate: per-domain rate limiting, adaptive throttle, host circuit breaking, session/proxy binding, SSRF protection, and RFC 9309 `robots.txt` handling. Paid calls have a separate governance layer: logical request keys, budget windows, idempotent receipts.
 
 ### Declarative configuration with atomic hot-reload
-Sources, accessors, adapters, and policy presets are validated YAML — unknown fields fail validation, config never touches a database. Hot reload builds an immutable *generation* (one snapshot per config change) and switches atomically; in-flight tasks keep the generation they were dispatched with.
+Sources, accessors, adapters, and policy presets are validated YAML — unknown fields fail validation, config never touches a database. Hot reload builds an immutable *version* (one snapshot per config change, exposed as `generation`) and switches atomically; in-flight tasks keep the version they were dispatched with.
 
 ### Source authoring without code
 Adding a site needs no commit: start from a template (RSS/Atom, web list, search query, JSON API), fill in the address and selectors in the console, and the save goes through the same loader that validates and hot-reloads the directory. Sources, accessors, and adapters all support create, rewrite, enable/disable, delete, and batch operations; each declaration carries a reference count so the blast radius is visible before deleting.
 
 ### Content delivery
-Collected content goes straight out — there is no processing stage in between. Targets come in three kinds: registered models, external APIs, and notification channels (webhook / Feishu). Every delivery records success, failure, duration, and an output summary per target, with manual and automatic runs kept apart.
+Collected content goes straight out — there is no processing stage in between. Targets come in three kinds: registered models, external APIs, and notification channels (webhook / Feishu). Manual delivery runs on the Content and Delivery pages; automatic delivery ticks targets in a plan form, and every new item is submitted to each target in order, with the result and duration kept in the delivery records. Models support `api` / `local` / `cli`, and keys are stored as environment variable names only. See Content delivery and Notifications.
 
 ### Read-only surface for agents
 Collected data is exposed over MCP: typed queries, health status, source inventory, single-page fetch, and config provenance for any MCP-capable client; scenario-agnostic abstract types (`Article`, `HotList`) provide business views. Writes are hard-gated at the gateway (whitelist in the Public API section); the read-only process opens the data directory read-only.
@@ -129,17 +131,15 @@ Boundaries: only Strata touches storage; accessors reach the network solely thro
 
 ### Build
 
-Building requires `protoc` (the Protocol Buffers compiler) on your system.
-
 ```sh
 cargo build --workspace
 ```
 
-That is the complete build — no extra flags. Object storage defaults to an external RustFS release: it looks in the configured path and on `PATH`, and downloads a prebuilt release only if none is found; a fully offline fail-fast option is available. File-based storage and external S3-compatible backends can be selected instead; neither is needed by default.
+That is the complete build — no extra flags, and no system `protoc` install (the build script vendors it). Object storage defaults to an external RustFS release: it looks in the configured path and on `PATH`, and downloads a prebuilt release only if none is found; a fully offline fail-fast option is available. File-based storage and external S3-compatible backends can be selected instead; neither is needed by default.
 
 ### Start collecting
 
-Run from the repository root; the first run initializes storage, then the built-in sources start collecting on their own cadence:
+Run from the repository root; the first run initializes storage. Built-in sources and plans are ready with plans disabled — enable them on the Plans page after confirming the cadence:
 
 ```sh
 cargo run -p modalprism-collector
@@ -163,28 +163,43 @@ cargo run -p modalprism-agent
 
 It uses the same data and config directories as the collector; integration details are in the Public API section.
 
-## Declaring a source
+## Declaring sources and plans
 
-Sources are declarative YAML entries under `config/sources/*.yaml`: what to access, which adapters, at what cadence, under which policy.
+Sources are declarative entries under `config/sources/*.yaml` that state what to access and how to interpret it; cadence and item limits live in the matching plan. A shipped source:
 
 ```yaml
 id: source/openai-news
 kind: source
-name: "OpenAI News"
+name: OpenAI News
+sourceType: feed
 labels:
   tier: T1
+  topic: 官方
 access:
   accessor: accessor/rss
   locator:
     url: https://openai.com/news/rss.xml
 pipeline:
   - run: [adapter/feed-items]
-schedule:
+project: proj_default
+shared: true
+admission: {}
+```
+
+Plans are `config/plans/*.yaml`: one plan can cover several sources and owns cadence, item limits, and stop conditions:
+
+```yaml
+id: plan/openai-news
+kind: plan
+name: OpenAI News plan
+trigger:
+  kind: recurring
   interval: 2h
-admission:
-  initialBackfill:
-    limit: 8
-    maxAge: 365d
+targets:
+  - source/openai-news
+quota:
+  perRunItems: 8
+  maxAge: 365d
 ```
 
 ## Content delivery
@@ -237,6 +252,7 @@ Collector exposes one contract; the console proxies it unchanged. The three acce
 | Delivery · target inventory, external endpoints & channels | ✓ | — | — |
 | External calls · protocols, full method inventory & quick start | ✓ | — | — |
 | Notifications · local notification center & push platforms | ✓ | — | — |
+| Monitor · call chains & runtime stats | ✓ | — | — |
 | Config · provenance, diff & validation | ✓ | ✓ | — |
 | Ops · query logs & events | ✓ | — | ✓ |
 
@@ -279,8 +295,10 @@ apps/modalprism-collector/ Collection and delivery process
 apps/modalprism-console/   Console (web SPA + Node shell)
 apps/modalprism-agent/     Read-only MCP process
 apps/modalprism-domain/    Domain libraries (resource store, config, types, API)
+frame/                     Protocol ports and host framework (HTTP / CLI / MCP / gRPC / fun)
+SDK/                       Multi-language ability SDKs (Rust / TypeScript / Python / Cangjie)
 abilitys/                  Shared ability packages
-config/                    System config, accessors, adapters, sources, presets (YAML)
+config/                    System config, accessors, adapters, sources, plans, presets (YAML)
 skills/                    Agent Skill package
 ```
 

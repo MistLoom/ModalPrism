@@ -1,0 +1,28 @@
+framework_version: "1"
+# MCP 投影：方法名与 ability.yml 的 methods 一一对应；面向工具调用方的名字统一加 `tool_` 前缀，
+# 与 CLI 的 `tool <verb>` 保持同一套动词。
+tools:
+  - method: catalog
+    name: tool_catalog
+    description: 列出全部工具动词及其参数（CLI 与 MCP 目录同源）
+  - method: once
+    name: tool_once
+    description: 一次完成取数、识别、适配与写入或返回；类型未识别时降级返回而不失败
+  - method: probe
+    name: tool_probe
+    description: 只识别不落库：类型分布、结构区域与建议声明
+  - method: save
+    name: tool_save
+    description: 把探测结论固化为信源声明
+  - method: fetch
+    name: tool_fetch
+    description: 按地址取回正文
+  - method: search
+    name: tool_search
+    description: 用已配置的搜索引擎检索
+  - method: parse
+    name: tool_parse
+    description: 对文本或地址做结构化识别
+  - method: read
+    name: tool_read
+    description: 读取已入库内容的详情或单面数据

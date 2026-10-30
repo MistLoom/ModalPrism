@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import { IconAlert, IconCheck, IconClose } from "./icons";
 import { ApiError, runOperation } from "../lib/api";
 import type { Operation } from "../lib/types";
+import { domainOfField, hasEntry, t } from "../lib/dictionary";
 import { statusLabel, statusTone } from "../lib/format";
 
 export function Badge({ tone = "neutral", children }: { tone?: string; children: ReactNode }) {
@@ -383,11 +384,22 @@ export function StructuredValue({ value, depth = 0 }: { value: unknown; depth?: 
       {entries.map(([key, item]) => (
         <div key={key} style={{ display: "contents" }}>
           <dt>{fieldLabel(key)}</dt>
-          <dd><StructuredValue value={item} depth={depth + 1} /></dd>
+          <dd><StructuredValue value={translateValue(key, item)} depth={depth + 1} /></dd>
         </div>
       ))}
     </dl>
   );
+}
+
+/**
+ * 按字段名推断值域并用字典翻译：`status`/`queue`/`relation` 一类键不再裸露程序值。
+ * 字典未收录时保留原文，并在行内标注「未收录」。
+ */
+function translateValue(key: string, value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const domain = domainOfField(key);
+  if (!domain || !hasEntry(domain, value)) return value;
+  return t(domain, value);
 }
 
 /** 单行结构化摘要：用于差异对比、表格内联展示等不能展开的场景。 */

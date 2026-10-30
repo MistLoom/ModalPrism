@@ -46,6 +46,8 @@ pub fn routes() -> Router<Shared> {
             "/catalog/adapterDrafts/{draftId}/reject",
             post(reject_adapter_draft),
         )
+        // 信源分类与目录同源：一并挂到 catalog 路由，避免两处维护端点清单。
+        .merge(crate::source_groups::routes())
 }
 
 #[derive(Debug, Deserialize)]
@@ -197,6 +199,8 @@ pub(crate) async fn source_rows(state: &AppState) -> Result<Vec<Value>, ApiError
             "stopReason": status.get("skipReason").cloned().unwrap_or(Value::Null),
             "references": source["references"],
             "labels": doc.get("labels").cloned().unwrap_or_else(|| json!({})),
+            // 用户自定义分类；分类元数据单独存放，这里只回显成员关系。
+            "groupId": doc.get("groupId").cloned().unwrap_or(Value::Null),
             "etag": etag,
             "updatedAt": Value::Null,
         }));
@@ -522,6 +526,7 @@ async fn create_source(
             "admission",
             "sourceType",
             "shared",
+            "groupId",
         ],
     )?;
     let shared = util::optional_flag(map, "shared", false)?;
@@ -529,6 +534,10 @@ async fn create_source(
     // 创建即归属活跃项目；共享只放开跨项目读。
     doc["project"] = json!(project.id());
     doc["shared"] = json!(shared);
+    if let Some(group_id) = group_id_of(map)? {
+        crate::source_groups::ensure_group(&state, &group_id, project.id()).await?;
+        doc["groupId"] = json!(group_id);
+    }
     let base = util::slug(&name);
     let mut slug = base.clone();
     for index in 2..20 {
@@ -585,6 +594,7 @@ async fn update_source(
             "admission",
             "sourceType",
             "shared",
+            "groupId",
         ],
     )?;
     let current = source_by_slug(&state, &source_id).await?;
@@ -615,6 +625,20 @@ async fn update_source(
         "shared",
         existing["shared"].as_bool().unwrap_or(false)
     )?);
+    // 分类可随 PATCH 调整：缺省保持不变，空值退回未分组。
+    if map.contains_key("groupId") {
+        match group_id_of(map)? {
+            Some(group_id) => {
+                crate::source_groups::ensure_group(&state, &group_id, project.id()).await?;
+                doc["groupId"] = json!(group_id);
+            }
+            None => {
+                if let Some(map) = doc.as_object_mut() {
+                    map.remove("groupId");
+                }
+            }
+        }
+    }
     config::update(
         &state.config_dir,
         &options(),
@@ -636,6 +660,13 @@ async fn update_source(
     .await?;
     let row = source_by_slug(&state, &source_id).await?;
     Ok(util::ok(&row))
+}
+
+/// 读可选的 `groupId`：缺省或空串都表示未分组。
+fn group_id_of(map: &Map<String, Value>) -> Result<Option<String>, ApiError> {
+    Ok(util::optional_text(map, "groupId")?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
 }
 
 async fn source_by_slug(state: &AppState, slug: &str) -> Result<Value, ApiError> {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { IconCheck, IconPlus, IconRefresh, IconTrash } from "../components/icons";
+import { RowSubject } from "../components/ListRow";
 import { PlatformIcon } from "../components/platforms";
 import { Seg, SortHeader, sortRows, useSort } from "../components/Table";
 import { Card, Empty, Field, Loading, Modal, Problem, StatusBadge, Tabs, useUi } from "../components/ui";
@@ -19,7 +20,7 @@ import {
   updatePushChannel,
 } from "../lib/api";
 import { relative, stamp } from "../lib/format";
-import { useRoute } from "../lib/router";
+import { navigate, useRoute } from "../lib/router";
 import type {
   NotificationCenterSettings,
   NotificationEntry,
@@ -139,9 +140,9 @@ export function NotificationsPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">notifications · 通知管理</div>
-          <h1 className="page-title">通知中心与通知推送</h1>
+          <h1 className="page-title">通知</h1>
           <p className="page-lede">
-            通知中心把系统事件留在本机（浏览器提醒），通知推送把它们发到你常用的平台。两者只看事件分类，不混入内容投递。
+            通知中心在浏览器内展示系统事件；通知推送将事件发送至外部平台。两者按事件分类，与内容投递相互独立。
           </p>
         </div>
         <div className="page-actions">
@@ -188,21 +189,40 @@ export function NotificationsPage() {
               通知设置
             </button>
           </div>
-          <Card title="最近通知" sub="只保留最近 500 条；分类开关关闭后不再记录该类事件" flush>
+          <Card title="最近通知" sub="仅保留最近 500 条；分类开关关闭后不记录该类事件" flush>
             {loading && entries.length === 0 ? (
               <div className="card-body">
                 <Loading lines={5} />
               </div>
             ) : entries.length === 0 ? (
-              <Empty title="还没有通知" text="采集、投递与系统事件会按分类开关产生通知。" />
+              <Empty title="暂无通知" text="采集、投递与系统事件按分类开关产生通知。" />
             ) : (
               <div className="list">
                 {entries.map((entry) => (
                   <div className={`list-row${entry.read ? "" : " is-unread"}`} key={entry.id}>
                     <span className={`dot ${entry.level === "warn" ? "warn" : "ok"}`} />
                     <span className="list-main">
-                      <span className="list-title">{entry.title}</span>
+                      <RowSubject
+                        onClick={() => {
+                          if (!entry.read) {
+                            void markNotificationsRead({ ids: [entry.id] })
+                              .then(() => {
+                                setEntries((rows) =>
+                                  rows.map((row) => (row.id === entry.id ? { ...row, read: true } : row)),
+                                );
+                                setUnread((value) => Math.max(0, value - 1));
+                              })
+                              .catch(() => undefined);
+                          }
+                          if (entry.link) navigate(entry.link);
+                          else setCategory(entry.category);
+                        }}
+                        title={entry.link ? "打开相关页面" : "只看同类通知"}
+                      >
+                        {entry.title}
+                      </RowSubject>
                       <span className="list-meta">
+                        {entry.event ? <span>{eventLabel(entry.event)}</span> : null}
                         <span>{entry.message}</span>
                         <span>{relative(entry.createdAt)}</span>
                       </span>
@@ -253,19 +273,19 @@ export function NotificationsPage() {
             })}
           </div>
 
-          <Card title="已配置的推送渠道" sub="勾选需要推送的事件；未勾选的事件不会发送" flush>
+          <Card title="已配置的推送渠道" sub="勾选需要推送的事件；未勾选的事件不发送" flush>
             {channels.length === 0 ? (
-              <Empty title="还没有推送渠道" text="点上方任一平台，填必要设置即可。" />
+              <Empty title="暂无推送渠道" text="在上方选择平台并填写必要设置。" />
             ) : (
               <div className="list">
                 {channels.map((channel) => (
                   <div className="list-row" key={channel.id}>
                     <PlatformIcon icon={platformOf(channel.platform)?.icon ?? "webhook"} label={platformOf(channel.platform)?.name} size={26} />
                     <span className="list-main">
-                      <span className="list-title">
+                      <RowSubject onClick={() => setChannelEditing(channel)} title="编辑渠道">
                         {channel.name}
                         {channel.enabled ? null : <span className="badge neutral" style={{ marginLeft: 6 }}>已停用</span>}
-                      </span>
+                      </RowSubject>
                       <span className="list-meta">
                         <span>{platformOf(channel.platform)?.name ?? channel.platform}</span>
                         <span>{channel.events.length ? channel.events.map(eventLabel).join("、") : "未选择事件"}</span>
@@ -290,9 +310,6 @@ export function NotificationsPage() {
                       }
                     >
                       测试
-                    </button>
-                    <button type="button" className="btn btn-sm" onClick={() => setChannelEditing(channel)}>
-                      编辑
                     </button>
                     <button
                       type="button"
@@ -331,7 +348,7 @@ export function NotificationsPage() {
           </div>
           <Card title="推送记录" sub="失败保留平台返回的错误摘要" flush>
             {sortedRecords.length === 0 ? (
-              <Empty title="还没有推送记录" text="事件触发后按渠道订阅产生记录；也可用渠道上的「测试」验证连通。" />
+              <Empty title="暂无推送记录" text="事件触发后按渠道订阅产生记录；渠道「测试」用于验证连通。" />
             ) : (
               <div className="table-wrap">
                 <table className="table">
@@ -376,7 +393,7 @@ export function NotificationsPage() {
       {settingsOpen && settings ? (
         <Modal
           title="通知设置"
-          sub="分类开关决定是否记录与提醒；浏览器提醒需要页面处于打开状态"
+          sub="分类开关决定记录与提醒；浏览器提醒需要页面处于打开状态"
           onClose={() => setSettingsOpen(false)}
           footer={
             <button type="button" className="btn btn-primary" onClick={() => setSettingsOpen(false)}>
@@ -477,7 +494,7 @@ function ChannelModal({
 
   async function save() {
     if (!platform) {
-      notify("warn", "先选择平台");
+      notify("warn", "请选择平台");
       return;
     }
     setBusy(true);
@@ -503,7 +520,7 @@ function ChannelModal({
   return (
     <Modal
       title={channel ? `编辑渠道 · ${channel.name}` : "添加推送渠道"}
-      sub="密钥类字段只保存环境变量名，不落明文"
+      sub="密钥字段仅保存环境变量名，不保存明文"
       onClose={onClose}
       wide
       footer={
@@ -553,7 +570,7 @@ function ChannelModal({
                 />
               </Field>
             ))}
-            <Field label="推送哪些事件" hint="只推送勾选的事件；分类开关仍以通知中心设置为准">
+            <Field label="推送哪些事件" hint="仅推送勾选的事件；分类开关以通知中心设置为准">
               <div className="row wrap" style={{ gap: 12 }}>
                 {events.map((event) => (
                   <label key={event.id} className="row" style={{ gap: 5 }}>
@@ -577,7 +594,7 @@ function ChannelModal({
             </label>
           </>
         ) : (
-          <Empty title="先选择平台" text="不同平台需要的设置不同，选好后填必要项即可。" />
+          <Empty title="选择平台" text="各平台设置项不同，选择后填写必要项。" />
         )}
         {result ? (
           <div className={`test-result ${result.ok ? "ok" : "bad"}`}>

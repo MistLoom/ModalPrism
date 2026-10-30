@@ -7,8 +7,11 @@ mod execute;
 mod listen;
 mod plans;
 mod queue;
+mod recover;
 mod stage;
 mod transport;
+/// 工具面的单次采集：取数 → 识别 → 适配 → 落库/返回。
+pub mod tools;
 
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
@@ -78,12 +81,15 @@ pub struct Services {
     proxy: Mutex<String>,
     push: accessors_builtin::PushAccessor,
     browser_program: Mutex<PathBuf>,
+    /// 结构化识别引擎（RawPrism）。组合根在 Host 就绪后注入；未注入表示能力缺失。
+    prism: Mutex<Option<Arc<dyn adapters::Prism>>>,
 }
 
 impl Services {
     pub async fn open(data: &Path, config_dir: &Path, binds: Binds) -> Result<Arc<Self>, Error> {
         let load_options = LoadOptions::from_process();
-        let snapshot = config::validate(config_dir, &load_options)?;
+        // 配置不可加载时先尝试用出厂快照自愈；仍失败才拒绝启动。
+        let snapshot = recover::load_or_recover(data, config_dir, &load_options)?;
         strata_client::check_storage(&snapshot.system, data).map_err(Error::new)?;
         require_loopback(binds.http)?;
         require_loopback(binds.proxy)?;
@@ -130,6 +136,7 @@ impl Services {
             proxy: Mutex::new(format!("http://{}", binds.proxy)),
             push: accessors_builtin::PushAccessor::new(),
             browser_program: Mutex::new(PathBuf::from(browser)),
+            prism: Mutex::new(None),
         }))
     }
 
@@ -152,6 +159,18 @@ impl Services {
 
     pub fn set_proxy(&self, url: impl Into<String>) {
         *self.proxy.lock().expect("代理") = url.into();
+    }
+
+    /// 注入结构化识别引擎。只写一次：Host 就绪后由组合根接线。
+    pub fn set_prism(&self, prism: Arc<dyn adapters::Prism>) {
+        if let Ok(mut slot) = self.prism.lock() {
+            *slot = Some(prism);
+        }
+    }
+
+    /// 当前可用的识别引擎。未装载时为 None，调用方按基础检测降级。
+    pub fn prism(&self) -> Option<Arc<dyn adapters::Prism>> {
+        self.prism.lock().ok().and_then(|slot| slot.clone())
     }
 
     pub fn proxy_url(&self) -> String {
@@ -186,6 +205,7 @@ impl Services {
             proxy: self.proxy_url(),
             browser: self.browser_program.lock().expect("浏览器").clone(),
             timeout,
+            prism: self.prism.lock().ok().and_then(|slot| slot.clone()),
         }
     }
 

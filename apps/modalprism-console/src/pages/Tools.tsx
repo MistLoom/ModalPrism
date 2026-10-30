@@ -84,15 +84,15 @@ export function ToolsPage() {
       <header className="page-head">
         <div className="page-head-text">
           <div className="kicker">tools · 调试工具</div>
-          <h1 className="page-title">搜索、抓取与解析调试</h1>
+          <h1 className="page-title">调试工具</h1>
           <p className="page-lede">
-            这些入口走的是与采集相同的真实链路：前置未满足时返回 412 与「去哪配」，不会静默失败。
+            以下入口复用采集链路；前置条件不满足时返回 412 并给出配置位置。
           </p>
         </div>
       </header>
 
       {preconditions && !preconditions.met ? (
-        <Card title="前置未就绪" sub="补齐后试搜即可返回结果。">
+        <Card title="前置未就绪" sub="补齐后可返回结果。">
           <div className="stack" style={{ gap: 4 }}>
             {unmet.map((text, index) => (
               <div key={index} className="row" style={{ gap: 6 }}>
@@ -105,7 +105,7 @@ export function ToolsPage() {
       ) : null}
 
       <div className="grid cols-2">
-        <Card title="试搜" sub="走产品搜索路径：DDG 免密钥，空结果自动回退 DDG Lite。">
+        <Card title="试搜" sub="使用产品搜索链路：DDG 免密钥；空结果回退至 DDG Lite。">
           <div className="stack">
             <div className="row" style={{ gap: 8 }}>
               <select className="input" style={{ width: 200 }} value={engine} onChange={(event) => setEngine(event.target.value)}>
@@ -146,7 +146,7 @@ export function ToolsPage() {
                   </div>
                 ) : null}
                 {searchResult.results.length === 0 && !searchResult.degraded ? (
-                  <Empty title="没有命中" text="换个关键词，或在设置里配置带密钥引擎。" />
+                  <Empty title="没有命中" text="调整关键词，或在设置中配置带密钥引擎。" />
                 ) : null}
                 {searchResult.results.map((hit, index) => (
                   <div key={index} className="stack" style={{ gap: 1 }}>

@@ -72,6 +72,8 @@ export interface Overview {
     enabledSources: number;
     healthySources: number;
     attention: number;
+    /** 未读通知数：工作台「待处理」与导航角标共用。 */
+    unreadNotifications: number;
     content: number;
     tombstoned: number;
     tasksQueued: number;
@@ -120,7 +122,24 @@ export interface Source {
   alert?: boolean | null;
   references?: number;
   labels?: Record<string, string>;
+  /** 用户自定义分类；分类元数据单独存放，这里只回显成员关系。 */
+  groupId?: string | null;
   etag: string;
+}
+
+/** 用户自定义信源分类（GET /catalog/sourceGroups）。 */
+export interface SourceGroup {
+  id: string;
+  name: string;
+  description?: string | null;
+  project: string;
+  count: number;
+  /** 仓库自带的内置分类：可改名、可移出成员，不可删除。 */
+  builtin?: boolean;
+  /** 内置分类的展示次序；用户自建分类缺省。 */
+  order?: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SourceInput {
@@ -136,6 +155,8 @@ export interface SourceInput {
   admission?: Record<string, unknown>;
   /** 创建时是否立即共享给其他项目。 */
   shared?: boolean;
+  /** 用户自定义分类；空值或 null 表示未分组。 */
+  groupId?: string | null;
 }
 
 /** 写盘载荷：节律已迁到计划，信源声明不再提交 schedule。 */
@@ -240,6 +261,9 @@ export interface ContentItem {
   publishedAt?: string | null;
   createdAt: string;
   struct?: Record<string, unknown> | null;
+  /** 这条内容包含的数据面（kind 或 kind:variant）。 */
+  facetKinds?: string[];
+  facetCount?: number;
   etag: string;
 }
 
@@ -252,9 +276,30 @@ export interface ContentBody {
   value?: unknown;
 }
 
+export interface ContentFacetSummary {
+  kind: string;
+  variant?: string | null;
+  version: number;
+  versions: number;
+  mediaType?: string | null;
+  size?: number | null;
+}
+
+export interface ContentFacetBody {
+  kind: string;
+  variant?: string | null;
+  version: number;
+  contentHash?: string;
+  mediaType?: string | null;
+  size?: number | null;
+  text?: string | null;
+  value?: unknown;
+  blob?: Record<string, unknown> | null;
+}
+
 export interface ContentDetail extends ContentItem {
   body: ContentBody | null;
-  facets: { kind: string; variant?: string | null; version: number; versions: number; mediaType?: string | null; size?: number | null }[];
+  facets: ContentFacetSummary[];
 }
 
 export interface CollectionRun {
@@ -423,6 +468,12 @@ export interface ResetPreview {
   expiresAt: string;
   etag: string;
   storageReachable: boolean;
+  /** 配置不是清空域：预演时给出重建规模、仍存在的遗留目录与基线可用性。 */
+  config?: {
+    declarations: number;
+    retiredPaths: { path: string; since: string | null }[];
+    baselineAvailable: boolean;
+  };
   createdAt: string;
 }
 
@@ -579,9 +630,13 @@ export interface DeliveryEndpoint {
 export interface NotificationEntry {
   id: string;
   category: string;
+  /** 细粒度事件标识；旧条目可能缺失。 */
+  event?: string;
   level: string;
   title: string;
   message: string;
+  /** 站内深链：点击条目可回到产生它的页面。 */
+  link?: string | null;
   read: boolean;
   createdAt: string;
 }
