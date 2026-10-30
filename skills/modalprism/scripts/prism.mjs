@@ -17,7 +17,7 @@ for (let index = 0; index < args.length; index += 1) {
   const key = item.slice(2);
   const next = args[index + 1];
   if (next === undefined || next.startsWith("--")) {
-    flags[key] = "true";
+    flags[key] = key === "project" ? "" : "true";
   } else {
     flags[key] = next;
     index += 1;
@@ -25,8 +25,11 @@ for (let index = 0; index < args.length; index += 1) {
 }
 
 const base = (flags.base ?? process.env.MODALPRISM_BASE ?? DEFAULT_BASE).replace(/\/+$/, "");
+const project = flags.project?.trim();
 
-const usage = `用法: node prism.mjs <命令> [参数] [--base http://host:port]
+const usage = `用法: node prism.mjs <命令> [参数] [--base http://host:port] [--project projectId]
+
+  --project projectId                       指定项目；省略时沿用服务端默认项目
 
   status                                    系统状态与配置代际
   content [--query Q] [--source ID] [--status active|tombstoned] [--limit N]
@@ -44,7 +47,9 @@ function newKey() {
 }
 
 async function request(path, init) {
-  const response = await fetch(`${base}${path}`, init);
+  const headers = new Headers(init?.headers);
+  if (project) headers.set("x-project-id", project);
+  const response = await fetch(`${base}${path}`, { ...init, headers });
   const body = await response.text();
   let data;
   try {
@@ -82,6 +87,7 @@ function post(path, payload) {
 }
 
 async function main() {
+  if (flags.project !== undefined && !project) throw new Error("--project 需要项目 ID");
   switch (command) {
     case "status":
       return request("/api/v1/system/status");

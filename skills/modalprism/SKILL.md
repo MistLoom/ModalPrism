@@ -19,6 +19,13 @@ node scripts/prism.mjs status
 
 基址默认 `http://127.0.0.1:17880`，用 `--base http://host:port` 或 `MODALPRISM_BASE` 覆盖；控制台地址同样是有效入口，代理不改变响应。命令一览：`node scripts/prism.mjs help`。
 
+访问非默认项目时，在命令后加 `--project <projectId>`（使用项目 ID，而非项目名称）。脚本会在每个请求中携带 `x-project-id`，包括内容详情的两个请求和投递请求；省略时不发送项目头，沿用服务端默认行为。需要按项目追踪结果时，后续命令也使用同一个项目 ID：
+
+```sh
+node scripts/prism.mjs content --project proj_example --query "agent memory"
+node scripts/prism.mjs records --project proj_example --status failed
+```
+
 ## 任务配方
 
 ### 看信源
