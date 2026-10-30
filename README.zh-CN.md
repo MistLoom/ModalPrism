@@ -10,6 +10,10 @@ Rust 编写的AI原生的多信源数据采集系统 支持向量存储与多模
 
 [English](README.md) · **简体中文**
 
+![ModalPrism 控制台 · 运行总览](assets/overview.png)
+
+<p align="center"><sub>控制台 · 概览：信源、待处理、任务队列与已入库内容一眼看完，并带实时运行监测。</sub></p>
+
 ## 要点
 
 - **一键启动，轻量化运行**：单二进制、零外部服务依赖，首次运行自动初始化存储；一条命令即完成采集、投递与查询服务的启动。
@@ -21,6 +25,25 @@ Rust 编写的AI原生的多信源数据采集系统 支持向量存储与多模
 - **全链路可追溯**：每一层产出都记录生产者与所用配置，数据可审计、可复现。
 - **对外请求集中治理**：限速、熔断、robots 合规、私网地址防护；付费调用有预算控制与重复请求合并。
 - **配置即代码，原子热加载**：严格校验的 YAML 保存即生效；信源取什么、计划多久跑一次、新内容投给谁，都在声明里写清楚。
+
+## 控制台一览
+
+点击任意截图可看大图。
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><a href="assets/sources.png"><img src="assets/sources.png" alt="信源页"></a><br><b>信源</b> — 声明按可编辑分类归档，每行给出健康状态、关联计划、今日产出与下次运行；从模板起步，或直接在页面上生成适配器。</td>
+    <td width="50%" valign="top"><a href="assets/project.png"><img src="assets/project.png" alt="项目页"></a><br><b>项目</b> — 项目是数据归属单元：信源、计划、内容与任务都按项目统计，切换项目即切换数据范围。</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="assets/tasks.png"><img src="assets/tasks.png" alt="任务页"></a><br><b>任务</b> — 即时、付费、渲染、推送四条队列之上是一份统一的执行记录，可按状态、类型、信源类型与计划筛选，再重排或取消。</td>
+    <td width="50%" valign="top"><a href="assets/content.png"><img src="assets/content.png" alt="内容页与详情抽屉"></a><br><b>内容</b> — 每条内容保留原始字节与派生 facet（网页正文、结构化对象），带版本与关联，原文一键打开。</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="assets/sources_record.png"><img src="assets/sources_record.png" alt="采集记录抽屉"></a><br><b>采集记录</b> — 一次运行看全：本次产出了什么、重复采集跳过了什么，并可一键重采。</td>
+    <td width="50%" valign="top"><a href="assets/notification.png"><img src="assets/notification.png" alt="通知管理页"></a><br><b>通知管理</b> — 飞书、企业微信、钉钉、Slack、Discord、Telegram 与通用 Webhook，逐事件勾选要推送的事件，保存前可先做连通检测。</td>
+  </tr>
+</table>
 
 ## 三十秒上手
 

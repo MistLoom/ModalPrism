@@ -10,6 +10,10 @@ Built on the [LEAF](https://github.com/MistLoom/LEAF/) framework: a lightweight 
 
 **English** · [简体中文](README.zh-CN.md)
 
+![ModalPrism console · Overview page](assets/overview.png)
+
+<p align="center"><sub>Console · Overview — sources, pending events, queues, and stored content at a glance, with live runtime monitoring.</sub></p>
+
 ## Highlights
 
 - **One-command start, lightweight runtime**: a single binary with no external services; the first run initializes storage, and one command brings up collection, delivery, and query together.
@@ -21,6 +25,25 @@ Built on the [LEAF](https://github.com/MistLoom/LEAF/) framework: a lightweight 
 - **End-to-end lineage**: every derived layer records who produced it and with what config — auditable data, traceable origins.
 - **Centralized traffic governance**: rate limiting, circuit breaking, robots compliance, private-network protection; paid calls get budgets and duplicate-request merging.
 - **Config as code with atomic hot-reload**: strictly validated YAML applies atomically on save; what a source fetches, how often a plan runs, and which targets new content goes to are all spelled out in the declarations.
+
+## Console tour
+
+Click any screenshot to open it full size.
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><a href="assets/sources.png"><img src="assets/sources.png" alt="Sources page"></a><br><b>Sources</b> — declarations filed into editable categories, each showing health, bound plan, today's output, and next run; start from a template or generate an adapter from the page.</td>
+    <td width="50%" valign="top"><a href="assets/project.png"><img src="assets/project.png" alt="Projects page"></a><br><b>Projects</b> — a project is the unit of data ownership: sources, plans, content, and tasks are counted per project, and switching project switches the data scope.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="assets/tasks.png"><img src="assets/tasks.png" alt="Tasks page"></a><br><b>Tasks</b> — four queues (immediate, paid, render, push) above one unified execution history; filter by state, type, source type, or plan, then requeue or cancel.</td>
+    <td width="50%" valign="top"><a href="assets/content.png"><img src="assets/content.png" alt="Content page with detail drawer"></a><br><b>Content</b> — every item keeps its raw bytes plus derived facets (web text, structured object), with versions and relations; the original is one click away.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="assets/sources_record.png"><img src="assets/sources_record.png" alt="Collection record drawer"></a><br><b>Collection record</b> — one run end to end: what it produced, what de-duplication skipped, and a single button to collect again.</td>
+    <td width="50%" valign="top"><a href="assets/notification.png"><img src="assets/notification.png" alt="Notifications page"></a><br><b>Notifications</b> — Feishu, WeCom, DingTalk, Slack, Discord, Telegram, or any webhook, each with per-event toggles and a connectivity check before saving.</td>
+  </tr>
+</table>
 
 ## Try it in 30 seconds
 
