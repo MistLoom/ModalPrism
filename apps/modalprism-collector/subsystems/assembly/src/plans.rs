@@ -63,6 +63,31 @@ pub fn plans_of(snapshot: &Snapshot) -> Vec<SourcePlan> {
     plans
 }
 
+/// 手动采集的兜底计划：信源没有被任何一等计划覆盖时，就地合成一条一次性计划。
+///
+/// 只服务 `task_create` 的即时派发——不落盘、不进 `plans_of` 的调度视图，也不参与
+/// 规划器轮次，因此不会让「未配置计划」的内置信源变成按节律自动采集。
+/// 节律缺省、不限量，只沿用信源自身的取数形态与队列；推送与非内置访问器入口返回
+/// `None`，仍按不可采集处理。
+pub fn manual_plan(snapshot: &Snapshot, source_id: &str) -> Option<SourcePlan> {
+    let module = snapshot.modules.get(source_id)?;
+    if module.get("kind").and_then(Value::as_str) != Some("source") {
+        return None;
+    }
+    build_plan(
+        snapshot,
+        source_id,
+        module,
+        None,
+        &Value::Null,
+        &Value::Null,
+        &Value::Null,
+        true,
+        true,
+        None,
+    )
+}
+
 fn slug_of(id: &str) -> &str {
     id.split('/').next_back().unwrap_or(id)
 }
@@ -723,6 +748,85 @@ mod tests {
             plans.iter().map(|plan| plan.dedup_key()).collect();
         assert_eq!(keys.len(), 2, "去重键带计划维度，互不吞并");
         assert!(plans.iter().all(|plan| plan.plan_id.is_some()));
+    }
+
+    /// 手动采集兜底：未被任何计划覆盖的信源合成一次性计划，不进入调度视图。
+    #[test]
+    fn manual_plan_covers_source_without_plan() {
+        let mut modules = std::collections::BTreeMap::new();
+        modules.insert(
+            "accessor/rss".into(),
+            json!({"kind": "accessor", "implementation": "builtin:rss", "limits": {"timeout": "45s"}}),
+        );
+        modules.insert(
+            "source/loose".into(),
+            json!({
+                "kind": "source",
+                "access": {"accessor": "accessor/rss", "locator": {"url": "https://example.com/feed"}},
+                "pipeline": [],
+                "admission": {},
+            }),
+        );
+        let snapshot = config::Snapshot {
+            generation: 1,
+            system: json!({}),
+            modules,
+            origins: std::collections::BTreeMap::new(),
+        };
+        assert!(
+            plans_of(&snapshot).is_empty(),
+            "无计划覆盖时调度视图应为空，不得隐式启用采集"
+        );
+        let plan = manual_plan(&snapshot, "source/loose").expect("手动采集应可合成计划");
+        assert_eq!(plan.source_id.as_str(), "source/loose");
+        assert!(plan.plan_id.is_none(), "兜底计划不落盘，不带计划标识");
+        assert!(plan.one_shot, "手动采集是一次性任务");
+        assert!(plan.enabled);
+        assert_eq!(plan.queue, strata_model::QueueName::Free);
+    }
+
+    /// 兜底计划不放行推送与自定义访问器：仍按不可采集处理。
+    #[test]
+    fn manual_plan_rejects_push_and_custom_accessor() {
+        let mut modules = std::collections::BTreeMap::new();
+        modules.insert(
+            "accessor/push".into(),
+            json!({"kind": "accessor", "implementation": "builtin:push"}),
+        );
+        modules.insert(
+            "accessor/custom".into(),
+            json!({"kind": "accessor", "implementation": "script:custom"}),
+        );
+        modules.insert(
+            "source/inbox".into(),
+            json!({
+                "kind": "source",
+                "access": {"accessor": "accessor/push", "locator": {"channel": "inbound"}},
+                "pipeline": [],
+                "admission": {},
+            }),
+        );
+        modules.insert(
+            "source/custom".into(),
+            json!({
+                "kind": "source",
+                "access": {"accessor": "accessor/custom", "locator": {"url": "https://example.com/x"}},
+                "pipeline": [],
+                "admission": {},
+            }),
+        );
+        let snapshot = config::Snapshot {
+            generation: 1,
+            system: json!({}),
+            modules,
+            origins: std::collections::BTreeMap::new(),
+        };
+        assert!(manual_plan(&snapshot, "source/inbox").is_none(), "推送信源无取数入口");
+        assert!(
+            manual_plan(&snapshot, "source/custom").is_none(),
+            "非内置访问器不由采集侧直调"
+        );
+        assert!(manual_plan(&snapshot, "source/missing").is_none());
     }
 
     /// R11.5：对**真实 `config/` 全量信源**做 dry-run，断言迁移前后计划视图与 config_hash 稳定。

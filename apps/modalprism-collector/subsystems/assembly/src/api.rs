@@ -401,11 +401,19 @@ impl Services {
     }
 
     /// 执行一个任务。信源已从配置里消失时改成 nack。
+    ///
+    /// 手动任务不依赖计划覆盖：未被任何一等计划覆盖的信源用 `plans::manual_plan`
+    /// 合成一次性计划执行。定时任务只由落盘计划派发，取不到计划说明信源已从配置
+    /// 消失，仍按 nack 退回。
     pub async fn runner_run(&self, task: AccessTask) -> Result<RunOutcome, Error> {
-        let plans = plans::plans_of(&self.config.applied());
-        let Some(mut plan) = plans
+        let snapshot = self.config.applied();
+        let Some(mut plan) = plans::plans_of(&snapshot)
             .into_iter()
             .find(|plan| plan.source_id == task.source_id)
+            .or_else(|| match task.reason {
+                TaskReason::Manual => plans::manual_plan(&snapshot, task.source_id.as_str()),
+                _ => None,
+            })
         else {
             self.strata
                 .nack(&task.task_id, Timestamp::now(), "config")
@@ -519,6 +527,9 @@ impl Services {
 
     /// 为信源新建一条人工任务。控制台永远不自己拼任务体。
     ///
+    /// 信源未被任何一等计划覆盖时，用 `plans::manual_plan` 合成一次性计划派发，
+    /// 手动采集因此不依赖计划覆盖；自动采集仍只认落盘计划。
+    ///
     /// `locator` 提供时把取数目标换成这个地址（点位采集），其余字段沿用信源声明；
     /// 只对按地址取数的信源开放，其它形态（查询、接口端点、推送）拒绝。
     pub async fn task_create(
@@ -528,9 +539,13 @@ impl Services {
         run_now: bool,
         locator: Option<String>,
     ) -> Result<TaskRow, Error> {
-        let mut plan = plans::plans_of(&self.config.applied())
+        let applied = self.config.applied();
+        let mut plan = plans::plans_of(&applied)
             .into_iter()
             .find(|plan| plan.source_id.as_str() == source)
+            // 未被任何计划覆盖的信源仍要能手动采集：就地合成一条一次性计划，
+            // 只用于本次即时派发，不改变该信源的自动采集资格。
+            .or_else(|| plans::manual_plan(&applied, source))
             .ok_or_else(|| Error::new("信源不可采集"))?;
         if let Some(queue) = queue {
             plan.queue = queue;

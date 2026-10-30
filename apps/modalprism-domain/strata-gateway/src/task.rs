@@ -181,7 +181,9 @@ pub async fn ack_in(tx: &mut Tx<'_>, task_id: &TaskId) -> Result<()> {
     let mut sql = Sql::new(tx.dialect());
     sql.push("UPDATE g_tasks SET status = ");
     sql.text(STATUS_DONE);
-    sql.push(", lease_until = NULL WHERE task_id = ");
+    // 成功即终态：上一次重试留下的错误与下次重试时间都不再成立。不清的话，
+    // 已完成的任务会带着旧失败原因进入列表、关键字搜索与采集结果回显。
+    sql.push(", lease_until = NULL, retry_at = NULL, last_error = NULL WHERE task_id = ");
     sql.text(task_id.as_str());
     tx.exec(&sql).await?;
     Ok(())

@@ -355,3 +355,64 @@ async fn keyword_filter_matches_id_source_and_error() {
     assert!(none.rows.is_empty());
     drop(dir);
 }
+
+#[tokio::test]
+async fn ack_clears_the_error_left_by_the_previous_attempt() {
+    let (_dir, gateway) = open().await;
+    gateway
+        .enqueue(&[task("t_retry", "https://it.example/retry")])
+        .await
+        .unwrap();
+    let leased = gateway
+        .lease(
+            QueueName::Free,
+            1,
+            Duration::from_secs(60),
+            Timestamp::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(leased.len(), 1);
+
+    // 第一次执行失败：下次重试时间与失败原因上账。
+    gateway
+        .nack(&id("t_retry"), Timestamp::now(), "config")
+        .await
+        .unwrap();
+    let failed = gateway.task_row(&id("t_retry")).await.unwrap().unwrap();
+    assert_eq!(failed.status, STATUS_QUEUED);
+    assert_eq!(failed.last_error.as_deref(), Some("config"));
+    assert!(failed.retry_at.is_some());
+    assert_eq!(failed.attempt, 1);
+
+    // 重试成功后旧失败原因与下次重试时间都不能留在行上。
+    gateway
+        .lease(
+            QueueName::Free,
+            1,
+            Duration::from_secs(60),
+            Timestamp::now(),
+        )
+        .await
+        .unwrap();
+    gateway.ack(&id("t_retry")).await.unwrap();
+    let done = gateway.task_row(&id("t_retry")).await.unwrap().unwrap();
+    assert_eq!(done.status, STATUS_DONE);
+    assert!(done.last_error.is_none());
+    assert!(done.retry_at.is_none());
+    assert_eq!(done.attempt, 1, "尝试次数是历史记账，成功后不清零");
+
+    // 已成功的任务不该再用旧错误被搜出来。
+    let stale = gateway
+        .list_tasks(
+            &TaskFilter {
+                query: Some("config".into()),
+                ..TaskFilter::default()
+            },
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert!(stale.rows.is_empty());
+}

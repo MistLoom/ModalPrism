@@ -161,12 +161,16 @@ async fn run(state: Shared, id: String, action: Value) {
                 "succeeded"
             };
             finish(&state, &id, status, 1.0, Some(result.clone()), None, partial).await;
-            notify_finished(&state, &kind, status, Some(&result), None).await;
+            notify_finished(&state, &action, &kind, status, Some(&result), None).await;
         }
         Err(error) => {
             let retryable = error.retryable;
             let summary = error.body()["error"].clone();
-            let message = error.message.clone();
+            // 校验类错误把字段内的说明当原因：通知里不需要「sourceId: 」这类前缀。
+            let message = summary["fieldErrors"][0]["message"]
+                .as_str()
+                .unwrap_or(&error.message)
+                .to_string();
             finish(
                 &state,
                 &id,
@@ -177,17 +181,28 @@ async fn run(state: Shared, id: String, action: Value) {
                 retryable,
             )
             .await;
-            notify_finished(&state, &kind, "failed", None, Some(message)).await;
+            notify_finished(&state, &action, &kind, "failed", None, Some(message)).await;
         }
     }
+}
+
+/// 一条终态通知。
+struct Notice {
+    category: &'static str,
+    event: &'static str,
+    title: String,
+    message: String,
+    link: Option<String>,
 }
 
 /// 终态操作 → 通知：把用户关心的动作翻成具体事件，其余只留日志。
 ///
 /// Operation 成功不等于业务成功：采集要看任务终态、投递要看记录结果，所以这里
-/// 还会读取 `result` 里的细分状态，避免把「已提交」报成「已完成」。
+/// 还会读取 `result` 里的细分状态，避免把「已提交」报成「已完成」。操作级失败没有
+/// `result`，信源与原因改从发起时的 `action` 和错误信息里回读。
 async fn notify_finished(
     state: &AppState,
+    action: &Value,
     kind: &str,
     status: &str,
     result: Option<&Value>,
@@ -198,18 +213,12 @@ async fn notify_finished(
     let level = if failed || partial { "warn" } else { "info" };
     let detail = error.unwrap_or_default();
 
-    struct Notice {
-        category: &'static str,
-        event: &'static str,
-        title: String,
-        message: String,
-        link: Option<String>,
-    }
-
     let notice = match kind {
         "collection.run" => {
+            // 采集可能根本没轮到建任务（信源不可采集），这时的信源只在 action 里。
             let source_id = result
                 .and_then(|value| value["sourceId"].as_str())
+                .or_else(|| action["sourceId"].as_str())
                 .unwrap_or_default()
                 .to_string();
             let label = source_label(state, &source_id).await;
@@ -218,39 +227,17 @@ async fn notify_finished(
                 .unwrap_or_default();
             let task_error = result
                 .and_then(|value| value["error"].as_str())
-                .unwrap_or_default()
-                .to_string();
+                .unwrap_or_default();
+            let reason = if task_error.is_empty() {
+                detail.as_str()
+            } else {
+                task_error
+            };
             let link = Some(match source_id.is_empty() {
                 true => "sources".to_string(),
                 false => format!("sources?query={source_id}"),
             });
-            match task_status {
-                "done" => Notice {
-                    category: "source",
-                    event: "collection.completed",
-                    title: format!("采集完成：{label}"),
-                    message: "采集结果已入库".into(),
-                    link,
-                },
-                "failed" => Notice {
-                    category: "source",
-                    event: "collection.failed",
-                    title: format!("采集失败：{label}"),
-                    message: if task_error.is_empty() {
-                        "任务以失败结束".into()
-                    } else {
-                        task_error
-                    },
-                    link,
-                },
-                _ => Notice {
-                    category: "source",
-                    event: "collection.started",
-                    title: format!("采集已提交：{label}"),
-                    message: "任务已入队，完成后会再通知一次".into(),
-                    link,
-                },
-            }
+            collection_notice(failed, task_status, &label, reason, link)
         }
         "delivery.manual" => {
             let record_status = result
@@ -445,6 +432,61 @@ async fn notify_finished(
         notice.link.as_deref(),
     )
     .await;
+}
+
+/// 采集操作的终态 → 通知。
+///
+/// 任务终态优先；操作自己在建任务之前就失败时（信源没有采集入口）任务状态是空的，
+/// 这时用错误原因兜底，至少告诉用户是哪个信源没采起来、为什么。
+fn collection_notice(
+    failed: bool,
+    task_status: &str,
+    label: &str,
+    reason: &str,
+    link: Option<String>,
+) -> Notice {
+    match task_status {
+        "done" => Notice {
+            category: "source",
+            event: "collection.completed",
+            title: format!("采集完成：{label}"),
+            message: "采集结果已入库".into(),
+            link,
+        },
+        "failed" => Notice {
+            category: "source",
+            event: "collection.failed",
+            title: format!("采集失败：{label}"),
+            message: if reason.is_empty() {
+                "任务以失败结束".into()
+            } else {
+                reason.to_string()
+            },
+            link,
+        },
+        _ if failed => Notice {
+            category: "source",
+            event: "collection.failed",
+            title: if label.is_empty() {
+                "采集失败".into()
+            } else {
+                format!("采集失败：{label}")
+            },
+            message: if reason.is_empty() {
+                "采集未能开始".into()
+            } else {
+                reason.to_string()
+            },
+            link,
+        },
+        _ => Notice {
+            category: "source",
+            event: "collection.started",
+            title: format!("采集已提交：{label}"),
+            message: "任务已入队，完成后会再通知一次".into(),
+            link,
+        },
+    }
 }
 
 fn operation_label(kind: &str) -> &str {
@@ -1524,4 +1566,43 @@ async fn execute_derivation_run(
         "skipped": run.skipped,
         "failed": run.failed,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collection_failure_without_task_reports_reason() {
+        let notice = collection_notice(
+            true,
+            "",
+            "WIRED",
+            "该信源没有可用的采集入口，请先补齐访问器或用推送端提交",
+            Some("sources?query=wired".into()),
+        );
+        assert_eq!(notice.event, "collection.failed");
+        assert_eq!(notice.title, "采集失败：WIRED");
+        assert!(notice.message.contains("采集入口"));
+    }
+
+    #[test]
+    fn collection_failure_without_source_still_names_the_event() {
+        let notice = collection_notice(true, "", "", "", None);
+        assert_eq!(notice.title, "采集失败");
+        assert_eq!(notice.message, "采集未能开始");
+    }
+
+    #[test]
+    fn collection_notice_follows_task_status() {
+        let done = collection_notice(false, "done", "WIRED", "", None);
+        assert_eq!(done.event, "collection.completed");
+        let queued = collection_notice(false, "queued", "WIRED", "", None);
+        assert_eq!(queued.event, "collection.started");
+        let task_failed = collection_notice(true, "failed", "WIRED", "超时", None);
+        assert_eq!(task_failed.event, "collection.failed");
+        assert_eq!(task_failed.message, "超时");
+        let silent = collection_notice(true, "failed", "WIRED", "", None);
+        assert_eq!(silent.message, "任务以失败结束");
+    }
 }

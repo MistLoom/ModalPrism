@@ -228,6 +228,13 @@ impl From<assembly::Error> for ApiError {
         } else if lower.contains("参数") || lower.contains("无效") || lower.contains("invalid")
         {
             ApiError::validation("request", "invalid", message)
+        } else if lower.contains("不可采集") {
+            // 缺采集入口是请求本身满足不了，不是服务端故障：给出用户能照着做的指引。
+            ApiError::validation(
+                "sourceId",
+                "sourceNotCollectable",
+                "该信源没有可用的采集入口，请先补齐访问器或用推送端提交",
+            )
         } else if lower.contains("不可用") || lower.contains("timeout") {
             ApiError::dependency(message).retryable()
         } else {
@@ -269,6 +276,36 @@ fn cleanse(message: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn not_collectable_source_is_a_validation_error() {
+        let error = ApiError::from(assembly::Error::new("信源不可采集"));
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        let body = error.body();
+        assert_eq!(body["error"]["code"], "validationFailed");
+        assert_eq!(body["error"]["fieldErrors"][0]["field"], "sourceId");
+        assert_eq!(
+            body["error"]["fieldErrors"][0]["code"],
+            "sourceNotCollectable"
+        );
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("采集入口"));
+    }
+
+    #[test]
+    fn unknown_assembly_error_stays_internal() {
+        let error = ApiError::from(assembly::Error::new("磁盘写入失败"));
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.body()["error"]["code"], "internalError");
+    }
 }
 
 impl From<strata_client::Error> for ApiError {
