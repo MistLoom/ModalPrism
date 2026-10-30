@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const script = fileURLToPath(new URL("./prism.mjs", import.meta.url));
+const script = fileURLToPath(new URL("../skills/modalprism/scripts/prism.mjs", import.meta.url));
 
 async function fixture(t) {
   const requests = [];
@@ -22,7 +22,7 @@ async function fixture(t) {
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
   const run = (args) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, ...args, "--base", base], {
+    const child = spawn(process.execPath, [script, args[0], "--base", base, ...args.slice(1)], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -86,10 +86,55 @@ test("uses the selected project for both content detail requests", async (t) => 
 
 test("rejects a missing or blank project ID before making a request", async (t) => {
   const { run, requests } = await fixture(t);
-  for (const args of [["--project"], ["--project", ""], ["--project", "   "]]) {
+  for (const args of [["--project"], ["--project", "--limit", "1"], ["--project", ""], ["--project", "   "], ["--project="], ["--project=   "]]) {
     const result = await run(["content", ...args]);
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /--project 需要项目 ID/);
+    assert.match(result.stderr, /--project/);
+  }
+  assert.equal(requests.length, 0);
+});
+
+test("accepts equals syntax and preserves equals signs in option values", async (t) => {
+  const { run, requests } = await fixture(t);
+  const result = await run(["content", "--project=proj_beta", "--query=a=b"]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(requests[0].headers["x-project-id"], "proj_beta");
+  assert.equal(new URL(requests[0].url, "http://localhost").searchParams.get("query"), "a=b");
+});
+
+test("rejects unknown options and options unsupported by the command", async (t) => {
+  const { run, requests } = await fixture(t);
+  for (const args of [
+    ["content", "--projet", "x"],
+    ["content", "--projet=x"],
+    ["content", "--limt", "10"],
+    ["status", "--query", "ignored"],
+    ["deliver", "r_example", "--targets", "model:model/example", "--projet", "x"],
+  ]) {
+    const result = await run(args);
+    assert.equal(result.code, 1, JSON.stringify(args));
+    assert.match(result.stderr, /Unknown option/);
+    assert.equal(result.stdout, "");
+  }
+  assert.equal(requests.length, 0);
+});
+
+test("rejects missing values for all supported string options", async (t) => {
+  const { run, requests } = await fixture(t);
+  for (const args of [["content", "--limit"], ["deliver", "r_example", "--targets"], ["content", "--base"]]) {
+    const result = await run(args);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /argument missing|ambiguous/);
+  }
+  assert.equal(requests.length, 0);
+});
+
+test("rejects misspelled commands and extra positional arguments", async (t) => {
+  const { run, requests } = await fixture(t);
+  for (const args of [["contnet"], ["content", "project=proj_beta"], ["op", "op_example", "extra"]]) {
+    const result = await run(args);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /未知命令|多余的位置参数/);
   }
   assert.equal(requests.length, 0);
 });

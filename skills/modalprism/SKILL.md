@@ -19,12 +19,20 @@ node scripts/prism.mjs status
 
 基址默认 `http://127.0.0.1:17880`，用 `--base http://host:port` 或 `MODALPRISM_BASE` 覆盖；控制台地址同样是有效入口，代理不改变响应。命令一览：`node scripts/prism.mjs help`。
 
-访问非默认项目时，在命令后加 `--project <projectId>`（使用项目 ID，而非项目名称）。脚本会在每个请求中携带 `x-project-id`，包括内容详情的两个请求和投递请求；省略时不发送项目头，沿用服务端默认行为。需要按项目追踪结果时，后续命令也使用同一个项目 ID：
+先通过 `GET /api/v1/projects` 获取项目列表，使用响应 `items` 中的 `id`，而非项目名称。例如（使用自己的服务基址）：
+
+```sh
+curl http://127.0.0.1:17880/api/v1/projects
+```
+
+访问非默认项目时，在命令后加 `--project <projectId>`，也支持 `--project=<projectId>`。未知参数、缺失参数值和空白项目 ID 都会报错并退出，不会回落到默认项目。脚本会在请求中携带 `x-project-id`；省略该参数时不发送项目头，沿用服务端默认行为：
 
 ```sh
 node scripts/prism.mjs content --project proj_example --query "agent memory"
 node scripts/prism.mjs records --project proj_example --status failed
 ```
+
+项目头只对服务端按项目划分的接口生效。目前 `logs` 和 `op`（Operation）是全局查询，不按项目区分；即使传入 `--project`，查询范围也不会缩小。追踪日志时使用 `--correlation`，读取 Operation 时使用具体的 operationId。
 
 ## 任务配方
 
