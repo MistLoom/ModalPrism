@@ -1,0 +1,19 @@
+id: adapter/feed-fulltext
+kind: adapter
+name: Feed 全文
+description: 取回 RSS/Atom 条目的全文，产出 Markdown 与纯文本两份数据面。
+implementation: builtin:feed-fulltext
+role: content
+consumes:
+  - {kind: raw, part_role: document}
+produces:
+  - {kind: md}
+  - {kind: text}
+limits:
+  timeout: 30s
+  concurrency: 1
+  retry:
+    attempts: 0
+    backoff: exponential
+    base: 1s
+    max: 30s

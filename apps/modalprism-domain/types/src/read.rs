@@ -259,7 +259,9 @@ pub async fn changes(ctx: &dyn ReadCtx, args: &Value) -> Result<Value, Error> {
 
 pub async fn health_status(ctx: &dyn ReadCtx, args: &Value) -> Result<Value, Error> {
     let source = text_field(args, "source")?;
-    let key = format!("source/{source}");
+    // 健康按 `source/<slug>` 存；health_report 回的就是带前缀的 key，
+    // 原样传回来不能再叠一层前缀，否则查不到状态却报 ok。
+    let key = format!("source/{}", source.trim().trim_start_matches("source/"));
     let state = ctx.strata().state("health", &key).await?;
     let (status, alert) = match state {
         Some(state) => (

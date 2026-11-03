@@ -3,8 +3,7 @@
 > **ModalPrism 落位说明（产品 ability）**
 >
 > - 路径：`abilitys/data/rawprism`（跨应用共享 data 类 ability）
-> - 来源：自 `D:\Project\Leaf\external\rawprism` 复制（不含 `target/`）
-> - `cjpm.toml` 依赖已改为相对本仓：`SDK/ability-sdk-cj`；RawPrism 库指向仓库外同级 `D:\Project\RawPrism`（`../../../../RawPrism`）
+> - 依赖：`leaf_ability_sdk` 为仓内相对路径 `SDK/ability-sdk-cj`；`rawprism` 为 GitHub git 依赖（`branch = main`，`cjpm.lock` 锁定 commit `fce4bc2`，对应 0.1.2），任何环境克隆本仓即可构建，不再依赖仓外目录
 > - **Host**：`RuntimeKind` 已含 `Cangjie`；`cangjie@1` / `cj@1` 可解析，compose 与 Guest 装载路径可用。
 > - **装载前提**：需仓颉工具链（`cjpm`）或预构建产物。Host 约定产物为 `target/release/<包名>`（本包 `rawprism_guest[.exe]`）。`cjpm build` 实际把可执行文件落在 `target/release/bin/main.exe`，构建后需复制到位：
 >   `Copy-Item target\release\bin\main.exe target\release\rawprism_guest.exe`
@@ -13,13 +12,13 @@
 
 # rawprism（仓颉 Guest Ability）
 
-对接 [RawPrism](../../../RawPrism)（纯仓颉文本扫描分类库）的 Leaf Guest Ability。
+对接 [RawPrism](https://github.com/MistLoom/RawPrism)（纯仓颉文本扫描分类库）的 Leaf Guest Ability。
 输入文本，识别结构化内容、非结构化内容与实体，返回相对整段输入的偏移区间与类型，
 并支持惰性物化、统一 Object 视图、JSONPath 查询与并发扫描。
 
 - `framework_version`: `cangjie@1`（guest-protocol-1）
 - 入口：`src/serve.cj`，通过 `SDK/ability-sdk-cj` 的 `serveAbility` 注册方法
-- 运行时依赖：`rawprism`（path）、`leaf_ability_sdk`（path）
+- 运行时依赖：`rawprism`（GitHub git）、`leaf_ability_sdk`（仓内 path）
 
 ## 方法
 
@@ -55,7 +54,8 @@ JSONPath 查询、有限自定义检测器（起止标记形式）。
 
 **不支持**（RawPrism 未提供，本 Ability 不宣称）：二进制输入（图片 / 音视频 / 压缩包 /
 PDF / Office）、语义分析、网络获取、内容格式互转。
-`@Detector` 属性宏等深度定制请直接依赖 RawPrism 库使用。
+深度定制（直接实现 `Detector` / `Getter<T>`）请依赖 RawPrism 库使用；自 0.1.2 起
+`within` / `dependsOn` / `authoritative` 已有接口默认实现，只需声明 `typeId` 与 `detect`。
 
 ## 示例
 
@@ -90,10 +90,14 @@ JSONPath 查询：
 ## 构建与测试
 
 ```bash
-cd external/rawprism
+cd abilitys/data/rawprism
 cjpm build   # 构建 Guest 入口
 cjpm test    # 内部完整测试（测例不入公开树）
+# Host 约定产物路径，cjpm 实际落在 target/release/bin/main.exe，需复制改名：
+#   Copy-Item target\release\bin\main.exe target\release\rawprism_guest.exe
 ```
 
 内部测试矩阵对齐 RawPrism 各 `*_test.cj` 能力域（核心类型、格式解析、会话查询与物化、
-输入方式、资源上限、并发、JSONPath、自定义检测器与宏、覆盖 / 预扫描、线协议端到端）。
+输入方式、资源上限、并发、JSONPath、自定义检测器、覆盖 / 预扫描、线协议端到端）。
+RawPrism 0.1.2 移除 `@Detector` 属性宏与 `rawprism_macros` 包后，本包不再依赖宏，
+检测器样例改为显式实现接口并保留对默认实现路径的覆盖。

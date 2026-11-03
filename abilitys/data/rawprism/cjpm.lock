@@ -1,3 +1,7 @@
-version = 0
+version = 1
 
-[requires]
+[requires."rawprism"]
+version = "0.1.2"
+source = "git+https://github.com/MistLoom/RawPrism.git?branch=main#fce4bc2ffaf0b0add785774411414b47a9c7f6cb"
+output-type = "static"
+dependencies = []

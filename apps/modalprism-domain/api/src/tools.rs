@@ -138,23 +138,39 @@ async fn save(state: &AppState, project_id: &str, args: &Value) -> Result<Value,
     } else {
         format!("accessor/{accessor}")
     };
-    let pipeline = map
-        .get("pipeline")
-        .cloned()
-        .filter(Value::is_array)
-        .unwrap_or_else(|| json!([{ "run": ["adapter/smart-discover"] }]));
+    // 管道缺省用智能发现：这一份声明由 config::builtin_adapters 兜底，引用不会悬空。
+    // 传了但不是数组要直接拒：静默丢掉调用方的管道会让它以为按自己写的跑了。
+    let pipeline = match map.get("pipeline") {
+        None | Some(Value::Null) => json!([{ "run": ["adapter/smart-discover"] }]),
+        Some(value) if value.is_array() => value.clone(),
+        Some(_) => {
+            return Err(ApiError::validation(
+                "pipeline",
+                "type",
+                "管道必须是数组；留空则由内置智能适配器处理",
+            ));
+        }
+    };
     let mut doc = json!({
         "name": name,
         "access": { "accessor": accessor, "locator": { "url": url } },
         "pipeline": pipeline,
-        "schedule": map
-            .get("schedule")
-            .cloned()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({ "interval": "2h" })),
         "project": project_id,
         "shared": false,
     });
+    // 节律只由计划表达：信源自带 schedule 会被合成成一条落不了盘的计划，
+    // 计划页看不见它，采集却按它跑。调用方没写就不给缺省；传了但不是对象
+    // 要直接拒，理由与 pipeline 同一套：静默丢掉会让调用方以为按自己写的跑了。
+    if let Some(schedule) = map.get("schedule").filter(|value| !value.is_null()) {
+        if !schedule.is_object() {
+            return Err(ApiError::validation(
+                "schedule",
+                "type",
+                "节律请写成对象（如 {\"interval\": \"2h\"}），或留空交由采集计划表达",
+            ));
+        }
+        doc["schedule"] = schedule.clone();
+    }
     if let Some(source_type) = map.get("sourceType").and_then(Value::as_str) {
         doc["sourceType"] = json!(source_type);
     }

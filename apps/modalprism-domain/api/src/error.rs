@@ -245,13 +245,83 @@ impl From<assembly::Error> for ApiError {
 
 impl From<config::Error> for ApiError {
     fn from(error: config::Error) -> Self {
-        tracing::warn!(detail = %error, "配置校验错误");
         match error {
-            config::Error::Invalid(_) => {
-                ApiError::validation("request", "invalid", "声明未通过配置校验，请检查字段与引用")
+            config::Error::Invalid(diagnostics) => invalid_declaration(diagnostics),
+            other => {
+                tracing::warn!(detail = %other, "配置读写错误");
+                ApiError::internal(other.to_string())
             }
-            _ => ApiError::internal(error.to_string()),
         }
+    }
+}
+
+/// 一次响应里最多回几条诊断：再多会把列表刷成噪音。
+const MAX_DECLARATION_DIAGNOSTICS: usize = 8;
+
+/// 配置校验失败要回具体诊断。
+///
+/// 校验是全库的，出错的那份声明未必是刚写入的那份；只回一句「未通过配置校验」，
+/// 调用方无从知道是哪一份声明的哪个引用悬空，只能反复试。物理路径仍然不外泄：
+/// 定位统一换成声明 id 形态。
+fn invalid_declaration(diagnostics: config::Diagnostics) -> ApiError {
+    let items = diagnostics.0;
+    let shown: Vec<String> = items
+        .iter()
+        .take(MAX_DECLARATION_DIAGNOSTICS)
+        .map(|item| {
+            let message = cleanse(&item.message);
+            let where_ = cleanse(&declaration_ref(&item.file));
+            if where_.is_empty() {
+                message
+            } else {
+                format!("{where_}: {message}")
+            }
+        })
+        .collect();
+    let mut message = shown.first().cloned().unwrap_or_else(|| "声明未通过配置校验".into());
+    if items.len() > shown.len() {
+        message = format!("{message}（另有 {} 条）", items.len() - shown.len());
+    }
+    let mut error = ApiError::new(StatusCode::BAD_REQUEST, "validationFailed", message);
+    error.field_errors = items
+        .iter()
+        .take(MAX_DECLARATION_DIAGNOSTICS)
+        .map(|item| FieldError {
+            field: cleanse(&declaration_ref(&item.file)),
+            code: "invalidDeclaration".into(),
+            message: cleanse(&item.message),
+        })
+        .collect();
+    tracing::warn!(detail = %items.iter().map(|item| item.to_string()).collect::<Vec<_>>().join("; "), "配置校验错误");
+    error
+}
+
+/// 诊断位置换成声明标识：`sources/foo.yaml` 回 `source/foo`，已是声明 id 的原样返回。
+/// 认不出的形态（文件系统路径等）一律回 `declaration`，不让物理路径泄进字段名。
+fn declaration_ref(file: &str) -> String {
+    let file = file.trim().trim_start_matches('/');
+    // 没有来源文件的诊断（程序侧注入的声明、无 origin 的 schema 失败）也要有个能定位的字段名。
+    if file.is_empty() || file.contains('\\') {
+        return "declaration".to_string();
+    }
+    let Some((folder, name)) = file.split_once('/') else {
+        return file.to_string();
+    };
+    // 单数目录开头即声明 id 形态（source/x、adapter/x），原样返回。
+    if folder == "source" || folder == "adapter" {
+        return file.to_string();
+    }
+    // 复数目录才是文件形态：sources/foo.yaml → source/foo；其余不是声明
+    // （如 schema 目录的绝对路径），给不出可用定位，统一回 declaration。
+    let singular = folder.trim_end_matches('s');
+    if (singular != "source" && singular != "adapter") || name.is_empty() {
+        return "declaration".to_string();
+    }
+    match name.strip_suffix(".yaml").or_else(|| name.strip_suffix(".yml")) {
+        Some(stem) if !stem.is_empty() => format!("{singular}/{stem}"),
+        // 没有后缀但已是 `sources/demo` 这类形态的，按单数目录回写。
+        None if !name.contains('/') => format!("{singular}/{name}"),
+        _ => "declaration".to_string(),
     }
 }
 
@@ -305,6 +375,54 @@ mod tests {
         let error = ApiError::from(assembly::Error::new("磁盘写入失败"));
         assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.body()["error"]["code"], "internalError");
+    }
+
+    #[test]
+    fn config_diagnostics_reach_the_caller() {
+        let error = ApiError::from(config::Error::Invalid(config::Diagnostics(vec![
+            config::Diagnostic {
+                file: "sources/demo.yaml".into(),
+                line: 0,
+                message: "引用不存在: adapter/ghost".into(),
+            },
+        ])));
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        let body = error.body();
+        assert_eq!(body["error"]["code"], "validationFailed");
+        assert_eq!(body["error"]["fieldErrors"][0]["field"], "source/demo");
+        assert_eq!(
+            body["error"]["fieldErrors"][0]["code"],
+            "invalidDeclaration"
+        );
+        // 悬空的引用名必须回显：这是调用方唯一能照着改的信息。
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("adapter/ghost")
+        );
+    }
+
+    #[test]
+    fn config_read_error_stays_internal() {
+        let error = ApiError::from(config::Error::Read {
+            path: "D:\\data\\config\\system.yaml".into(),
+            source: std::io::Error::other("denied"),
+        });
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!error.body()["error"]["message"].as_str().unwrap().contains("data"));
+    }
+
+    #[test]
+    fn declaration_ref_maps_files_to_module_ids() {
+        assert_eq!(declaration_ref("sources/demo.yaml"), "source/demo");
+        assert_eq!(declaration_ref("adapters/html-list.yml"), "adapter/html-list");
+        assert_eq!(declaration_ref("source/demo"), "source/demo");
+        // 没有来源文件的诊断也给个可用的字段名，不让 fieldErrors 出现空字段。
+        assert_eq!(declaration_ref(""), "declaration");
+        // 文件系统路径不能泄进字段名：schema 目录读取失败记的是绝对路径。
+        assert_eq!(declaration_ref("D:\\data\\config\\schemas"), "declaration");
+        assert_eq!(declaration_ref("/data/config/schemas"), "declaration");
     }
 }
 

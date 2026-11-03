@@ -1,0 +1,18 @@
+id: adapter/smart-content
+kind: adapter
+name: 智能拆分
+description: 把一份文档按识别区域拆成多份内容并留下区域索引；同类型多份各自独立。
+implementation: builtin:smart-content
+role: content
+consumes: []
+produces:
+  - {kind: text}
+  - {kind: regions, variant: prism}
+limits:
+  timeout: 30s
+  concurrency: 1
+  retry:
+    attempts: 0
+    backoff: exponential
+    base: 1s
+    max: 30s

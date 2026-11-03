@@ -617,13 +617,7 @@ async fn list_items(
         .source_id
         .as_deref()
         .filter(|value| !value.is_empty())
-        .map(|value| {
-            if value.starts_with("source/") {
-                value.to_string()
-            } else {
-                format!("source/{value}")
-            }
-        });
+        .map(util::source_ref);
     let spec = content_query(
         search,
         source.as_deref(),

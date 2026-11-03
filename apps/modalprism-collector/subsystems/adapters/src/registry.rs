@@ -113,10 +113,56 @@ impl Registry {
     pub fn detector(&self, id: &str) -> Option<Arc<dyn Detector>> {
         self.detectors.get(id).cloned()
     }
+
+    /// 已登记的适配器 id（搜索与内容合一）。配置侧的声明清单要与这一份对齐。
+    pub fn adapter_ids(&self) -> Vec<String> {
+        self.search.keys().chain(self.content.keys()).cloned().collect()
+    }
 }
 
 impl Default for Registry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Registry;
+
+    /// 代码登记的内置适配器与配置声明必须一一对应。
+    ///
+    /// 信源管道按 id 引用适配器，配置校验只认模块表里的声明：新增内置适配器而不给声明，
+    /// 它就只能靠默认管道兜着，用户显式引用时会得到「引用不存在」。
+    #[test]
+    fn builtin_adapters_are_declared_in_config() {
+        let mut registered = Registry::builtins().adapter_ids();
+        registered.sort();
+        let mut declared: Vec<String> = config::builtin_adapters()
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect();
+        declared.sort();
+        assert_eq!(
+            registered, declared,
+            "内置适配器的代码登记与 config::builtin_adapters 清单不一致"
+        );
+    }
+
+    /// 每份程序侧声明都要能解析且 id 自洽，否则加载时会被判成坏文档。
+    #[test]
+    fn builtin_adapter_declarations_are_self_consistent() {
+        for item in config::builtin_adapters() {
+            let doc = config::parse_yaml("builtins.yaml", item.source)
+                .unwrap_or_else(|error| panic!("{} 声明无法解析: {error}", item.id));
+            assert_eq!(doc["id"], item.id, "{} 声明的 id 与清单不符", item.id);
+            assert_eq!(doc["kind"], "adapter", "{} 声明的 kind 不对", item.id);
+            assert_eq!(
+                doc["implementation"],
+                format!("builtin:{}", item.id.trim_start_matches("adapter/")),
+                "{} 的实现名要与登记名同源",
+                item.id
+            );
+        }
     }
 }

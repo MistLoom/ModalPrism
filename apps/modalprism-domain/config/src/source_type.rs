@@ -83,6 +83,7 @@ struct KindSpec {
     /// 这里声明的是表单可落盘的子集，前端只渲染不判断，避免第二套矩阵。
     form_accessors: Option<&'static [&'static str]>,
     /// 允许的适配器 stem（`adapter/feed-items` → `feed-items`）；`None` 表示任意。
+    /// 通用适配器由 `UNIVERSAL_ADAPTERS` 统一并入，各类型清单只写专用那几个。
     allowed_adapters: Option<&'static [&'static str]>,
     /// 是否禁止声明 `paid`（feed/web/push 类不该计费）。
     forbid_paid: bool,
@@ -161,6 +162,23 @@ fn spec_of(kind: SourceType) -> &'static KindSpec {
         .iter()
         .find(|item| item.kind == kind)
         .expect("注册表覆盖全部闭集值")
+}
+
+/// 通用适配器：不挑文档形态（声明里 `consumes: []`），也是采集运行期的缺省管道
+/// （`assembly::execute::default_pipeline` 在管道为空时按任务缘由选这两个）。
+/// 任何类型都可以只靠它们完成采集，因此不重复写进各类型的专用清单。
+const UNIVERSAL_ADAPTERS: [&str; 2] = ["smart-discover", "smart-content"];
+
+/// 某类型可用的适配器全集：专用清单 + 通用适配器；`None` 仍表示任意。
+/// 校验与契约投影共用它，避免前端与后端各算一套。
+fn allowed_adapters_of(spec: &KindSpec) -> Option<Vec<&'static str>> {
+    let mut merged = spec.allowed_adapters?.to_vec();
+    for adapter in UNIVERSAL_ADAPTERS {
+        if !merged.contains(&adapter) {
+            merged.push(adapter);
+        }
+    }
+    Some(merged)
 }
 
 /// 连续空命中升级为告警的周期数（v3 R18）；`None` 表示该类型不做停滞升级。
@@ -349,7 +367,7 @@ pub fn validate(module: &Value) -> Vec<String> {
             allowed.join(", ")
         ));
     }
-    if let Some(allowed) = spec.allowed_adapters {
+    if let Some(allowed) = allowed_adapters_of(spec) {
         for adapter in pipeline_adapter_stems(module) {
             if !allowed.contains(&adapter.as_str()) {
                 issues.push(format!(
@@ -377,7 +395,7 @@ pub fn registry_json() -> Value {
                 "locatorShape": spec.locator_shape,
                 "allowedAccessors": spec.allowed_accessors.map(|list| list.to_vec()),
                 "formAccessors": spec.form_accessors.map(|list| list.to_vec()),
-                "allowedAdapters": spec.allowed_adapters.map(|list| list.to_vec()),
+                "allowedAdapters": allowed_adapters_of(spec).map(|list| list.to_vec()),
                 "forbidPaid": spec.forbid_paid,
                 "stagnationCycles": spec.stagnation_cycles,
                 "planDefaults": plan_defaults(spec.kind),
@@ -896,6 +914,57 @@ mod tests {
         );
         doc["paid"] = json!({"budget": {"requests": 1, "window": "1d"}});
         assert!(validate(&doc).iter().any(|issue| issue.contains("paid")));
+    }
+
+    /// 内置缺省管道必须能通过每个具体类型的矩阵：`/tools/save` 不写 `sourceType`
+    /// 时落的就是 `accessor/http` + `adapter/smart-discover`，拒了等于新建信源必失败。
+    #[test]
+    fn universal_adapters_pass_every_concrete_type() {
+        let smart = json!([{"run": ["adapter/smart-discover"]}]);
+        let readable = json!([{"run": ["adapter/smart-content"]}]);
+        for doc in [
+            // 六个类型各取一个能派生命中该类型的形状。
+            source("accessor/rss", json!({"url": "u"}), smart.clone()),
+            source("accessor/search", json!({"query": "q"}), smart.clone()),
+            source("accessor/http", json!({"url": "u"}), smart.clone()),
+            source("accessor/api", json!({"endpoint": "e"}), smart.clone()),
+            source("accessor/push", json!({"channel": "c"}), smart.clone()),
+            source("accessor/browser", json!({"url": "u"}), readable.clone()),
+        ] {
+            assert!(
+                validate(&doc).is_empty(),
+                "通用适配器应被 {} 类放行: {:?}",
+                effective(&doc).as_str(),
+                validate(&doc)
+            );
+        }
+    }
+
+    /// 契约投影必须带上通用适配器：否则表单只会列出专用那几个，
+    /// 后端允许、前端看不见，等于把缺省管道藏起来。
+    #[test]
+    fn registry_projects_universal_adapters() {
+        for spec in REGISTRY.iter().filter(|item| item.allowed_adapters.is_some()) {
+            let allowed = allowed_adapters_of(spec).expect("专用清单存在则全集也存在");
+            for adapter in UNIVERSAL_ADAPTERS {
+                assert!(
+                    allowed.contains(&adapter),
+                    "{} 的适配器全集缺 {adapter}",
+                    spec.kind.as_str()
+                );
+            }
+        }
+        let items = registry_json()["items"].as_array().cloned().unwrap_or_default();
+        let web = items
+            .iter()
+            .find(|item| item["id"] == json!("web"))
+            .expect("注册表应有 web 项");
+        let projected = web["allowedAdapters"].as_array().cloned().unwrap_or_default();
+        let projected: Vec<&str> = projected.iter().filter_map(Value::as_str).collect();
+        assert!(
+            projected.contains(&"smart-discover"),
+            "契约投影未包含缺省适配器: {projected:?}"
+        );
     }
 
     #[test]

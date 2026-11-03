@@ -280,6 +280,17 @@ pub fn duration_ms(text: &str) -> Option<i64> {
     Some(duration.as_millis() as i64)
 }
 
+/// 信源标识的对外形态：裸 slug。配置模块 id、任务表归属都带 `source/` 前缀，
+/// 而清单类接口一律回裸 slug；调用方把任一种形态传回来都能认。
+pub fn source_slug(id: &str) -> String {
+    id.trim().trim_start_matches("source/").to_string()
+}
+
+/// 信源标识的存储形态：`source/<slug>`。用于查模块表与建任务，重复前缀不叠加。
+pub fn source_ref(id: &str) -> String {
+    format!("source/{}", source_slug(id))
+}
+
 /// 由名称生成稳定 slug；非 ASCII 名称回退到时间戳。
 pub fn slug(name: &str) -> String {
     let mut out = String::new();

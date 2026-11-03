@@ -219,8 +219,8 @@ pub async fn boot_opts(
         } else {
             "scan"
         },
-        services.proxy_setting().label(),
         if parse_ready { "ready" } else { "absent" },
+        services.proxy_setting().label(),
     );
     tasks.extend(spawn_loops(
         Arc::clone(&host),

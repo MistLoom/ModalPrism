@@ -105,7 +105,8 @@ pub const TOOLS: &[ToolSpec] = &[
             ToolParam { name: "url", kind: "string", required: true, summary: "信源地址" },
             ToolParam { name: "accessor", kind: "string", required: false, summary: "访问器 id" },
             ToolParam { name: "pipeline", kind: "array", required: false, summary: "适配器流水线" },
-            ToolParam { name: "schedule", kind: "object", required: false, summary: "调度间隔" },
+            ToolParam { name: "schedule", kind: "object", required: false, summary: "调度间隔；缺省不写，节律交由采集计划表达" },
+            ToolParam { name: "sourceType", kind: "string", required: false, summary: "信源类型，缺省按访问器与定位形状推导" },
         ],
     },
     ToolSpec {

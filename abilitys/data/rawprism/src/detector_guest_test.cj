@@ -1,20 +1,30 @@
-// 自定义检测器与获取器（对齐 RawPrism detector 注册能力 + macro_test.cj 能力域）：
+// 自定义检测器与获取器（对齐 RawPrism detector 注册能力）：
 // Guest 侧有限自定义检测器（起止标记），直接调用覆盖 Detector / Getter<T> /
-// GetterRegistry / @Detector 宏 / dependsOn 副产物登记。
+// GetterRegistry / 接口默认实现（within 之外属性缺省）/ dependsOn 副产物登记。
 package rawprism_guest
 
 import rawprism.*
 import rawprism.core.*
 import rawprism.object.*
-import rawprism_macros.*
 import leaf_ability_sdk.*
 import std.collection.*
 import std.unittest.*
 import std.unittest.testmacro.*
 
 // 直接调用的自定义 Getter：识别工单号 TKT-123。
-@Detector[typeId = "entity.ticket", within = ["text.*"]]
+// RawPrism 0.1.2 起 Detector 的 within/dependsOn/authoritative 有默认实现，
+// 这里只覆写 within，其余走接口缺省——同时覆盖默认实现路径。
 class GuestTicketId <: Getter<String> {
+    public prop typeId: TypeId {
+        get() {
+            TypeId("entity.ticket")
+        }
+    }
+    public prop within: Array<String> {
+        get() {
+            ["text.*"]
+        }
+    }
     public func detect(scope: Span, ctx: DetectContext): Unit {
         let data = ctx.session.inputBytes()
         let key = "TKT-".toArray()
@@ -104,19 +114,15 @@ func customGetterEndToEndDirect(): Unit {
 }
 
 // 依赖排序用检测器（9.5）。
+// GuestDepA 只覆写 dependsOn，within/authoritative 走接口默认实现。
 class GuestDepA <: Detector {
     public prop typeId: TypeId { get() { TypeId("dep.a") } }
-    public prop within: Array<String> { get() { [] } }
     public prop dependsOn: Array<TypeId> { get() { [TypeId("dep.b")] } }
-    public prop authoritative: Array<TypeId> { get() { [] } }
     public func detect(_scope: Span, _ctx: DetectContext): Unit {}
 }
 
 class GuestDepB <: Detector {
     public prop typeId: TypeId { get() { TypeId("dep.b") } }
-    public prop within: Array<String> { get() { [] } }
-    public prop dependsOn: Array<TypeId> { get() { [] } }
-    public prop authoritative: Array<TypeId> { get() { [] } }
     public func detect(_scope: Span, _ctx: DetectContext): Unit {}
 }
 

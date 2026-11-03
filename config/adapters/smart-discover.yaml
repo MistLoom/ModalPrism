@@ -1,0 +1,16 @@
+id: adapter/smart-discover
+kind: adapter
+name: 智能发现
+description: 不写选择器也能用：按内容识别结果推断条目；认不出时保留一条原文，采集不空转。
+implementation: builtin:smart-discover
+role: search
+consumes: []
+produces: [discovery]
+limits:
+  timeout: 30s
+  concurrency: 1
+  retry:
+    attempts: 0
+    backoff: exponential
+    base: 1s
+    max: 30s

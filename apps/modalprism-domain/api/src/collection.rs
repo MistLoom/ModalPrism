@@ -70,11 +70,7 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|value| {
-                value
-                    .as_str()
-                    .map(|id| id.trim_start_matches("source/").to_string())
-            })
+            .filter_map(|value| value.as_str().map(util::source_slug))
             .collect();
         let enabled = plan["enabled"].as_bool().unwrap_or(true);
         // 计划归属：声明优先，其次按首个目标信源的归属派生，最后回落默认项目。
@@ -170,10 +166,10 @@ async fn ensure_targets_owned(
 ) -> Result<(), ApiError> {
     let rows = crate::catalog::source_rows(state).await?;
     for target in targets {
-        let id = target.trim_start_matches("source/");
+        let id = util::source_slug(target);
         let row = rows
             .iter()
-            .find(|row| row["id"].as_str() == Some(id))
+            .find(|row| row["id"].as_str() == Some(id.as_str()))
             .ok_or_else(|| ApiError::validation("targets", "notFound", format!("信源 {id} 不存在")))?;
         if !crate::catalog::source_editable(row, project_id) {
             return Err(ApiError::validation(
@@ -257,7 +253,7 @@ fn derive_plan_slug(body: &serde_json::Map<String, Value>, targets: &[String]) -
     }
     let first = targets
         .first()
-        .map(|id| id.trim_start_matches("source/").to_string())
+        .map(|id| util::source_slug(id))
         .unwrap_or_else(|| "plan".to_string());
     format!(
         "{first}-{}",
@@ -277,13 +273,7 @@ fn extract_targets(map: &serde_json::Map<String, Value>) -> Vec<String> {
         .unwrap_or_default()
         .into_iter()
         .filter_map(|value| value.as_str().map(str::to_string))
-        .map(|id| {
-            if id.starts_with("source/") {
-                id
-            } else {
-                format!("source/{id}")
-            }
-        })
+        .map(|id| util::source_ref(&id))
         .collect()
 }
 
@@ -460,10 +450,13 @@ async fn create_job(
     let mut dispatched = Vec::new();
     let mut failed = Vec::new();
     for target in &targets {
+        // 回包统一裸 slug：`/collection/runs`、信源清单对外都是裸 slug，别在这里换形态。
+        let source_id = util::source_slug(target);
         match state.services.task_create(target, queue, true, None).await {
-            Ok(row) => dispatched
-                .push(json!({"sourceId": target, "taskId": row.task_id, "status": row.status})),
-            Err(error) => failed.push(json!({"sourceId": target, "error": error.to_string()})),
+            Ok(row) => dispatched.push(
+                json!({"sourceId": source_id, "taskId": row.task_id, "status": row.status}),
+            ),
+            Err(error) => failed.push(json!({"sourceId": source_id, "error": error.to_string()})),
         }
     }
     crate::observe::append_audit(
@@ -533,9 +526,22 @@ async fn update_plan(
     let plan = plan_row_owned(&state, &plan_id, project.id()).await?;
     util::if_match(&headers, plan["etag"].as_str().unwrap_or(""))?;
     // 改目标也要走归属校验：不能把他项目信源拉进自己的计划。
-    if map.contains_key("targets") {
-        ensure_targets_owned(&state, project.id(), &extract_targets(map)).await?;
-    }
+    // 这里同时把目标归一成模块形态：清单对外回裸 slug，原样落盘会匹配不到信源、计划静默不采。
+    let patched_targets = match map.get("targets") {
+        Some(_) => {
+            let targets = extract_targets(map);
+            if targets.is_empty() {
+                return Err(ApiError::validation(
+                    "targets",
+                    "required",
+                    "计划至少要有一个信源",
+                ));
+            }
+            ensure_targets_owned(&state, project.id(), &targets).await?;
+            Some(targets)
+        }
+        None => None,
+    };
     let entry = config::entries(&state.config_dir, "plan")?
         .into_iter()
         .find(|entry| entry.slug == plan_id)
@@ -616,11 +622,13 @@ async fn update_plan(
         "priority",
         "queue",
         "enabled",
-        "targets",
     ] {
         if let Some(value) = map.get(key) {
             doc.insert(key.into(), value.clone());
         }
+    }
+    if let Some(targets) = patched_targets {
+        doc.insert("targets".into(), json!(targets));
     }
     config::update(
         &state.config_dir,
@@ -745,13 +753,7 @@ async fn list_runs(
             .source_id
             .as_deref()
             .filter(|value| !value.is_empty())
-            .map(|value| {
-                if value.starts_with("source/") {
-                    value.to_string()
-                } else {
-                    format!("source/{value}")
-                }
-            }),
+            .map(util::source_ref),
         ..TaskFilter::default()
     };
     let result = state
@@ -902,7 +904,11 @@ async fn create_run(
 ) -> Result<Response, ApiError> {
     let map = util::object(&body)?;
     util::unknown(map, &["sourceId", "mode", "locator", "reason"])?;
-    let source_id = util::non_empty(map, "sourceId")?;
+    // 信源标识两种形态都接受：其它接口回的是带前缀的模块 id，回传时不能再叠一层前缀。
+    let source_id = util::source_slug(&util::non_empty(map, "sourceId")?);
+    if source_id.is_empty() {
+        return Err(ApiError::validation("sourceId", "required", "不能为空"));
+    }
     let mode = util::text(map, "mode")?;
     if !matches!(mode.as_str(), "normal" | "dryRun" | "singleLocator") {
         return Err(ApiError::validation(
@@ -955,7 +961,7 @@ pub async fn execute_run(
     let row = state
         .services
         .task_create(
-            &format!("source/{source_id}"),
+            &util::source_ref(source_id),
             Some(QueueName::Free),
             true,
             locator,
@@ -979,7 +985,7 @@ pub async fn execute_run(
     Ok(json!({
         "partial": false,
         "runId": action["runId"],
-        "sourceId": source_id,
+        "sourceId": util::source_slug(source_id),
         "mode": mode,
         "taskId": task_id,
         "status": row.status,

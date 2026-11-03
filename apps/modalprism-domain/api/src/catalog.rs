@@ -670,6 +670,8 @@ fn group_id_of(map: &Map<String, Value>) -> Result<Option<String>, ApiError> {
 }
 
 async fn source_by_slug(state: &AppState, slug: &str) -> Result<Value, ApiError> {
+    // 行 id 是裸 slug，而声明与工具接口回的是 `source/<slug>`：两种形态都当同一信源看。
+    let slug = util::source_slug(slug);
     source_rows(state)
         .await?
         .into_iter()
@@ -871,7 +873,7 @@ pub async fn execute_source_probe(
     let task = state
         .services
         .task_create(
-            &format!("source/{source_id}"),
+            &util::source_ref(source_id),
             Some(strata_model::QueueName::Free),
             false,
             locator,
@@ -940,22 +942,47 @@ async fn list_adapters(
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let entries = config::entries(&state.config_dir, "adapter")?;
-    let items: Vec<Value> = entries
-        .into_iter()
-        .map(|entry| {
-            let implementation = entry.doc.get("implementation").and_then(Value::as_str);
-            json!({
-                "id": entry.slug,
-                "name": business_adapter_name(implementation).unwrap_or_else(|| entry.doc.get("name").and_then(Value::as_str).unwrap_or(&entry.slug).to_string()),
-                "description": entry.doc.get("description").cloned().unwrap_or(Value::Null),
-                "enabled": entry.doc.get("enabled").and_then(Value::as_bool).unwrap_or(true),
-                "role": entry.doc.get("role").cloned().unwrap_or(Value::Null),
-                "produces": entry.doc.get("produces").cloned().unwrap_or(Value::Null),
-                "implementation": entry.doc.get("implementation").cloned().unwrap_or(Value::Null),
-                "builtin": implementation.is_some_and(|value| value.starts_with("builtin:")),
-            })
+    let describe = |slug: String, doc: &Value| -> Value {
+        let implementation = doc.get("implementation").and_then(Value::as_str);
+        let name = business_adapter_name(implementation).unwrap_or_else(|| {
+            doc.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(slug.as_str())
+                .to_string()
+        });
+        json!({
+            "id": slug,
+            "name": name,
+            "description": doc.get("description").cloned().unwrap_or(Value::Null),
+            "enabled": doc.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+            "role": doc.get("role").cloned().unwrap_or(Value::Null),
+            "produces": doc.get("produces").cloned().unwrap_or(Value::Null),
+            "implementation": doc.get("implementation").cloned().unwrap_or(Value::Null),
+            "builtin": implementation.is_some_and(|value| value.starts_with("builtin:")),
         })
+    };
+    let mut items: Vec<Value> = entries
+        .iter()
+        .map(|entry| describe(entry.slug.clone(), &entry.doc))
         .collect();
+    // 内置适配器在旧部署里可能没有落盘声明，但运行期始终注册：目录按程序侧声明补齐，
+    // 免得出现“能跑却选不到”；磁盘上已有声明就以那份为准，不覆盖用户改过的内容。
+    for adapter in config::builtin_adapters() {
+        let slug = adapter.id.trim_start_matches("adapter/").to_string();
+        if items.iter().any(|item| item["id"] == slug) {
+            continue;
+        }
+        let Ok(doc) = config::parse_yaml(&format!("adapters/{slug}.yaml"), adapter.source) else {
+            continue;
+        };
+        items.push(describe(slug, &doc));
+    }
+    items.sort_by(|left, right| {
+        left["id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["id"].as_str().unwrap_or_default())
+    });
     list_static(&state, items, query, "adapters")
 }
 

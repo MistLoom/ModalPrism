@@ -640,6 +640,7 @@ fn lower(
         }
         modules.insert(id.clone(), value);
     }
+    inject_builtin_adapters(&mut modules, diags);
     attach_schema(
         &schema::validate_system(&system_value),
         "system",
@@ -692,6 +693,29 @@ fn lower(
         system: system_value,
         modules,
         origins,
+    }
+}
+
+/// 内置适配器声明兜底：盘上缺这一份时，用程序侧的补进模块表。
+///
+/// 适配器实现在代码里登记，信源管道按 id 引用它。声明没落盘时引用会被判成悬空，等于
+/// 代码支持的适配器在配置里写不出来；老部署没有这些声明文件，也不能因此拒收整份配置。
+/// 盘上有同名声明以盘上为准，用户改写与停用照旧生效。
+fn inject_builtin_adapters(modules: &mut BTreeMap<String, Value>, diags: &mut Vec<Diagnostic>) {
+    for adapter in crate::builtins::builtin_adapters() {
+        if modules.contains_key(adapter.id) {
+            continue;
+        }
+        let file = format!(
+            "adapters/{}.yaml",
+            adapter.id.trim_start_matches("adapter/")
+        );
+        match yaml::parse_value(&file, adapter.source) {
+            Ok(value) => {
+                modules.insert(adapter.id.to_string(), value);
+            }
+            Err(message) => diags.push(diag(&file, 0, message)),
+        }
     }
 }
 

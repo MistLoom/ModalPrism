@@ -10,10 +10,5 @@
   version = "0.1.0"
 
 [dependencies]
-  rawprism = { path = "../../../../RawPrism", output-type = "static" }
+  rawprism = { git = "https://github.com/MistLoom/RawPrism.git", branch = "main", output-type = "static" }
   leaf_ability_sdk = { path = "../../../SDK/ability-sdk-cj", output-type = "static" }
-  # 仅供内部测试使用 @Detector 属性宏；公开入口不依赖宏。
-  rawprism_macros = { path = "../../../../RawPrism/macros", output-type = "static" }
-
-[target.x86_64-w64-mingw32.bin-dependencies]
-  path-option = [ "${CANGJIE_STDX_PATH}/windows_x86_64_llvm/static/stdx" ]

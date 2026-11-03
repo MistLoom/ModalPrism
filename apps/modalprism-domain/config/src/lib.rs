@@ -7,6 +7,7 @@
 #![recursion_limit = "512"]
 
 mod author;
+mod builtins;
 mod check;
 mod diff;
 mod duration;
@@ -32,6 +33,7 @@ pub use author::{
     Draft, Entry, Saved, check_slug, create, entries, list, proxy, remove, templates, to_yaml,
     toggle, update,
 };
+pub use builtins::{BuiltinAdapter, builtin_adapters};
 pub use diff::{Change, diff};
 pub use duration::parse as duration;
 pub use error::{Diagnostic, Diagnostics, Error};

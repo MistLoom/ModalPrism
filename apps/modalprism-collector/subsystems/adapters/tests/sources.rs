@@ -207,8 +207,12 @@ async fn every_declared_source_maps_its_fixture() {
             _ => assert_eq!(found, [name]),
         }
     }
-    // 声明数随 config/sources 变动；这里守住「每一份声明都能跑出条目」。
-    assert_eq!(seen, 24);
+    // 声明数随信源清单变动：拿程序侧的内置信源清单对齐，添信源时不会漏改这里。
+    assert_eq!(
+        seen,
+        config::source_type::BUILTIN_SOURCES.len(),
+        "跑出条目的信源数应与内置信源清单一致"
+    );
 }
 
 #[tokio::test]

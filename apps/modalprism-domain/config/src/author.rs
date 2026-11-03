@@ -1047,6 +1047,56 @@ mod tests {
         .expect("创建绑定信源")
     }
 
+    /// 内置适配器即使盘上没有声明文件也要能被信源引用：实现在代码里登记，声明由程序侧
+    /// 兜底补进模块表。否则「代码支持的适配器」在配置里写不出来，默认管道与显式引用
+    /// 两套语义会对不上。
+    #[test]
+    fn builtin_adapter_reference_without_a_file_is_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_config(dir.path());
+        assert!(
+            !dir.path().join("adapters/smart-discover.yaml").exists(),
+            "种子配置只该写 json-list"
+        );
+        let saved = create(
+            dir.path(),
+            &LoadOptions::default(),
+            &Draft {
+                kind: "source".into(),
+                slug: "smart".into(),
+                doc: json!({
+                    "name": "smart",
+                    "sourceType": "custom",
+                    "access": {"accessor": "accessor/rss", "locator": {"url": "https://example.com/feed"}},
+                    "pipeline": [{"run": ["adapter/smart-discover"]}],
+                }),
+            },
+        )
+        .expect("引用内置适配器的信源应能落盘");
+        assert_eq!(saved.id, "source/smart");
+        let snapshot = crate::validate(dir.path(), &LoadOptions::default()).expect("整库校验");
+        let injected = &snapshot.modules["adapter/smart-discover"];
+        assert_eq!(injected["role"], json!("search"));
+    }
+
+    /// 盘上有声明时以盘上为准：用户改写或停用内置适配器不能被程序侧文本盖掉。
+    #[test]
+    fn disk_declaration_of_builtin_adapter_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_config(dir.path());
+        std::fs::write(
+            dir.path().join("adapters/smart-discover.yaml"),
+            "id: adapter/smart-discover\nkind: adapter\nname: 自定义智能发现\nenabled: false\nimplementation: builtin:smart-discover\nrole: search\nconsumes: []\nproduces: [discovery]\nlimits:\n  timeout: 30s\n  concurrency: 1\n  retry:\n    attempts: 0\n    backoff: exponential\n    base: 1s\n    max: 30s\n",
+        )
+        .unwrap();
+        let snapshot = crate::validate(dir.path(), &LoadOptions::default()).expect("整库校验");
+        assert_eq!(snapshot.modules["adapter/smart-discover"]["name"], json!("自定义智能发现"));
+        assert_eq!(
+            snapshot.modules["adapter/smart-discover"]["enabled"],
+            json!(false)
+        );
+    }
+
     /// R12/S2：写盘入口统一补齐 `sourceType`，HTTP 与 MCP 不再各写一遍。
     #[test]
     fn author_stamps_effective_source_type() {
