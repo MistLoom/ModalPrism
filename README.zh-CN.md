@@ -106,6 +106,30 @@ Firecrawl、Crawl4AI、RSSHub 等解决的是“抽一下”或“发个订阅�
 ### 对外请求集中治理
 所有对外请求——包括无头浏览器发起的子请求——都经由同一道网关发出：按域限速、自适应节流、主机熔断、会话与代理绑定、SSRF 防护、RFC 9309 `robots.txt` 处理。付费调用另有一层治理：逻辑请求键、预算窗口、幂等回执。
 
+### 动态页由 Moli 渲染
+ModalPrism 采用 [Moli](https://github.com/lexmount/moli)（Lexmount 开源无头浏览器）渲染由 JavaScript 生成的页面。`browser` 访问器调用 Moli 命令行（`moli fetch`），再将渲染后的 HTML 交给配置的适配器解析。
+
+请安装官方 `moli` 二进制，并将其加入 `PATH`，或通过环境变量 `MODALPRISM_MOLI` 指定路径。最小信源声明：
+
+```yaml
+# config/sources/dynamic-page.yaml
+name: 动态页信源
+access:
+  accessor: accessor/browser
+  locator:
+    url: "https://example.com/"
+pipeline:
+  - run: [adapter/html-list]
+    spec:
+      adapter/html-list:
+        mode: html
+        item: article
+        link: a
+        title: a
+```
+
+列表页可以继续使用静态访问器，仅由 Moli 渲染详情页：在列表适配器的 `detail` 声明中设置 `followAccessor: accessor/browser` 即可。内置的小米 MiMo 信源（`source/mimo-blog`）即按此方式工作：列表由 `bundle-list` 从首页脚本抽取，各 `/blog/` 详情页由 Moli 渲染。
+
 ### 声明式配置，原子热加载
 信源、访问器、适配器与策略预设全部是校验严格的 YAML 文件——未知字段校验报错，配置不存数据库。热加载按版本生成快照（一次配置变更对应一份不可变版本，接口字段为 `generation`）并原子切换，在途任务保持派发时的那一份。
 

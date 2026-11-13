@@ -834,6 +834,7 @@ async fn moli_command_passes_the_proxy_to_a_stand_in() {
         trace: true,
         matched_body: false,
         block_private_networks: true,
+        timeout_ms: 60_000,
     });
     assert!(
         args.windows(2)
@@ -848,6 +849,10 @@ async fn moli_command_passes_the_proxy_to_a_stand_in() {
     assert!(
         args.windows(2)
             .any(|pair| pair[0] == "--wait-selector" && pair[1] == "time.hero-date")
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--timeout-ms" && pair[1] == "60000")
     );
 
     let egress = Arc::new(ScriptEgress {
@@ -1202,6 +1207,8 @@ fn moli_measured_ssr_blog_page_includes_hero_date() {
             "networkidle",
             "--wait-selector",
             "time.hero-date",
+            "--timeout-ms",
+            "60000",
         ])
         .output()
         .expect("moli fetch");

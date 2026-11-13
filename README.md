@@ -106,6 +106,30 @@ A typed query DSL fuses metadata filtering, full-text, and vector search over co
 ### Centralized egress governance
 Every outbound request — including a headless browser's sub-requests — goes through one gate: per-domain rate limiting, adaptive throttle, host circuit breaking, session/proxy binding, SSRF protection, and RFC 9309 `robots.txt` handling. Paid calls have a separate governance layer: logical request keys, budget windows, idempotent receipts.
 
+### Dynamic pages with Moli
+ModalPrism uses [Moli](https://github.com/lexmount/moli), Lexmount's open-source headless browser, to render JavaScript-driven pages. The `browser` accessor invokes the Moli CLI (`moli fetch`) and passes the rendered HTML to the configured adapters.
+
+Install the official `moli` binary and place it on `PATH`, or set `MODALPRISM_MOLI` to the binary path. A minimal source:
+
+```yaml
+# config/sources/dynamic-page.yaml
+name: Dynamic page
+access:
+  accessor: accessor/browser
+  locator:
+    url: "https://example.com/"
+pipeline:
+  - run: [adapter/html-list]
+    spec:
+      adapter/html-list:
+        mode: html
+        item: article
+        link: a
+        title: a
+```
+
+List pages can remain on a static accessor while detail pages are rendered with Moli. Set `followAccessor: accessor/browser` in a list adapter's `detail` spec. The built-in Xiaomi MiMo source (`source/mimo-blog`) extracts article links from the homepage with `bundle-list` and renders each `/blog/` page with Moli.
+
 ### Declarative configuration with atomic hot-reload
 Sources, accessors, adapters, and policy presets are validated YAML — unknown fields fail validation, config never touches a database. Hot reload builds an immutable *version* (one snapshot per config change, exposed as `generation`) and switches atomically; in-flight tasks keep the version they were dispatched with.
 

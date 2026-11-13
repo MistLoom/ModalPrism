@@ -138,6 +138,30 @@ pub fn templates() -> Value {
             }),
         ),
         template(
+            "source",
+            "source-browser",
+            "动态页面（Moli 渲染）",
+            "由 Moli（Lexmount 开源无头浏览器）通过命令行渲染页面后，再解析 HTML。请安装官方 moli 并加入 PATH，或设置 MODALPRISM_MOLI。",
+            json!({
+                "name": "新的动态页信源",
+                "access": {
+                    "accessor": "accessor/browser",
+                    "locator": {"url": "https://example.com/"}
+                },
+                "pipeline": [{
+                    "run": ["adapter/html-list"],
+                    "spec": {"adapter/html-list": {
+                        "mode": "html",
+                        "item": "article",
+                        "link": "a",
+                        "title": "a"
+                    }}
+                }],
+                "schedule": {"interval": "6h"},
+                "admission": {}
+            }),
+        ),
+        template(
             "accessor",
             "accessor-http",
             "HTTP 访问器",

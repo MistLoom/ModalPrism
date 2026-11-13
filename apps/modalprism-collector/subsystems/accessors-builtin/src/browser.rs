@@ -31,6 +31,7 @@ pub struct EngineRequest {
     pub trace: bool,
     pub matched_body: bool,
     pub block_private_networks: bool,
+    pub timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -216,6 +217,8 @@ pub fn moli_args(request: &EngineRequest) -> Vec<String> {
         "--http-proxy".into(),
         request.proxy.clone(),
         "--block-private-networks".into(),
+        "--timeout-ms".into(),
+        request.timeout_ms.to_string(),
     ];
     if !request.js {
         args.push("--disable-js".into());
@@ -335,11 +338,15 @@ pub struct MoliCommand {
 #[async_trait]
 impl BrowserEngine for MoliCommand {
     async fn fetch(&self, request: &EngineRequest) -> Result<EngineOutput, AccessError> {
-        let output = tokio::process::Command::new(&self.program)
-            .args(moli_args(request))
-            .output()
-            .await
-            .map_err(|source| AccessError::with_source(ErrorClass::Permanent, "engine", source))?;
+        let output = tokio::time::timeout(
+            std::time::Duration::from_millis(request.timeout_ms),
+            tokio::process::Command::new(&self.program)
+                .args(moli_args(request))
+                .output(),
+        )
+        .await
+        .map_err(|_| AccessError::new(ErrorClass::Transient, "deadline"))?
+        .map_err(|source| AccessError::with_source(ErrorClass::Permanent, "engine", source))?;
         if !output.status.success() {
             return Err(permanent("engine"));
         }
@@ -417,6 +424,11 @@ impl<E: BrowserEngine> Accessor for BrowserAccessor<E> {
                 trace,
                 matched_body,
                 block_private_networks: true,
+                timeout_ms: request
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .max(1) as u64,
             })
             .await?;
         let level = if layout || spec.eval.is_some() || trace {

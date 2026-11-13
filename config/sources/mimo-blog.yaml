@@ -38,6 +38,7 @@ pipeline:
           fields:
             - publishedAt
             - title
+          followAccessor: accessor/browser
           maxFetches: 30
         items: /items
         publishedAt: publishedAt
