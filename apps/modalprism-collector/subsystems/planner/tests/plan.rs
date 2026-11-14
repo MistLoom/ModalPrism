@@ -48,6 +48,8 @@ fn plan() -> SourcePlan {
         total_items: None,
         on_budget_exhausted: "skip".into(),
         stagnation_cycles: None,
+        pipeline: None,
+        vectorize: false,
     }
 }
 
@@ -546,6 +548,8 @@ async fn follow_task_is_leased_after_the_source_is_scheduled() {
         lease_until: now(),
         attempt: 0,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: 1,
     };
     planner

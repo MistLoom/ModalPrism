@@ -5,8 +5,10 @@
 mod builtin;
 mod compile;
 mod error;
+mod factor;
 mod model;
 mod prism;
+pub mod processor;
 mod registry;
 mod route;
 mod run;
@@ -27,6 +29,10 @@ pub use model::{
     LinkTarget, OutputDecl, Probe, Quality, ReadonlyView, RegionHit, RenderMode, SourceView,
 };
 pub use registry::Registry;
+pub use factor::{
+    FactorMount, FactorMemo, Measure, TextDensity, apply as apply_factors, measure as factor_measure,
+};
+pub use processor::{ContentProcessor, Memo, Mount, TextFilter, apply as apply_processors};
 pub use route::{Candidate, Rule, Step, parse_pipeline};
 pub use run::{
     AdapterFeedback, DetectorChoice, PartBytes, RunOutput, RunRequest, empty_identities, run,

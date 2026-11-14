@@ -74,6 +74,7 @@ pub async fn accept(
     let now_text = now.to_rfc3339()?;
     let mut heads = load_heads(db).await?;
     let planned = resolve(
+        db,
         changeset,
         &mut heads,
         commit_id.as_str(),
@@ -153,6 +154,7 @@ fn mark_head(row: &MarkRow) -> Result<MarkHead> {
 }
 
 async fn resolve(
+    db: &Db,
     changeset: &ChangeSet,
     heads: &mut Heads,
     commit_id: &str,
@@ -241,10 +243,55 @@ async fn resolve(
                 media_type,
                 lineage,
             } => {
-                if matches!(kind, FacetKind::Embedding) {
-                    return Err(Error::EmbeddingUnspecified);
-                }
                 let rid = resolve_target(target, &aliases, heads)?;
+                // 嵌入只允许由派生任务写入（changeset 带 ack）。直接 apply 的未指定
+                // 嵌入维持既有约束：明确拒绝，不悄悄进索引。
+                if matches!(kind, FacetKind::Embedding) {
+                    if changeset.ack.is_none() {
+                        return Err(Error::EmbeddingUnspecified);
+                    }
+                    let Some(variant) = variant.as_ref() else {
+                        return Err(Error::EmbeddingUnspecified);
+                    };
+                    let (model, vector) = embedding_of(body)?;
+                    let stored = store_body(kind, body)?;
+                    let (hash, size) = body_hash(&stored)?;
+                    // 增量：同内容哈希已有向量则跳过，不重复堆条目；内容变化
+                    // 追加新版本行，检索取最新。
+                    if data::latest_embedding_hash(db, &rid, variant).await? != Some(hash.clone())
+                    {
+                        batch.facets.push(FacetRow {
+                            rid: rid.clone(),
+                            kind: kind.as_str().to_string(),
+                            variant: Some(variant.clone()),
+                            version: 0,
+                            content_hash: hash,
+                            media_type: media_type.clone(),
+                            size,
+                            body_text: None,
+                            body_struct: None,
+                            blob_ref: None,
+                            inputs: lineage.inputs.iter().map(|span| span.to_string()).collect(),
+                            params_hash: lineage.params_hash.clone(),
+                            producer_module: changeset.producer.module.clone(),
+                            producer_version: changeset.producer.version.clone(),
+                            config_generation: changeset.producer.config_generation,
+                            commit_id: commit_id.to_string(),
+                            created_at: now.to_string(),
+                            seq: 0,
+                            v: 0,
+                        });
+                        batch.vectors.push(crate::data::VectorRow {
+                            rid,
+                            kind: kind.as_str().to_string(),
+                            variant: Some(variant.clone()),
+                            model,
+                            vector,
+                            v: 0,
+                        });
+                    }
+                    continue;
+                }
                 let stored = store_body(kind, body)?;
                 if let StoredBody::Staged { sha256, .. } = &stored {
                     staged.push(sha256.clone());
@@ -340,6 +387,8 @@ async fn resolve(
             }
             Op::Tombstone { target, reason } => {
                 let rid = resolve_target(target, &aliases, heads)?;
+                // 向量寿命与已落盘内容一致：内容被删除/移除时向量一并去掉。
+                batch.vectors_purge.push(rid.clone());
                 let mut head = heads.marks.remove(&rid).unwrap_or_default();
                 head.tombstone = true;
                 head.reason = Some(reason.clone());
@@ -363,6 +412,32 @@ async fn resolve(
         staging: staged,
         ack: changeset.ack.as_ref().map(|id| id.as_str().to_string()),
     })
+}
+
+/// 解析嵌入正文：`{"model": <名称>, "vector": [<数值>...]}`。
+/// 缺字段、空向量或非法数值都明确报错，不用空值冒充已嵌入。
+fn embedding_of(body: &Body) -> Result<(String, Vec<f32>)> {
+    let Body::Struct { value } = body else {
+        return Err(Error::EmbeddingUnspecified);
+    };
+    let model = value
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .ok_or(Error::EmbeddingUnspecified)?;
+    let values = value
+        .get("vector")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(Error::EmbeddingUnspecified)?;
+    if values.is_empty() {
+        return Err(Error::EmbeddingUnspecified);
+    }
+    let mut vector = Vec::with_capacity(values.len());
+    for item in values {
+        let number = item.as_f64().ok_or(Error::EmbeddingUnspecified)?;
+        vector.push(number as f32);
+    }
+    Ok((model.to_string(), vector))
 }
 
 fn resolve_target(
@@ -439,6 +514,7 @@ fn struct_kind(kind: &FacetKind) -> bool {
         FacetKind::Struct
             | FacetKind::Links
             | FacetKind::Regions
+            | FacetKind::Embedding
             | FacetKind::Json
             | FacetKind::Yaml
             | FacetKind::Other(_)

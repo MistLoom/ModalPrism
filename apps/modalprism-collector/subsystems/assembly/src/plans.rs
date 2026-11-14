@@ -85,6 +85,7 @@ pub fn manual_plan(snapshot: &Snapshot, source_id: &str) -> Option<SourcePlan> {
         true,
         true,
         None,
+        None,
     )
 }
 
@@ -125,6 +126,7 @@ fn join_plan(
         source_enabled && plan_enabled,
         one_shot,
         queue_override,
+        plan_pipeline(plan_module, source_module),
     )
 }
 
@@ -156,7 +158,31 @@ fn legacy_plan(
         source_enabled(source_module),
         false,
         None,
+        None,
     )
+}
+
+/// 计划级管道覆盖：计划声明优先，缺省回落信源声明。
+/// 空数组视为未声明（沿用信源默认路径），vectorize 同样计划优先、缺省 false。
+fn plan_pipeline(plan_module: &Value, source_module: &Value) -> Option<(Option<Value>, bool)> {
+    let plan_pipeline = plan_module.get("pipeline");
+    let pipeline = match plan_pipeline {
+        Some(value) if value.as_array().is_some_and(|items| !items.is_empty()) => {
+            Some(value.clone())
+        }
+        Some(_) | None => match source_module.get("pipeline") {
+            Some(value) if value.as_array().is_some_and(|items| !items.is_empty()) => {
+                Some(value.clone())
+            }
+            _ => None,
+        },
+    };
+    let vectorize = plan_module
+        .get("vectorize")
+        .and_then(Value::as_bool)
+        .or_else(|| source_module.get("vectorize").and_then(Value::as_bool))
+        .unwrap_or(false);
+    Some((pipeline, vectorize))
 }
 
 /// 把节律字段收敛成统一形态（interval/floor/ceiling/adaptive/expectedPeriod/batchKey），
@@ -197,6 +223,7 @@ fn build_plan(
     enabled: bool,
     one_shot: bool,
     queue_override: Option<&str>,
+    pipeline_override: Option<(Option<Value>, bool)>,
 ) -> Option<SourcePlan> {
     let locator = locator_of(module.get("access")?.get("locator")?)?;
     if matches!(locator, Locator::PushChannel { .. }) {
@@ -284,6 +311,12 @@ fn build_plan(
         total_items,
         on_budget_exhausted,
         stagnation_cycles,
+        pipeline: pipeline_override
+            .as_ref()
+            .and_then(|(pipeline, _)| pipeline.clone()),
+        vectorize: pipeline_override
+            .map(|(_, vectorize)| vectorize)
+            .unwrap_or(false),
     })
 }
 
@@ -891,5 +924,83 @@ mod tests {
             "id: source/demo\nkind: source\nname: Demo\naccess:\n  accessor: accessor/http\n  locator:\n    url: https://example.com/feed\npipeline:\n  - run:\n      - adapter/json-list\n    spec:\n      adapter/json-list:\n        items: /data\n        url: link\nschedule:\n  interval: 1h\nadmission: {}\n",
         )
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod pipeline_flow_tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    /// 第一期第一步：计划级 pipeline / vectorize 透传进 SourcePlan 与任务。
+    #[test]
+    fn plan_pipeline_and_vectorize_flow_into_tasks() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "accessor/http".into(),
+            json!({
+                "kind": "accessor",
+                "implementation": "builtin:http",
+                "limits": {"timeout": "30s"}
+            }),
+        );
+        modules.insert(
+            "source/demo".into(),
+            json!({
+                "kind": "source",
+                "access": {
+                    "accessor": "accessor/http",
+                    "locator": {"url": "https://example.com/feed"}
+                },
+                // 信源自带的 pipeline 应被计划覆盖。
+                "pipeline": [{"run": ["adapter/feed-items"]}]
+            }),
+        );
+        modules.insert(
+            "plan/override".into(),
+            json!({
+                "kind": "plan",
+                "targets": ["source/demo"],
+                "trigger": {"kind": "recurring", "interval": "1h"},
+                "pipeline": [{"run": ["adapter/smart-content"]}],
+                "vectorize": true
+            }),
+        );
+        let snapshot = config::Snapshot {
+            generation: 1,
+            system: json!({}),
+            modules,
+            origins: BTreeMap::new(),
+        };
+        let plans = plans_of(&snapshot);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.plan_id.as_deref() == Some("plan/override"))
+            .expect("计划应生成 SourcePlan");
+        assert_eq!(
+            plan.pipeline.as_ref().and_then(|value| value[0]["run"][0].as_str()),
+            Some("adapter/smart-content"),
+            "计划级 pipeline 覆盖信源声明"
+        );
+        assert!(plan.vectorize);
+
+        let task = planner::make_task(
+            plan,
+            strata_model::TaskReason::Schedule,
+            strata_model::Timestamp::now(),
+        )
+        .expect("任务应可生成");
+        assert_eq!(
+            task.pipeline.as_ref().and_then(|value| value[0]["run"][0].as_str()),
+            Some("adapter/smart-content"),
+            "计划级 pipeline 进入任务"
+        );
+        assert!(task.vectorize);
+
+        // 未声明计划的 manual_plan：pipeline 缺省（沿用信源默认路径）、vectorize false。
+        let manual = manual_plan(&snapshot, "source/demo").expect("手动计划应存在");
+        assert!(manual.pipeline.is_none());
+        assert!(!manual.vectorize);
     }
 }

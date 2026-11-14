@@ -27,6 +27,7 @@ methods:
         pipeline:
           type: array
           items: { type: object }
+        vectorize: { type: boolean }
   - id: probe
     description: 只识别不落库：类型分布、区域与建议声明
     input:
@@ -67,6 +68,7 @@ methods:
         query: { type: string }
         engine: { type: string }
         limit: { type: number }
+        scope: { type: string }
       required: [query]
   - id: parse
     description: 对文本或地址做结构化识别
@@ -87,3 +89,81 @@ methods:
         facet: { type: string }
         variant: { type: string }
       required: [contentId]
+  - id: ls
+    description: 发现信源与可挂载组件；可按组件 kind 与标签过滤目录
+    input:
+      type: object
+      properties:
+        kind: { type: string }
+        tag: { type: string }
+  - id: plan.ls
+    description: 列出采集计划（含 pipeline、vectorize 与运行态摘要）
+    input:
+      type: object
+      properties:
+        status: { type: string }
+  - id: plan.get
+    description: 读取采集计划详情（含 pipeline、vectorize 与进度）
+    input:
+      type: object
+      properties:
+        planId: { type: string }
+      required: [planId]
+  - id: plan.new
+    description: 新建采集计划，可声明 pipeline 与 vectorize
+    input:
+      type: object
+      properties:
+        name: { type: string }
+        targets: { type: array, items: { type: string } }
+        trigger: { type: object }
+        pipeline: { type: array, items: { type: object } }
+        vectorize: { type: boolean }
+        quota: { type: object }
+        stopPolicy: { type: object }
+        deliveryTargets: { type: array, items: { type: object } }
+        deliveryEnabled: { type: boolean }
+        description: { type: string }
+      required: [targets]
+  - id: plan.set
+    description: 修改采集计划（trigger、pipeline、vectorize 与进度相关字段）
+    input:
+      type: object
+      properties:
+        planId: { type: string }
+        trigger: { type: object }
+        pipeline: { type: array, items: { type: object } }
+        vectorize: { type: boolean }
+        targets: { type: array, items: { type: string } }
+        quota: { type: object }
+        stopPolicy: { type: object }
+        deliveryTargets: { type: array, items: { type: object } }
+        deliveryEnabled: { type: boolean }
+        enabled: { type: boolean }
+        name: { type: string }
+        description: { type: string }
+      required: [planId]
+  - id: plan.pause
+    description: 暂停采集计划
+    input:
+      type: object
+      properties:
+        planId: { type: string }
+      required: [planId]
+  - id: plan.resume
+    description: 恢复采集计划
+    input:
+      type: object
+      properties:
+        planId: { type: string }
+      required: [planId]
+  - id: plan.run
+    description: 立即触发一次信源采集，返回异步操作
+    input:
+      type: object
+      properties:
+        sourceId: { type: string }
+        mode: { type: string }
+        locator: { type: string }
+        reason: { type: string }
+      required: [sourceId]

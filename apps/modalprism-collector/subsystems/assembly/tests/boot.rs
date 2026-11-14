@@ -257,6 +257,8 @@ async fn shutdown_releases_leases() {
         lease_until: Timestamp::now(),
         attempt: 0,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: 1,
     };
     services
@@ -383,6 +385,8 @@ async fn standard_preset_redacts_headers_before_they_reach_staging() {
         lease_until: Timestamp::now(),
         attempt: 0,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: 4,
     };
     services
@@ -729,6 +733,7 @@ async fn tool_once_previews_facets_without_a_preexisting_resource() {
         source_id: "source/tool-preview".into(),
         mode: assembly::tools::Mode::Preview,
         pipeline: None,
+        vectorize: false,
         hint: "content".into(),
     };
     let value = assembly::tools::once(&services, request).await.unwrap();
@@ -739,5 +744,67 @@ async fn tool_once_previews_facets_without_a_preexisting_resource() {
             .as_array()
             .is_some_and(|items| !items.is_empty()),
         "零产出不是可接受结果: {value}"
+    );
+}
+
+/// 验收：once 在 vectorize=true 且落库时真正触发向量写入阶段——按本次信源为范围
+/// 入队嵌入派生任务；vectorize=false 时不入队任何任务（缺省不写索引）。
+#[tokio::test]
+async fn tool_once_with_vectorize_enqueues_embedding_derivation_scoped_to_source() {
+    use strata_client::TaskFilter;
+
+    async fn once_store(vectorize: bool) -> (tempfile::TempDir, std::sync::Arc<assembly::Services>, serde_json::Value) {
+        let data = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        config_dir(config.path());
+        let services = Services::open(data.path(), config.path(), binds())
+            .await
+            .unwrap();
+        let request = assembly::tools::OnceRequest {
+            input: b"<html><body><article><h1>Hi</h1><p>hello vectorize</p></article></body></html>".to_vec(),
+            media_type: "text/html".into(),
+            locator: Locator::Url {
+                url: "https://example.com/blog/vectorize-post".into(),
+            },
+            source_id: "source/tool-vectorize".into(),
+            mode: assembly::tools::Mode::Store,
+            pipeline: None,
+            vectorize,
+            hint: "content".into(),
+        };
+        let value = assembly::tools::once(&services, request).await.unwrap();
+        assert_eq!(value["stored"], true, "{value}");
+        assert_eq!(value["vectorize"], vectorize);
+        (data, services, value)
+    }
+
+    // 开启 vectorize：落库后必须有嵌入派生任务入队。
+    let (_data, services, _value) = once_store(true).await;
+    let page = services
+        .strata()
+        .list_tasks(&TaskFilter::default(), None, 50)
+        .await
+        .unwrap();
+    let derivation: Vec<_> = page
+        .rows
+        .iter()
+        .filter(|task| task.accessor == "vectorize")
+        .collect();
+    assert!(
+        !derivation.is_empty(),
+        "vectorize=true 必须入队嵌入派生任务: {:?}",
+        page.rows.iter().map(|t| t.accessor.as_str()).collect::<Vec<_>>()
+    );
+
+    // 关闭 vectorize：不得入队任何派生任务，索引不写。
+    let (_data_off, services_off, _value_off) = once_store(false).await;
+    let page_off = services_off
+        .strata()
+        .list_tasks(&TaskFilter::default(), None, 50)
+        .await
+        .unwrap();
+    assert!(
+        page_off.rows.iter().all(|task| task.accessor != "vectorize"),
+        "vectorize=false 不得入队嵌入派生任务"
     );
 }

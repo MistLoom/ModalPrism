@@ -104,6 +104,30 @@ impl AppState {
             parse_hook: std::sync::OnceLock::new(),
             monitor_hook: std::sync::OnceLock::new(),
         });
+        // 作业事件出口：planner 租约下执行的取数/跟页任务把 raw.ready、
+        // normalized.ready、job.failed、job.cancelled 落进观察事件流。
+        // 仅观察用途，写入失败不影响采集。
+        {
+            let sink_state = std::sync::Arc::clone(&state);
+            state.services.events.set_sink(std::sync::Arc::new(
+                move |event: &str, payload: &Value| {
+                    let state = std::sync::Arc::clone(&sink_state);
+                    let event = event.to_string();
+                    let payload = payload.clone();
+                    tokio::spawn(async move {
+                        let kind = format!("collection.{}", event.replace('.', "_"));
+                        let _ = observe::append_event(
+                            &state,
+                            &kind,
+                            &kind,
+                            payload.clone(),
+                            observe::Refs::default(),
+                        )
+                        .await;
+                    });
+                },
+            ));
+        }
         // 初始化步骤全部降级为「可失败但不停机」：设置、默认项目与出厂快照都能在
         // 后续请求里按需重建（见 settings_doc / ensure_factory_snapshot），把单个
         // 初始化失败升级成整个领域 API 启不来并不划算。

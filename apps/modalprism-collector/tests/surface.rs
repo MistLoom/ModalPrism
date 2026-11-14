@@ -139,8 +139,14 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
             "{} 的 ability.yml 漂移",
             ability.id
         );
+        // logic 文件按框架命名规则核对（method id 的点/横线换成下划线，见
+        // frame/support AbilityDecl::logic_module_name）：`plan.get` ↔ `plan_get.rs`。
+        let expected_files: BTreeSet<String> = expected
+            .iter()
+            .map(|method| method.replace('.', "_").replace('-', "_"))
+            .collect();
         assert_eq!(
-            expected,
+            expected_files,
             logic_methods(&dir),
             "{} 的 logic 文件漂移",
             ability.id

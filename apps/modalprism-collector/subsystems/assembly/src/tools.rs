@@ -56,6 +56,8 @@ pub struct OnceRequest {
     pub mode: Mode,
     /// 显式 pipeline；缺省按 hint 选智能适配器。
     pub pipeline: Option<Value>,
+    /// 是否要求向量化（本步只预留与回显，不写向量索引、不挡提交游标）。
+    pub vectorize: bool,
     /// `content`（默认）或 `discover`。
     pub hint: String,
 }
@@ -137,6 +139,12 @@ impl OnceRequest {
             return Err(Error::new("url / text / file 至少提供一个"));
         };
 
+        // vectorize 只能是布尔（缺省 false）；本步只预留，不写向量索引。
+        let vectorize = match args.get("vectorize") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return Err(Error::new("vectorize 只能是布尔")),
+        };
         Ok(Self {
             input,
             media_type,
@@ -144,6 +152,7 @@ impl OnceRequest {
             source_id,
             mode,
             pipeline: args.get("pipeline").cloned().filter(Value::is_array),
+            vectorize,
             hint,
         })
     }
@@ -275,12 +284,29 @@ pub async fn once(services: &Arc<Services>, request: OnceRequest) -> Result<Valu
             .apply(changeset, ApplyOpts::default())
             .await
             .map_err(|error| Error::new(error.to_string()))?;
+        // 向量写入阶段：任务显式开启 vectorize 才触发；以本次信源为范围
+        // （信源标签已落成 resources.source_id），按内容哈希增量入队嵌入派生。
+        // apply 只保证受理，先 flush 让提交对快照可见，再入队；未开启不触发，
+        // 不写索引。嵌入由派生任务异步写入，本调用只入队。
+        if request.vectorize {
+            services
+                .strata()
+                .flush()
+                .await
+                .map_err(|error| Error::new(error.to_string()))?;
+            services
+                .strata()
+                .trigger_vectorize(&request.source_id)
+                .await
+                .map_err(|error| Error::new(error.to_string()))?;
+        }
         return Ok(json!({
             "mode": "store",
             "stored": true,
             "degraded": degraded,
             "warnings": warnings,
             "sourceId": request.source_id,
+            "vectorize": request.vectorize,
             "identities": identities,
             "commit": result.commit_id.as_str(),
             "facets": facets,
@@ -293,6 +319,7 @@ pub async fn once(services: &Arc<Services>, request: OnceRequest) -> Result<Valu
         "degraded": degraded,
         "warnings": warnings,
         "sourceId": request.source_id,
+        "vectorize": request.vectorize,
         "identities": identities,
         "facets": facets,
         "follows": output.follows.len(),

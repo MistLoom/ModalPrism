@@ -103,6 +103,15 @@ pub fn if_match(headers: &HeaderMap, expected: &str) -> Result<(), ApiError> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ApiError::precondition("缺少 If-Match"))?;
+    if_match_value(value, expected)
+}
+
+/// If-Match 的值侧比较：HTTP 面从头取，工具面直接传调用方声明的版本。
+pub fn if_match_value(value: &str, expected: &str) -> Result<(), ApiError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(ApiError::precondition("缺少 If-Match"));
+    }
     let value = value.trim_matches('"');
     let expected = expected.trim_matches('"');
     if value != expected && value != "*" {

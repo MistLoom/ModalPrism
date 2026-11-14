@@ -276,6 +276,8 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "priority",
             "quota",
             "stopPolicy",
+            "pipeline",
+            "vectorize",
         ],
         DocKind::Type => &[
             "id",

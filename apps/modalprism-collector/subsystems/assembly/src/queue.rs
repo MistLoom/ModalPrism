@@ -189,6 +189,11 @@ impl planner::Queue for StrataQueue {
         Ok(())
     }
 
+    async fn trigger_vectorize(&self, source: &str) -> Result<(), planner::PlannerError> {
+        self.0.trigger_vectorize(source).await.map_err(plan_err)?;
+        Ok(())
+    }
+
     async fn accepted_cursor(&self, source: &str) -> Result<Option<Value>, planner::PlannerError> {
         Ok(self
             .0

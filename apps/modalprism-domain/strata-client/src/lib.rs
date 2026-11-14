@@ -29,6 +29,7 @@ pub use strata_gateway::task::{
     TaskStats, known_reason, known_status,
 };
 pub use strata_gateway::{Backend, BlobBackend, DerivationSpec, DerivationTask, Tokenizer};
+pub use strata_gateway::derive::{EMBEDDING_PRODUCER, EMBEDDING_VARIANT};
 
 pub struct Strata {
     gateway: Gateway,
@@ -182,6 +183,13 @@ impl Strata {
     /// 向量检索是否走 sqlite-vec/pgvector 的原生距离函数。
     pub fn vector_accelerated(&self) -> bool {
         self.gateway.vector_accelerated()
+    }
+
+    /// 向量写入阶段触发：以指定信源为对象，对该信源名下最新已发布快照的文本单元
+    /// 按内容哈希增量入队嵌入派生任务。只有采集侧在任务开启 vectorize 后按信源
+    /// 调用；未调用不写索引，不存在全局触发。
+    pub async fn trigger_vectorize(&self, source: &str) -> Result<Vec<AccessTask>, Error> {
+        Ok(self.gateway.trigger_vectorize(source).await?)
     }
 
     /// 元数据与 Blob 后端名字，供启动日志。

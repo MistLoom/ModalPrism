@@ -50,6 +50,14 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
                     "search" => logic::search::run(args).await,
                     "parse" => logic::parse::run(args).await,
                     "read" => logic::read::run(args).await,
+                    "ls" => logic::ls::run(args).await,
+                    "plan.get" => logic::plan_get::run(args).await,
+                    "plan.ls" => logic::plan_ls::run(args).await,
+                    "plan.new" => logic::plan_new::run(args).await,
+                    "plan.pause" => logic::plan_pause::run(args).await,
+                    "plan.resume" => logic::plan_resume::run(args).await,
+                    "plan.run" => logic::plan_run::run(args).await,
+                    "plan.set" => logic::plan_set::run(args).await,
                     other => Err(ability_support::Error::not_found(other)),
                 }
             })

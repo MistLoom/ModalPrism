@@ -162,6 +162,11 @@ fn push_ids(
         if id == "adapter/detect" {
             continue;
         }
+        // content-processor / factor 不进适配器调度：由执行层在数据面产出后
+        // 分别单独成遍（见 execute.rs 与 adapters::processor / adapters::factor）。
+        if id.starts_with("content-processor/") || id.starts_with("factor/") {
+            continue;
+        }
         if out
             .iter()
             .any(|item| item.part_index == part.index && item.adapter_id == *id)
@@ -307,6 +312,18 @@ fn parse_rule(value: &Value) -> Result<Rule, AdapterError> {
         Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
         Some(_) => return Err(AdapterError::config("after 必须是适配器 id")),
     };
+    for key in ["run", "run_if_accepts"] {
+        for component in string_list(object.get(key))? {
+            if !component.starts_with("adapter/")
+                && !component.starts_with("content-processor/")
+                && !component.starts_with("factor/")
+            {
+                return Err(AdapterError::config(format!(
+                    "未知组件 {component}（组件必须以 adapter/、content-processor/ 或 factor/ 开头）"
+                )));
+            }
+        }
+    }
     let spec = object.get("spec").cloned().unwrap_or(Value::Null);
     Ok(Rule {
         when,
@@ -376,5 +393,43 @@ fn string_list(value: Option<&Value>) -> Result<Vec<String>, AdapterError> {
             })
             .collect(),
         Some(_) => Err(AdapterError::config("适配器列表必须是数组")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_pipeline_accepts_factor_components() {
+        let rules = parse_pipeline(&json!([{"run": ["factor/text-density"]}]))
+            .expect("factor/ 组件应可解析");
+        // factor 不进适配器调度，留待执行层测度通过。
+        assert!(rules[0].run.contains(&"factor/text-density".to_string()));
+    }
+
+    #[test]
+    fn parse_pipeline_accepts_content_processor_components() {
+        let rules = parse_pipeline(&json!([
+            {"run": ["adapter/feed-items", "content-processor/text-filter"]}
+        ]))
+        .expect("content-processor 组件应可解析");
+        // content-processor 不进适配器调度，只留待执行层处理器通过。
+        assert!(rules[0].run.contains(&"content-processor/text-filter".to_string()));
+    }
+
+    #[test]
+    fn parse_pipeline_rejects_unknown_components() {
+        let error = parse_pipeline(&json!([{"run": ["renderer/fancy"]}]))
+            .expect_err("未知组件应被拒绝，不得静默忽略或改写");
+        assert!(error.to_string().contains("未知组件"), "{error}");
+    }
+
+    #[test]
+    fn parse_pipeline_accepts_adapter_components() {
+        let rules = parse_pipeline(&json!([{"run": ["adapter/feed-items"]}]))
+            .expect("adapter/ 组件应可解析");
+        assert_eq!(rules[0].run, vec!["adapter/feed-items".to_string()]);
     }
 }

@@ -228,6 +228,8 @@ async fn storage_roundtrip_matches_phase_exit() {
         lease_until: Timestamp::now(),
         attempt: 0,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: 1,
     };
     again.enqueue(std::slice::from_ref(&task)).await.unwrap();

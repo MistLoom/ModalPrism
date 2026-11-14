@@ -2,6 +2,7 @@
 
 mod api;
 mod derive;
+pub mod events;
 mod error;
 mod execute;
 mod listen;
@@ -83,6 +84,8 @@ pub struct Services {
     browser_program: Mutex<PathBuf>,
     /// 结构化识别引擎（RawPrism）。组合根在 Host 就绪后注入；未注入表示能力缺失。
     prism: Mutex<Option<Arc<dyn adapters::Prism>>>,
+    /// 作业事件出口（raw.ready / normalized.ready / job.failed / job.cancelled）。
+    pub events: events::EventBus,
 }
 
 impl Services {
@@ -137,6 +140,7 @@ impl Services {
             push: accessors_builtin::PushAccessor::new(),
             browser_program: Mutex::new(PathBuf::from(browser)),
             prism: Mutex::new(None),
+            events: events::EventBus::new(),
         }))
     }
 
@@ -206,6 +210,7 @@ impl Services {
             browser: self.browser_program.lock().expect("浏览器").clone(),
             timeout,
             prism: self.prism.lock().ok().and_then(|slot| slot.clone()),
+            events: self.events.clone(),
         }
     }
 
@@ -310,10 +315,44 @@ impl Handler for TaskHandler {
         } else {
             None
         };
-        let fetched = execute::fetch(&self.state, task, cursor, resource).await?;
+        let fetched = match execute::fetch(&self.state, task, cursor, resource).await {
+            Ok(fetched) => fetched,
+            Err(error) => {
+                // 事件作业语义：失败与取消同样对外可见（job.failed / job.cancelled）。
+                emit_job_error(&self.state.events, task, &error);
+                return Err(error);
+            }
+        };
         let mut success = fetched.success;
         success.follows = open_follows(&self.strata, fetched.follows, fetched.max_fetches).await;
         Ok(success)
+    }
+}
+
+/// 把执行错误映射成作业事件：取消/超时 → `job.cancelled`，其余 → `job.failed`。
+/// 只对浏览器取数与详情跟页等经 planner 租约执行的任务生效；once 不经此路径。
+pub fn emit_job_error(
+    events: &events::EventBus,
+    task: &strata_model::AccessTask,
+    error: &planner::Classified,
+) {
+    match error.class {
+        // 截止时间（limits.timeout）到期或访问器报告取消时按取消结算。
+        strata_model::ErrorClass::Transient
+            if error.message.contains("timeout") || error.message.contains("cancel") =>
+        {
+            events.job_cancelled(task, &error.message)
+        }
+        _ => events.job_failed(
+            task,
+            match error.class {
+                strata_model::ErrorClass::Transient => "transient",
+                strata_model::ErrorClass::Permanent => "permanent",
+                strata_model::ErrorClass::Config => "config",
+                strata_model::ErrorClass::Budget => "budget",
+            },
+            &error.message,
+        ),
     }
 }
 

@@ -53,6 +53,8 @@ fn plan() -> SourcePlan {
         total_items: None,
         on_budget_exhausted: "skip".into(),
         stagnation_cycles: None,
+        pipeline: None,
+        vectorize: false,
     }
 }
 
@@ -194,6 +196,11 @@ impl Queue for StrataQueue {
             .apply(changeset, ApplyOpts::default())
             .await
             .map_err(plan_err)?;
+        Ok(())
+    }
+
+    async fn trigger_vectorize(&self, source: &str) -> Result<(), PlannerError> {
+        self.0.trigger_vectorize(source).await.map_err(plan_err)?;
         Ok(())
     }
 

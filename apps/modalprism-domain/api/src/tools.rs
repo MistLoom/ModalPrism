@@ -86,9 +86,44 @@ pub async fn call(
         "probe" => probe(app, &args).await,
         "save" => save(app, &project_id, &args).await,
         "fetch" => crate::surface::fetch_value(state, args).await,
+        // scope=content：检索已采集内容（含向量开启后的语义检索），与网页检索同一动词区分。
+        "search" if args.get("scope").and_then(Value::as_str) == Some("content") => {
+            crate::content::search_items_value(app, &project_id, &args).await
+        }
         "search" => crate::search::search_value(state, args).await,
         "parse" => crate::surface::parse_value(state, args).await,
         "read" => read(app, &project_id, &args).await,
+        "ls" => ls(app, &args).await,
+        "plan.ls" => plan_ls(app, &args).await,
+        "plan.get" => plan_get(app, &project_id, &args).await,
+        "plan.new" => crate::collection::create_plan_value(app, &project_id, &args).await,
+        "plan.set" => {
+            let map = util::object(&args)?;
+            let plan_id = util::text(map, "planId")?.trim().to_string();
+            let etag = args.get("etag").and_then(Value::as_str);
+            // planId 与 etag 是工具面的定位/乐观锁参数，不属于计划文档字段；
+            // 进复用逻辑前剥掉，否则会被未知字段校验拒绝。
+            let mut body = args.clone();
+            if let Some(object) = body.as_object_mut() {
+                object.remove("planId");
+                object.remove("etag");
+            }
+            crate::collection::update_plan_value(app, &project_id, &plan_id, etag, &body).await
+        }
+        "plan.pause" | "plan.resume" => {
+            let map = util::object(&args)?;
+            let plan_id = util::text(map, "planId")?.trim().to_string();
+            let etag = args.get("etag").and_then(Value::as_str);
+            crate::collection::pause_resume_plan_value(
+                app,
+                &project_id,
+                &plan_id,
+                etag,
+                verb == "plan.resume",
+            )
+            .await
+        }
+        "plan.run" => crate::collection::create_run_value(state, &args).await,
         other => Err(ApiError::validation(
             "verb",
             "invalid",
@@ -242,6 +277,90 @@ async fn read(state: &AppState, project_id: &str, args: &Value) -> Result<Value,
         }
         None => crate::content::detail_value(state, &content_id, project_id).await,
     }
+}
+
+/// 发现：信源清单与可挂载组件目录。`kind` 过滤组件类型，`tag` 只过滤目录、不参与调度。
+async fn ls(state: &AppState, args: &Value) -> Result<Value, ApiError> {
+    let kind = args
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let tag = args
+        .get("tag")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let sources = crate::catalog::source_rows(state).await?;
+    // 可挂载组件：内置访问器与适配器（声明在 config 模块表里，带 labels/tags）。
+    let snapshot = config::validate(&state.config_dir, &crate::catalog::options())?;
+    let modules: Vec<Value> = snapshot
+        .modules
+        .iter()
+        .filter(|(_, module)| {
+            let module_kind = module.get("kind").and_then(Value::as_str).unwrap_or("");
+            matches!(module_kind, "accessor" | "adapter" | "type")
+        })
+        .filter(|(_, module)| match kind {
+            Some(kind) => module.get("kind").and_then(Value::as_str) == Some(kind),
+            None => true,
+        })
+        .filter(|(_, module)| match tag {
+            Some(tag) => module
+                .get("labels")
+                .and_then(Value::as_object)
+                .map(|labels| {
+                    labels
+                        .values()
+                        .filter_map(Value::as_str)
+                        .any(|value| value == tag)
+                        || labels.contains_key(tag)
+                })
+                .unwrap_or(false),
+            None => true,
+        })
+        .map(|(id, module)| {
+            json!({
+                "id": id,
+                "kind": module.get("kind"),
+                "name": module.get("name"),
+                "description": module.get("description"),
+                "labels": module.get("labels"),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "sources": sources,
+        "components": modules,
+    }))
+}
+
+/// 计划清单：含 pipeline、vectorize 与运行态摘要；可按状态过滤。
+async fn plan_ls(state: &AppState, args: &Value) -> Result<Value, ApiError> {
+    let status = args
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut plans = crate::collection::plan_rows(state).await?;
+    if let Some(status) = status {
+        plans.retain(|plan| plan["status"].as_str() == Some(status));
+    }
+    Ok(json!({ "items": plans, "total": plans.len() }))
+}
+
+/// 计划详情：pipeline、vectorize 与进度（近期运行）一并返回。
+async fn plan_get(state: &AppState, project_id: &str, args: &Value) -> Result<Value, ApiError> {
+    let map = util::object(args)?;
+    let plan_id = util::text(map, "planId")?.trim().to_string();
+    let mut plan = crate::collection::plan_row_owned(state, &plan_id, project_id).await?;
+    if let Some(object) = plan.as_object_mut() {
+        object.insert(
+            "recentRuns".into(),
+            Value::Array(crate::collection::runs_for_plan(state, &plan_id, 5).await?),
+        );
+    }
+    Ok(plan)
 }
 
 /// 工具面错误：输入类错误保留字段语义，其余按依赖失败返回。

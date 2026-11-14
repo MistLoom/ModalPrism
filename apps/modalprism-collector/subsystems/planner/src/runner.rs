@@ -133,6 +133,9 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             self.queue()
                 .apply(changeset(plan, Some(task.task_id.clone()), success.ops))
                 .await?;
+            // 向量写入阶段：只在任务显式开启 vectorize 时触发；once 默认不等
+            // 向量写完（嵌入走派生任务，本调用只入队即返回）。
+            self.maybe_vectorize(task).await?;
             return Ok(Vec::new());
         }
         let follows = success.follows.clone();
@@ -175,6 +178,8 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         self.queue()
             .apply(changeset(plan, Some(task.task_id.clone()), ops))
             .await?;
+        // 向量写入阶段：提交成功后按内容哈希增量入队嵌入派生任务。
+        self.maybe_vectorize(task).await?;
         if let Some(receipt) = &success.receipt {
             receipts.complete(&receipt.id).await?;
         }
@@ -182,6 +187,17 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             self.queue().enqueue(&follows).await?;
         }
         Ok(follows)
+    }
+
+    /// 向量写入阶段门控：任务显式开启 `vectorize` 才触发；缺省 false 时
+    /// 什么都不做——不写索引、不派生、不因内部便利偷偷写入。
+    /// 范围以任务信源为界（不是全局快照）；嵌入由派生任务异步写入
+    /// （复用 planner 租约/截止/重试/幂等），本调用只入队。
+    async fn maybe_vectorize(&self, task: &strata_model::AccessTask) -> Result<(), PlannerError> {
+        if !task.vectorize {
+            return Ok(());
+        }
+        self.queue().trigger_vectorize(task.source_id.as_str()).await
     }
 
     async fn fail(

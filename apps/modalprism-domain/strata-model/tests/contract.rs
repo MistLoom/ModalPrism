@@ -297,6 +297,8 @@ fn access_task_roundtrip() {
         lease_until: Timestamp::parse("2026-10-18T01:00:00Z").unwrap(),
         attempt: 1,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: 4,
     };
     task.validate().unwrap();

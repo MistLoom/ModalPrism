@@ -41,9 +41,14 @@ async fn run() -> Result<(), assembly::Error> {
             args.remove(0);
             return cli_api(args).await;
         }
+        // 短命令：动词本身就是第一个参数（once / search / plan.new / …），与 `tool <动词>` 等价。
+        if surface::tool(first).is_some() {
+            return cli_tool(args).await;
+        }
         if !first.starts_with("--") {
             return Err(assembly::Error::new(format!(
-                "未知参数或动词: {first}（可用: tool <动词>；运维透传: api <路径>；启动开关以 -- 开头）"
+                "未知参数或动词: {first}（可用: {} 等工具短命令，或 tool <动词>；运维透传: api <路径>；启动开关以 -- 开头）",
+                surface::ADVERTISED_TOOLS.join(" / ")
             )));
         }
     }

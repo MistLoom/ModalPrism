@@ -576,6 +576,60 @@ impl Gateway {
         derive::trigger(&self.db, &self.options.derivations, &dataset, snapshot.seq).await
     }
 
+    /// 向量写入阶段的触发：以**指定信源**为对象，对该信源名下最新已发布快照里的
+    /// 文本规范单元，按内容哈希增量入队嵌入派生任务（producer `derive-embedding`，
+    /// 产物 embedding/hash-64-v1）。已有同哈希新鲜产物的单元被跳过。
+    /// 范围过滤按 `resources.source_id`（首个采集该内容的信源）划界，已被墓碑标记的
+    /// 内容不入队；不指定信源或信源为空时不入队任何任务——不存在全局触发。
+    pub async fn trigger_vectorize(&self, source: &str) -> Result<Vec<AccessTask>> {
+        use crate::config::DerivationSpec;
+        use strata_model::{FacetKind, FacetSelector, QueueName};
+        if source.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(snapshot) = data::latest_snapshot(&self.db).await? else {
+            return Ok(Vec::new());
+        };
+        let mut dataset = data::read_at(&self.db, &snapshot.versions).await?;
+        // 范围收窄：只保留该信源名下的资源与片段；墓碑内容不进向量阶段。
+        let tombstoned: std::collections::BTreeSet<&str> = dataset
+            .marks
+            .iter()
+            .filter(|mark| mark.tombstone)
+            .map(|mark| mark.rid.as_str())
+            .collect();
+        let owned: std::collections::BTreeSet<&str> = dataset
+            .resources
+            .iter()
+            .filter(|row| row.source_id.as_deref() == Some(source) && !tombstoned.contains(row.rid.as_str()))
+            .map(|row| row.rid.as_str())
+            .collect();
+        dataset
+            .facets
+            .retain(|facet| owned.contains(facet.rid.as_str()));
+        let spec = DerivationSpec {
+            name: "vectorize".into(),
+            from: FacetSelector {
+                kind: FacetKind::Text,
+                variant: None,
+                fields: Vec::new(),
+            },
+            produces: FacetKind::Embedding,
+            variant: Some(derive::EMBEDDING_VARIANT.into()),
+            producer: strata_model::Producer {
+                module: derive::EMBEDDING_PRODUCER.into(),
+                version: "1".into(),
+                config_generation: 1,
+            },
+            params: serde_json::json!({}),
+            queue: QueueName::Render,
+            accessor: None,
+            priority: 10,
+        };
+        // 注意：复用上面已做范围收窄的 dataset，不再重读全局快照。
+        derive::trigger(&self.db, &[spec], &dataset, snapshot.seq).await
+    }
+
     /// 解析派生任务载荷。
     pub fn derivation(&self, task: &AccessTask) -> Result<DerivationTask> {
         derive::parse_task(&task.spec)

@@ -8,9 +8,10 @@ use std::time::Instant;
 use accessors::{AccessContext, AccessHints, AccessRequest, Accessor, Session, SessionPool};
 use accessors_builtin::{BrowserAccessor, MoliCommand, by_id};
 use adapters::{
-    Admission, DetectorChoice, FollowRequest, PartBytes, Registry, empty_identities,
+    Admission, DetectorChoice, FollowRequest, Mount, PartBytes, Registry, empty_identities,
     parse_pipeline, run, source_view,
 };
+use adapters::processor as processors;
 use async_trait::async_trait;
 use bytes::Bytes;
 use config::Snapshot;
@@ -34,6 +35,8 @@ pub struct FetchState {
     pub timeout: std::time::Duration,
     /// 结构化识别引擎（RawPrism）。未装载时采集按基础检测降级。
     pub prism: Option<Arc<dyn adapters::Prism>>,
+    /// 作业事件出口：原文/规整就绪、失败与取消在此广播。
+    pub events: crate::events::EventBus,
 }
 
 pub(crate) struct NoSession;
@@ -143,10 +146,21 @@ pub async fn fetch(
         )
         .await
         .map_err(from_access)?;
-    let pipeline = module
-        .get("pipeline")
-        .cloned()
-        .unwrap_or(Value::Array(Vec::new()));
+    // 原文就绪：浏览器取数与详情跟页与普通任务一样在此广播 raw.ready。
+    state.events.raw_ready(task, envelopes.len());
+    let pipeline = if let Some(override_pipeline) = task
+        .pipeline
+        .as_ref()
+        .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+    {
+        // 任务级管道覆盖（计划/once 声明）优先于信源声明。
+        override_pipeline.clone()
+    } else {
+        module
+            .get("pipeline")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()))
+    };
     let (ops, follow_requests) =
         if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
             // 未声明管道不等于放弃解析：默认交给智能适配器（识别可用时按区域切分），
@@ -177,6 +191,8 @@ pub async fn fetch(
             )
             .await?
         };
+    // 规整就绪：管道产出数据面之后广播 normalized.ready。
+    state.events.normalized_ready(task, ops.len());
     let max_fetches = detail_budget(&module);
     let follows = if task.reason == TaskReason::Schedule && max_fetches > 0 {
         follow_tasks(task, &follow_requests)?
@@ -279,6 +295,8 @@ pub(crate) async fn inbound_ops(
         lease_until: Timestamp::now(),
         attempt: 1,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: state.snapshot.generation,
     };
     let pipeline = module
@@ -492,6 +510,10 @@ async fn adapted_ops(
             }),
         ),
     };
+    // 内容处理器挂载在 run() 消耗 rules 之前抽取；只在管道声明了 content-processor
+    // 挂载时运行。确定性抽取仍留在适配器层；处理器只对数据面追加派生片段，
+    // 不改写原始片段与原始信封。
+    let mounts = processor_mounts(&rules);
     let output = run(
         &Registry::builtins_with(prism.clone()),
         adapters::RunRequest {
@@ -525,8 +547,118 @@ async fn adapted_ops(
     if let Some(ensure) = ensure {
         ops.insert(0, ensure);
     }
+    // 内容处理器与因子：只对数据面追加派生片段，不改写原始片段与原始信封。
+    // text-filter 走文本单元，ocr 走暂存图片单元，factor 走测度；未挂载的类别不跑。
+    let (factor_mounts, processor_mounts): (Vec<Mount>, Vec<Mount>) = mounts
+        .into_iter()
+        .partition(|mount| mount.id.starts_with("factor/"));
+    if !processor_mounts.is_empty() {
+        let mut memo = processors::Memo::new();
+        let mut derived_count = 0usize;
+        let (ocr_mounts, text_mounts): (Vec<Mount>, Vec<Mount>) = processor_mounts
+            .into_iter()
+            .partition(|mount| mount.id == "content-processor/ocr");
+        if !text_mounts.is_empty() {
+            let (derived, _) = processors::apply(&ops, &text_mounts, &mut memo)
+                .map_err(|error| classified(error.class(), error.to_string()))?;
+            derived_count += derived.len();
+            ops.extend(derived);
+        }
+        if !ocr_mounts.is_empty() {
+            let staging_dir = state.staging_dir.clone();
+            let resolve = move |sha: &str, size: u64| -> Option<std::path::PathBuf> {
+                let path = staging_dir.join(sha);
+                // 与 read_part 同款校验：存在且尺寸一致才交给识别引擎。
+                std::fs::metadata(&path)
+                    .ok()
+                    .filter(|meta| meta.len() == size)
+                    .map(|_| path)
+            };
+            // 引擎按挂载构造：程序路径取 spec 的 `program`（缺省 PATH 上的 tesseract），
+            // 找不到引擎时明确报配置错误，不静默降级。spec 先校验，工厂里不再失败。
+            for mount in &ocr_mounts {
+                processors::TesseractOcr::from_spec(&mount.spec)
+                    .map_err(|error| classified(error.class(), error.to_string()))?;
+            }
+            let engine_of = |mount: &Mount| -> Box<dyn processors::OcrEngine> {
+                // 校验已通过，构造不会失败。
+                Box::new(
+                    processors::TesseractOcr::from_spec(&mount.spec)
+                        .expect("ocr 挂载 spec 已前置校验"),
+                )
+            };
+            let (derived, _) = processors::apply_ocr(
+                &ops,
+                &ocr_mounts,
+                &mut memo,
+                &engine_of,
+                &resolve,
+            )
+            .map_err(|error| classified(error.class(), error.to_string()))?;
+            derived_count += derived.len();
+            ops.extend(derived);
+        }
+        state.events.processed_ready(task, derived_count);
+    }
+    // 因子（测度）：只在管道显式挂载 factor/ 时运行，未挂载时热路径到此为止。
+    // as-of 取信封声明取回时间（transport.started_at，RFC3339 带偏移），不读运行墙钟；
+    // once 与计划任务一样内联执行确定性测度，不存在等待问题。
+    if !factor_mounts.is_empty() {
+        let as_of = envelopes
+            .iter()
+            .map(|envelope| envelope.transport.started_at)
+            .max()
+            .map(|timestamp| {
+                timestamp
+                    .to_rfc3339()
+                    .map_err(|error| classified(ErrorClass::Permanent, error.to_string()))
+            })
+            .transpose()?;
+        let factor_mounts: Vec<adapters::FactorMount> = factor_mounts
+            .into_iter()
+            .map(|mount| adapters::FactorMount {
+                id: mount.id,
+                spec: mount.spec,
+            })
+            .collect();
+        let mut memo = adapters::FactorMemo::new();
+        let (derived, _) = adapters::apply_factors(&ops, &factor_mounts, &mut memo, as_of.as_deref())
+            .map_err(|error| classified(error.class(), error.to_string()))?;
+        let factor_count = derived.len();
+        ops.extend(derived);
+        state.events.factor_ready(task, factor_count);
+    }
     stamp_source(&mut ops, task.source_id.as_str());
     Ok((ops, output.follows))
+}
+
+/// 从管道规则里抽取 content-processor 挂载：run 与 run_if_accepts 都算挂载，
+/// 有效参数取规则 `spec` 里按组件 id 的覆盖（可能为空对象/缺省）。
+/// 适配器调度已把这些 id 排除（见 adapters::route::push_ids），这里单独成遍。
+fn processor_mounts(rules: &[adapters::Rule]) -> Vec<Mount> {
+    let mut mounts = Vec::new();
+    for rule in rules {
+        for id in rule.run.iter().chain(rule.probe.iter()) {
+            // content-processor 与 factor 都由执行层单独成遍，适配器调度已排除。
+            if !id.starts_with("content-processor/") && !id.starts_with("factor/") {
+                continue;
+            }
+            let spec = rule
+                .spec
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| Value::Object(Map::new()));
+            // 同一规则内重复挂载同一组件只取一次：有效参数相同，执行期也会按输入哈希跳过。
+            if mounts
+                .iter()
+                .any(|mount: &Mount| mount.id == *id && mount.spec == spec)
+            {
+                continue;
+            }
+            mounts.push(Mount { id: id.clone(), spec });
+        }
+    }
+    mounts
 }
 
 /// 给 `Ensure` 补 `source` 标签。
@@ -642,6 +774,8 @@ fn follow_tasks(
                 lease_until: Timestamp::now(),
                 attempt: 0,
                 batch_key: None,
+                pipeline: None,
+                vectorize: false,
                 generation: task.generation,
             },
             identity: follow.identity.clone(),
@@ -745,5 +879,35 @@ mod tests {
         let snapshot = snapshot_with(Vec::new());
         let pipeline = json!([{ "binding": "binding/ghost" }]);
         assert!(expand_pipeline_bindings(&pipeline, &snapshot).is_err());
+    }
+
+    /// 挂载抽取：run 与 run_if_accepts 都算挂载，spec 按组件 id 覆盖；
+    /// 同一规则内重复挂载同一组件去重。adapter 组件不进挂载。
+    /// content-processor 与 factor 都被抽取，由执行层分流。
+    #[test]
+    fn processor_mounts_extracted_from_rules() {
+        let rules = parse_pipeline(&json!([
+            {
+                "run": ["adapter/html-list", "content-processor/text-filter"],
+                "run_if_accepts": ["content-processor/text-filter"],
+                "spec": {"content-processor/text-filter": {"minLength": 3}}
+            },
+            {"run": ["content-processor/text-filter"]},
+            {"run": ["factor/text-density"], "spec": {"factor/text-density": {"band": "x"}}},
+            {"run": ["factor/ghost"]}
+        ]))
+        .unwrap();
+        let mounts = processor_mounts(&rules);
+        assert_eq!(mounts.len(), 4, "三条规则各取挂载（spec 不同）+ 未知因子挂载");
+        assert!(mounts.iter().any(|mount| mount.id == "factor/text-density"));
+        let factor = mounts
+            .iter()
+            .find(|mount| mount.id == "factor/text-density")
+            .expect("因子挂载应被抽取");
+        assert_eq!(factor.spec["band"], "x");
+        // 只有 adapter 组件时不产生挂载：未挂载不跑，不进默认热路径。
+        let adapter_only =
+            parse_pipeline(&json!([{"run": ["adapter/html-list"]}])).unwrap();
+        assert!(processor_mounts(&adapter_only).is_empty());
     }
 }

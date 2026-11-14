@@ -18,6 +18,11 @@ use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::task;
 
+/// 向量写入阶段的产出方模块名（嵌入必须由派生任务写入）。
+pub const EMBEDDING_PRODUCER: &str = "derive-embedding";
+/// 嵌入产物 variant / 模型名：小而确定的特征哈希嵌入。
+pub const EMBEDDING_VARIANT: &str = "hash-64-v1";
+
 /// 写入 `AccessTask.spec` 的派生载荷。执行方据此构造 `PutFacet` 并带上血缘。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -162,6 +167,8 @@ pub async fn trigger(
                 lease_until: Timestamp::now(),
                 attempt: 0,
                 batch_key: None,
+                pipeline: None,
+                vectorize: false,
                 generation: spec.producer.config_generation,
             });
         }

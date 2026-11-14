@@ -107,16 +107,28 @@ impl Gateway for MethodTools {
     }
 
     fn catalog(&self) -> Vec<CatalogEntry> {
-        self.inner
+        let mut items: Vec<CatalogEntry> = self
+            .inner
             .catalog()
             .into_iter()
             .filter_map(|mut entry| {
                 mark_read_only(&mut entry);
-                let name = format!("{}.{}", entry.instance.as_str(), entry.method.as_str());
+                let name = if entry.instance.as_str() == "tool" {
+                    // 工具面：默认宣传短名（once / plan.ls / …），method 即动词语义。
+                    entry.method.as_str().to_string()
+                } else {
+                    format!("{}.{}", entry.instance.as_str(), entry.method.as_str())
+                };
                 entry.instance = InstanceId::new(&name).ok()?;
                 Some(entry)
             })
-            .collect()
+            .collect();
+        // 兼容别名 `tool.*` 与 `plan.list`：不再是默认宣传面的主名，但按设计保留，可解析、可调用。
+        for verb in surface::tool_ids() {
+            items.push(alias_entry(&format!("tool.{verb}"), verb));
+        }
+        items.push(alias_entry("plan.list", "plan.ls"));
+        items
     }
 
     fn get_entry(&self, instance: &InstanceId, method: &MethodId) -> Option<CatalogEntry> {
@@ -128,6 +140,22 @@ impl Gateway for MethodTools {
         mark_read_only(&mut entry);
         entry.instance = instance.clone();
         Some(entry)
+    }
+}
+
+/// 兼容别名的目录条目：`tool.*` 长名与 `plan.list` 仍可解析、可调用。
+/// 这些名字不再是默认宣传面的主名，但按设计保留，不删除、不改口。
+fn alias_entry(name: &str, verb: &str) -> CatalogEntry {
+    CatalogEntry {
+        instance: InstanceId::new(name).expect("别名可解析"),
+        ability_id: ability_support::AbilityId::new("tool").expect("tool 能力 id"),
+        method: MethodId::new(verb).expect("动词可解析"),
+        description: format!("兼容别名，等价于工具动词 {verb}"),
+        // 目录项统一无状态：readOnlyHint 为 true，写不写由 MCP 面白名单控制。
+        stateful: false,
+        phase: frame_core::Lifecycle::Ready,
+        input_schema: serde_json::json!({ "type": "object" }),
+        output_schema: None,
     }
 }
 
@@ -207,6 +235,14 @@ async fn tool_forward(verb: &str, body: serde_json::Value) -> Result<serde_json:
 }
 
 fn split_tool(name: &str) -> ability_support::Result<(InstanceId, MethodId)> {
+    // 兼容别名先归一：`tool.*` 长名与 `plan.list` 解析到默认短名。
+    let name = surface::resolve_alias(name);
+    // 工具动词整体（once / plan.ls / …）走 tool 能力，转发回环 API；其余按 ability.method。
+    if surface::tool(name).is_some() {
+        let instance = InstanceId::new("tool").map_err(|_| ability_support::Error::not_found(name))?;
+        let method = MethodId::new(name).map_err(|_| ability_support::Error::not_found(name))?;
+        return Ok((instance, method));
+    }
     let Some((instance, method)) = name.rsplit_once('.') else {
         return Err(ability_support::Error::not_found(name));
     };

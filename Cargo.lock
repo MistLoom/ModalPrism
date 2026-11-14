@@ -376,6 +376,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strata-model",
+ "tempfile",
  "thiserror 2.0.21",
  "time",
  "tokio",

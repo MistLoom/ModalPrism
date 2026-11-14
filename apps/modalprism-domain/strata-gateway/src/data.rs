@@ -143,6 +143,8 @@ pub struct Batch {
     pub states: Vec<StateRow>,
     pub vectors: Vec<VectorRow>,
     pub texts: Vec<TextRow>,
+    /// 墓碑目标：内容被删除/移除时其向量一并去掉，寿命与已落盘内容一致。
+    pub vectors_purge: Vec<String>,
 }
 
 impl Batch {
@@ -156,6 +158,7 @@ impl Batch {
             && self.states.is_empty()
             && self.vectors.is_empty()
             && self.texts.is_empty()
+            && self.vectors_purge.is_empty()
     }
 }
 
@@ -461,6 +464,10 @@ pub async fn write_in(tx: &mut Tx<'_>, batch: &mut Batch) -> Result<BTreeMap<Str
     for row in &batch.vectors {
         write_vector(tx, dialect, row).await?;
     }
+    // 墓碑清理：内容没了向量必须去掉，不产生新版本号（删除不新增数据）。
+    for rid in &batch.vectors_purge {
+        purge_vectors(tx, dialect, rid).await?;
+    }
     for row in &batch.texts {
         write_text(tx, dialect, row).await?;
     }
@@ -690,6 +697,56 @@ async fn write_vector(tx: &mut Tx<'_>, dialect: Dialect, row: &VectorRow) -> Res
             Ok(())
         }
     }
+}
+
+/// 墓碑清理：删掉目标 rid 的全部向量。内容被删除/移除时向量寿命随之结束。
+/// 删除不新增数据，不产生版本号。
+async fn purge_vectors(tx: &mut Tx<'_>, dialect: Dialect, rid: &str) -> Result<()> {
+    let mut sql = Sql::new(dialect);
+    match dialect {
+        Dialect::Sqlite => {
+            sql.push("DELETE FROM g_vectors WHERE rid = ");
+            sql.text(rid.to_string());
+            tx.exec(&sql).await?;
+            return Ok(());
+        }
+        Dialect::Postgres => {
+            // Postgres 按维度分表（g_vec_<dims>），逐表清理。
+            let mut names = Sql::new(dialect);
+            names.push("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'g\\_vec\\_%'");
+            let tables = tx.fetch(&names).await?;
+            for table in &tables {
+                let name = table.text("table_name")?;
+                let mut del = Sql::new(dialect);
+                del.push("DELETE FROM ");
+                del.push(&name);
+                del.push(" WHERE rid = ");
+                del.text(rid.to_string());
+                tx.exec(&del).await?;
+            }
+            return Ok(());
+        }
+    }
+}
+
+/// 某 rid 最新一条嵌入 facet 的内容哈希；没有嵌入时为 `None`。
+/// 供增量写入判定：同内容哈希跳过，不重复堆条目。
+pub async fn latest_embedding_hash(
+    db: &Db,
+    rid: &str,
+    variant: &str,
+) -> Result<Option<String>> {
+    let mut sql = Sql::new(db.dialect());
+    sql.push("SELECT content_hash FROM g_facets WHERE rid = ");
+    sql.text(rid.to_string());
+    sql.push(" AND kind = 'embedding' AND variant = ");
+    sql.text(variant.to_string());
+    sql.push(" ORDER BY seq DESC LIMIT 1");
+    Ok(db
+        .fetch(&sql)
+        .await?
+        .first()
+        .and_then(|row| row.opt_text("content_hash").ok().flatten()))
 }
 
 async fn write_text(tx: &mut Tx<'_>, dialect: Dialect, row: &TextRow) -> Result<()> {

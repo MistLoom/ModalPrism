@@ -535,6 +535,61 @@ fn item_view(row: &Value, names: &BTreeMap<String, String>) -> Value {
     view
 }
 
+/// 已采集内容检索的可复用入口：工具面 `search` 的 `scope=content` 与内容列表同源。
+/// 与网页检索共用同一产品动词，用范围参数区分；向量开启后这里自然覆盖语义检索。
+pub(crate) async fn search_items_value(
+    state: &AppState,
+    project_id: &str,
+    args: &Value,
+) -> Result<Value, ApiError> {
+    let map = util::object(args)?;
+    util::unknown(map, &["query", "sourceId", "limit", "scope"])?;
+    let text = util::text(map, "query")?.trim().to_string();
+    if text.is_empty() {
+        return Err(ApiError::validation("query", "required", "关键词不能为空"));
+    }
+    let limit = util::limit(map.get("limit").and_then(Value::as_u64).map(|v| v.to_string()).as_deref())?;
+    // 项目隔离与内容列表同一套规则：内容归属由自有信源派生。
+    let mut ids: Vec<String> = crate::catalog::owned_source_ids(state, project_id)
+        .await?
+        .into_iter()
+        .collect();
+    ids.sort();
+    let allowed: Option<Vec<String>> = Some(ids);
+    if allowed.as_ref().is_some_and(|ids| ids.is_empty()) {
+        return Ok(page_total(vec![], None, 0));
+    }
+    // 信源过滤：接受裸 slug 与带前缀两种写法。
+    let source = map
+        .get("sourceId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(util::source_ref);
+    let spec = content_query(
+        Some(&text),
+        source.as_deref(),
+        None,
+        allowed.as_deref(),
+        limit,
+    );
+    let result = state
+        .services
+        .strata()
+        .query(spec)
+        .await
+        .map_err(ApiError::from)?;
+    let names = source_names(state).await?;
+    let items: Vec<Value> = result
+        .rows
+        .iter()
+        .filter(|row| has_content(row))
+        .map(|row| item_view(row, &names))
+        .collect();
+    let total = items.len();
+    Ok(page_total(items, None, total))
+}
+
 async fn list_items(
     State(state): State<Shared>,
     project: crate::ActiveProject,

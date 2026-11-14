@@ -98,7 +98,7 @@ fn conventions() -> Value {
 fn cli_items() -> Vec<Value> {
     vec![
         json!({"name": "启动服务", "usage": "modalprism-collector [--data var] [--config config] [--http 127.0.0.1:17880] [--proxy 127.0.0.1:17881] [--push 127.0.0.1:17882]", "summary": "不带动词时启动进程：HTTP 领域 API、代理与推送三个端口"}),
-        json!({"name": "tool <动词>", "usage": "modalprism-collector tool <catalog|once|probe|save|fetch|search|parse|read> [--参数 值 ...] [--json]", "summary": "工具面单一入口：动词、参数与读写标记都来自 GET /tools，--help 同源生成"}),
+        json!({"name": "tool <动词>", "usage": "modalprism-collector [tool] <once|search|ls|read|fetch|probe|save|parse|catalog|plan.ls|plan.get|plan.new|plan.set|plan.pause|plan.resume|plan.run> [--参数 值 ...] [--json]", "summary": "工具面单一入口：动词、参数与读写标记都来自 GET /tools，--help 同源生成；短命令可直接写动词（plan.list 等 tool.* 长名仍可用）"}),
         json!({"name": "tool once", "usage": "modalprism-collector tool once https://example.com --mode preview", "summary": "一次完成取数、识别、适配与写入或返回；类型未识别时降级返回，不报失败"}),
         json!({"name": "tool probe", "usage": "modalprism-collector tool probe https://example.com", "summary": "只识别不落库：类型分布、结构区域与建议信源声明"}),
         json!({"name": "api <路径>", "usage": "modalprism-collector api /content/items?limit=5 [--method POST] [--body <json>]", "summary": "运维透传：直接请求指定实例的领域 API，不重复实现业务逻辑"}),

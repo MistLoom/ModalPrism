@@ -204,7 +204,17 @@ async fn mcp_catalog_names_are_instance_method() {
     names.sort();
     names.dedup();
     assert_eq!(names.len(), count);
-    assert!(names.iter().all(|name| name.contains('.')));
+    // 命名两态：ability.method 形式，或工具面的默认宣传短名（once / search / ls / …）。
+    assert!(
+        names
+            .iter()
+            .all(|name| name.contains('.') || surface::tool(name).is_some()),
+        "目录名只能是 ability.method 或工具短名，出现: {:?}",
+        names
+            .iter()
+            .filter(|name| !name.contains('.') && surface::tool(name).is_none())
+            .collect::<Vec<_>>()
+    );
 
     let health = tools
         .invoke(InvokeRequest::new(
@@ -244,8 +254,8 @@ async fn mcp_face_opens_new_queries_and_refuses_writes() {
         "catalog_admin.list",
         "catalog_admin.templates",
         "strata_read.query",
-        "tool.search",
-        "tool.once",
+        "search",
+        "once",
     ] {
         assert!(
             names.iter().any(|name| name == expected),
@@ -285,6 +295,57 @@ async fn mcp_face_opens_new_queries_and_refuses_writes() {
     else {
         panic!("workflow.save 不在 MCP 面");
     };
+}
+
+/// 验收：默认宣传的 MCP 工具名为既定短名；兼容别名仍可解析、可调用；
+/// 禁止的内部方法与 vector.* 不出现。
+#[tokio::test]
+async fn mcp_catalog_advertises_short_names_and_keeps_aliases() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let running = boot(data.path(), config.path()).await.unwrap();
+    let tools = mcp_gateway(running.gateway());
+
+    let names: Vec<String> = tools
+        .catalog()
+        .into_iter()
+        .map(|entry| entry.instance.as_str().to_string())
+        .collect();
+    for short in surface::ADVERTISED_TOOLS {
+        assert!(
+            names.iter().any(|name| name == short),
+            "默认宣传面缺少短名 {short}"
+        );
+    }
+    for forbidden in [
+        "processor.run",
+        "factor.compute",
+        "adapter.validate",
+        "pipeline.test",
+    ] {
+        assert!(
+            names.iter().all(|name| name != forbidden),
+            "内部方法 {forbidden} 不得进入 MCP 面"
+        );
+    }
+    assert!(
+        names.iter().all(|name| !name.starts_with("vector.")),
+        "vector.* 工具不得进入 MCP 面"
+    );
+    // 兼容别名按设计保留：tool.* 长名与 plan.list 都在目录里可解析。
+    for alias in ["tool.once", "tool.plan.new", "plan.list"] {
+        assert!(names.iter().any(|name| name == alias), "别名 {alias} 应保留");
+    }
+
+    // 别名调用落到同一动词：plan.list 即 plan.ls。
+    let via_alias = tools
+        .get_entry(
+            &InstanceId::new("plan.list").unwrap(),
+            &MethodId::new("plan.ls").unwrap(),
+        )
+        .expect("plan.list 别名应可解析到 plan.ls");
+    assert_eq!(via_alias.method.as_str(), "plan.ls");
 }
 
 /// MCP 写白名单：可恢复写（声明文件草稿）可调用，破坏性/设置写有明确拒绝。

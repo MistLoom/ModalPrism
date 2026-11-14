@@ -792,3 +792,82 @@ fn strata_rustfs_backend_is_validated() {
     assert!(error.to_string().contains("不符合 schema"), "{error}");
     assert!(error.to_string().contains("download"), "{error}");
 }
+
+// —— 第一期第一步：计划级 pipeline / vectorize ——
+
+#[test]
+fn plan_pipeline_defaults_are_optional_and_vectorize_defaults_false() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    // 缺省：pipeline 缺省为空列表语义（沿用信源默认路径），vectorize 缺省 false。
+    write(
+        dir.path(),
+        "plans/demo.yaml",
+        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
+    let snapshot = validate(dir.path(), &options()).expect("计划应通过校验");
+    assert_eq!(
+        snapshot.modules["plan/demo"].get("pipeline"),
+        None,
+        "未声明 pipeline 时保持缺省"
+    );
+
+    // 空 pipeline 合法：沿用信源默认路径，不强迫复述整条默认路径。
+    write(
+        dir.path(),
+        "plans/empty.yaml",
+        "id: plan/empty\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline: []\nvectorize: false\n",
+    );
+    validate(dir.path(), &options()).expect("空 pipeline 应通过校验");
+}
+
+#[test]
+fn plan_pipeline_accepts_content_processor_and_rejects_unimplemented() {
+    // content-processor 已支持：计划级挂载应通过校验。
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "plans/demo.yaml",
+        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [content-processor/text-filter]\n",
+    );
+    validate(dir.path(), &options()).expect("content-processor 挂载应通过校验");
+
+    // factor 挂载：因子层已支持，配置层放行（未知因子 id 由执行层明确拒绝）。
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "plans/demo.yaml",
+        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [factor/text-density]\n",
+    );
+    validate(dir.path(), &options()).expect("factor 挂载应通过配置校验");
+
+    // 其他未知组件一律拒绝。
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "plans/demo.yaml",
+        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [renderer/fancy]\n",
+    );
+    let error = validate(dir.path(), &options()).unwrap_err();
+    assert!(error.to_string().contains("未知组件"), "{error}");
+}
+
+#[test]
+fn plan_vectorize_must_be_boolean() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "plans/demo.yaml",
+        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\nvectorize: yes-please\n",
+    );
+    let error = validate(dir.path(), &options()).unwrap_err();
+    let text = error.to_string();
+    assert!(
+        text.contains("vectorize") && (text.contains("布尔") || text.contains("schema")),
+        "{text}"
+    );
+}

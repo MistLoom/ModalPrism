@@ -42,6 +42,10 @@ pub trait Queue: Send + Sync {
     ) -> Result<Vec<AccessTask>, PlannerError>;
     async fn leased_count(&self, queue: QueueName, now: Timestamp) -> Result<usize, PlannerError>;
     async fn apply(&self, changeset: ChangeSet) -> Result<(), PlannerError>;
+    /// 向量写入阶段触发：以指定信源为对象做按哈希增量的嵌入派生入队。
+    /// 由 runner 在任务显式开启 vectorize 且提交成功后按任务信源调用；
+    /// 未调用不写索引，不存在全局触发。
+    async fn trigger_vectorize(&self, source: &str) -> Result<(), PlannerError>;
     async fn accepted_cursor(&self, source: &str) -> Result<Option<Value>, PlannerError>;
     async fn visible_cursor(&self, source: &str) -> Result<Option<Value>, PlannerError>;
 }
@@ -239,6 +243,11 @@ impl Queue for MemoryQueue {
                 row.task.queue == queue && row.status == "leased" && row.task.lease_until > now
             })
             .count())
+    }
+
+    async fn trigger_vectorize(&self, _source: &str) -> Result<(), PlannerError> {
+        // 内存队列没有向量索引：显式空操作（测试用）。
+        Ok(())
     }
 
     async fn apply(&self, changeset: ChangeSet) -> Result<(), PlannerError> {

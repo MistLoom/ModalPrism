@@ -141,6 +141,8 @@ async fn one_click_boot_serves_generation_and_releases_leases() {
         lease_until: Timestamp::now(),
         attempt: 0,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: 1,
     };
     running

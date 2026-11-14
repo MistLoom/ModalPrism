@@ -255,7 +255,13 @@ impl Services {
     }
 
     pub async fn queue_cancel(&self, task_id: &TaskId) -> Result<bool, Error> {
-        Ok(self.strata.cancel_task(task_id).await?)
+        let cancelled = self.strata.cancel_task(task_id).await?;
+        // 显式取消同样广播 job.cancelled，任务体可能已不在队列（幂等返回）。
+        if let Ok(Some(stored)) = self.strata.read_task(task_id).await {
+            self.events
+                .job_cancelled(&stored.task, "任务被显式取消");
+        }
+        Ok(cancelled)
     }
 
     pub async fn queue_remove(&self, task_id: &TaskId) -> Result<bool, Error> {

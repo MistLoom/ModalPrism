@@ -408,6 +408,9 @@ fn module_schema() -> Value {
                     }
                 }
             },
+            // 计划与任务上的管道覆盖（第一期第一步）：空数组/缺省沿用信源默认路径。
+            // 项形与信源 pipeline 完全一致（when/run/run_if_accepts/binding/for/after/spec）。
+            "vectorize": {"type": "boolean"},
             "schedule": {
                 "type": "object",
                 "additionalProperties": false,

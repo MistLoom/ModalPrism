@@ -799,3 +799,102 @@ async fn unknown_paths_use_the_standard_error_shape() {
     assert!(map.contains_key("retryable"));
     running.shutdown().await.unwrap();
 }
+
+/// 工具面 `plan.set`：`planId`/`etag` 是工具定位参数，不属于计划文档字段。
+/// 回归：完整参数透传曾触发未知字段拒绝，导致 plan.set 工具必然失败。
+#[tokio::test]
+async fn tool_plan_set_carries_plan_id_and_etag_without_unknown_field_rejection() {
+    let data = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    config_dir(config.path());
+    let running = modalprism_collector::boot(data.path(), config.path(), binds())
+        .await
+        .unwrap();
+    let base = format!("http://{}", running.http());
+    wait_http(&base).await;
+    let http = reqwest::Client::new();
+    // 工具动词入口：POST /api/v1/tools/{verb}（ability/tool 的 forward 也打到这里）。
+    let tool = |verb: &str| http.post(format!("{base}/api/v1/tools/{verb}"));
+
+    let templates = ops_call(&running, "catalog_admin", "templates", json!({})).await;
+    let accessor = templates
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["slug"] == json!("accessor-http"))
+        })
+        .cloned()
+        .expect("缺少 accessor-http 模板");
+    ops_call(
+        &running,
+        "catalog_admin",
+        "create",
+        json!({"kind": "accessor", "slug": "set-http", "doc": accessor["doc"]}),
+    )
+    .await;
+    ops_call(
+        &running,
+        "catalog_admin",
+        "create",
+        json!({
+            "kind": "source",
+            "slug": "set-feed",
+            "doc": {
+                "name": "计划信源",
+                "access": {"accessor": "accessor/set-http", "locator": {"url": "https://example.com/feed"}},
+                "pipeline": [],
+                "schedule": {"interval": "6h"},
+                "admission": {}
+            }
+        }),
+    )
+    .await;
+
+    let response = tool("plan.new")
+        .json(&json!({
+            "name": "待修改计划",
+            "targets": ["source/set-feed"],
+            "trigger": {"kind": "recurring", "interval": "2h"},
+            "vectorize": false,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let plan: Value = response.json().await.unwrap();
+    assert!(status.is_success(), "{status} {plan}");
+    let plan_id = plan["id"].as_str().unwrap().to_string();
+    let etag = plan["etag"].as_str().unwrap().to_string();
+    assert_eq!(plan["vectorize"], json!(false), "缺省 vectorize 应为 false");
+    assert_eq!(plan["pipeline"], json!([]), "缺省 pipeline 应为空列表");
+
+    // 工具面完整参数：planId + etag + 计划字段，必须通过而非报未知字段。
+    let response = tool("plan.set")
+        .json(&json!({
+            "planId": plan_id,
+            "etag": etag,
+            "name": "已修改计划",
+            "vectorize": true,
+            "pipeline": [{"run": ["content-processor/text-filter"]}],
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let updated: Value = response.json().await.unwrap();
+    assert!(status.is_success(), "{status} {updated}");
+    assert_eq!(updated["name"], "已修改计划", "{updated}");
+    assert_eq!(updated["vectorize"], json!(true));
+    assert_eq!(
+        updated["pipeline"][0]["run"][0],
+        json!("content-processor/text-filter")
+    );
+    assert_eq!(updated["vectorize"], json!(true));
+    assert_eq!(
+        updated["pipeline"][0]["run"][0],
+        json!("content-processor/text-filter")
+    );
+
+    running.shutdown().await.unwrap();
+}

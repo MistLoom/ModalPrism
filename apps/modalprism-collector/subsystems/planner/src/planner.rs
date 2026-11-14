@@ -43,6 +43,10 @@ pub struct SourcePlan {
     pub failure_threshold: u32,
     /// 每日产出上限；未配置时不限制。
     pub daily_limit: Option<u64>,
+    /// 计划级管道覆盖（第一期第一步）。`None` 或空数组沿用信源默认路径。
+    pub pipeline: Option<Value>,
+    /// 是否要求向量化（第一期第一步只预留与透传）。
+    pub vectorize: bool,
     /// 触发形态：一次性计划（oneShot）首轮到期派发后即转 completed，不再排下次。
     pub one_shot: bool,
     /// 单次每信源产出上限（来自计划 quota.perRunItems）。
@@ -488,6 +492,10 @@ pub fn make_task(
         lease_until: now,
         attempt: 0,
         batch_key: plan.batch_key.clone(),
+        pipeline: plan.pipeline.clone().filter(|value| {
+            value.as_array().is_some_and(|items| !items.is_empty())
+        }),
+        vectorize: plan.vectorize,
         generation: plan.generation,
     })
 }

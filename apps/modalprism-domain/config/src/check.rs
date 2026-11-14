@@ -205,8 +205,69 @@ fn check_plan(
         }
         Some(other) => diags.push(of(id, format!("未知 trigger.kind: {other}"))),
     }
+    if let Some(vectorize) = module.get("vectorize") {
+        if !vectorize.is_boolean() {
+            diags.push(of(id, "vectorize 只能是布尔"));
+        }
+    }
+    check_pipeline(id, module, diags);
 }
 
+/// 计划级 pipeline 校验：项形与信源 pipeline 一致；组件必须可解析。
+/// `content-processor/` 与 `factor/` 已支持（执行层分别走处理器与测度通过，未知
+/// 因子 id 在执行层明确拒绝）；其余未知组件一律拒绝，不静默忽略、不改写 kind。
+/// 空 pipeline 沿用信源默认路径。
+fn check_pipeline(id: &str, module: &Value, diags: &mut Vec<Diagnostic>) {
+    let Some(pipeline) = module.get("pipeline") else {
+        return;
+    };
+    let Some(items) = pipeline.as_array() else {
+        diags.push(of(id, "pipeline 必须是数组"));
+        return;
+    };
+    for (index, item) in items.iter().enumerate() {
+        let Some(object) = item.as_object() else {
+            diags.push(of(id, format!("pipeline[{index}] 必须是对象")));
+            continue;
+        };
+        for key in object.keys() {
+            if !matches!(
+                key.as_str(),
+                "when" | "run" | "run_if_accepts" | "binding" | "for" | "after" | "spec"
+            ) {
+                diags.push(of(id, format!("pipeline[{index}] 有未知字段: {key}")));
+            }
+        }
+        for key in ["run", "run_if_accepts"] {
+            let Some(entries) = object.get(key).and_then(Value::as_array) else {
+                continue;
+            };
+            for entry in entries {
+                let Some(component) = entry.as_str() else {
+                    diags.push(of(id, format!("pipeline[{index}].{key} 项必须是字符串")));
+                    continue;
+                };
+                match diagnose_component(component) {
+                    None => {}
+                    Some(message) => diags.push(of(id, message)),
+                }
+            }
+        }
+    }
+}
+
+/// 组件可解析性：返回 `Some(message)` 表示不可挂载。
+fn diagnose_component(component: &str) -> Option<String> {
+    if component.starts_with("adapter/")
+        || component.starts_with("content-processor/")
+        || component.starts_with("factor/")
+    {
+        return None;
+    }
+    Some(format!(
+        "未知组件 {component}（组件必须以 adapter/、content-processor/ 或 factor/ 开头）"
+    ))
+}
 fn check_robots(
     id: &str,
     policy: Option<&Value>,

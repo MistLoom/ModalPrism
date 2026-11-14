@@ -101,6 +101,10 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
             "priority": plan["priority"],
             "quota": plan["quota"],
             "stopPolicy": plan["stopPolicy"],
+            // 计划级管道与向量化声明：plan.ls / plan.get 的宣传面承诺透出。
+            // 未声明 pipeline 时按缺省语义回空数组（沿用信源默认路径），vectorize 缺省 false。
+            "pipeline": plan["doc"]["pipeline"].as_array().cloned().unwrap_or_default(),
+            "vectorize": plan["doc"]["vectorize"].as_bool().unwrap_or(false),
             "enabled": enabled,
             "status": status,
             "health": first.as_ref().map(|row| row["health"].clone()).unwrap_or(Value::Null),
@@ -142,7 +146,7 @@ fn plan_project(plan: &Value, targets: &[String], sources: &[Value]) -> String {
 }
 
 /// 取属于当前项目的计划；他项目的计划一律按不存在处理，不泄露存在性。
-async fn plan_row_owned(
+pub(crate) async fn plan_row_owned(
     state: &AppState,
     plan_id: &str,
     project_id: &str,
@@ -282,7 +286,18 @@ async fn create_plan(
     project: crate::ActiveProject,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let map = util::object(&body)?;
+    let plan = create_plan_value(&state, project.id(), &body).await?;
+    Ok(util::ok(&plan))
+}
+
+/// 可复用的新建计划逻辑：HTTP `POST /collection/plans` 与工具面 `plan.new` 共用，
+/// 返回计划行值（信封由调用方包）。
+pub(crate) async fn create_plan_value(
+    state: &AppState,
+    project_id: &str,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    let map = util::object(body)?;
     util::unknown(
         map,
         &[
@@ -299,6 +314,8 @@ async fn create_plan(
             "enabled",
             "deliveryTargets",
             "deliveryEnabled",
+            "pipeline",
+            "vectorize",
         ],
     )?;
     let targets = extract_targets(map);
@@ -310,7 +327,7 @@ async fn create_plan(
         ));
     }
     // 归属校验：跨项目引用会被写进计划，必须在落盘前拒绝。
-    ensure_targets_owned(&state, project.id(), &targets).await?;
+    ensure_targets_owned(state, project_id, &targets).await?;
     let trigger = map
         .get("trigger")
         .filter(|value| !value.is_null())
@@ -321,7 +338,7 @@ async fn create_plan(
         "id": format!("plan/{slug}"),
         "kind": "plan",
         "name": map.get("name").cloned().unwrap_or(json!("采集计划")),
-        "project": project.id(),
+        "project": project_id,
         "targets": targets,
         "trigger": trigger,
     });
@@ -333,6 +350,8 @@ async fn create_plan(
             "quota",
             "stopPolicy",
             "enabled",
+            "pipeline",
+            "vectorize",
         ] {
             if let Some(value) = map.get(key) {
                 object.insert(key.to_string(), value.clone());
@@ -350,7 +369,7 @@ async fn create_plan(
     )?;
     state.services.config_reload()?;
     crate::delivery::sync_plan_rule(
-        &state,
+        state,
         &slug,
         map.get("name").and_then(Value::as_str).unwrap_or("采集计划"),
         map.get("deliveryTargets"),
@@ -358,7 +377,7 @@ async fn create_plan(
     )
     .await?;
     crate::observe::append_audit(
-        &state,
+        state,
         "collection.plan.create",
         "succeeded",
         "新建采集计划",
@@ -366,12 +385,7 @@ async fn create_plan(
         None,
     )
     .await?;
-    let plan = plan_rows(&state)
-        .await?
-        .into_iter()
-        .find(|plan| plan["id"] == slug)
-        .ok_or_else(|| ApiError::not_found(format!("采集计划 {slug}")))?;
-    Ok(util::ok(&plan))
+    plan_with_runs(state, &slug).await
 }
 
 async fn delete_plan(
@@ -505,7 +519,21 @@ async fn update_plan(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let map = util::object(&body)?;
+    let etag = headers.get("if-match").and_then(|v| v.to_str().ok());
+    let plan = update_plan_value(&state, project.id(), &plan_id, etag, &body).await?;
+    Ok(util::ok(&plan))
+}
+
+/// 可复用的修改计划逻辑：HTTP `PATCH /collection/plans/{id}` 与工具面 `plan.set` 共用。
+/// `etag`：HTTP 面从 If-Match 头取；工具面传 `None` 时用当前计划版本自洽通过。
+pub(crate) async fn update_plan_value(
+    state: &AppState,
+    project_id: &str,
+    plan_id: &str,
+    etag: Option<&str>,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    let map = util::object(body)?;
     util::unknown(
         map,
         &[
@@ -521,10 +549,15 @@ async fn update_plan(
             "description",
             "deliveryTargets",
             "deliveryEnabled",
+            "pipeline",
+            "vectorize",
         ],
     )?;
-    let plan = plan_row_owned(&state, &plan_id, project.id()).await?;
-    util::if_match(&headers, plan["etag"].as_str().unwrap_or(""))?;
+    let plan = plan_row_owned(state, plan_id, project_id).await?;
+    match etag {
+        Some(value) => util::if_match_value(value, plan["etag"].as_str().unwrap_or(""))?,
+        None => {}
+    }
     // 改目标也要走归属校验：不能把他项目信源拉进自己的计划。
     // 这里同时把目标归一成模块形态：清单对外回裸 slug，原样落盘会匹配不到信源、计划静默不采。
     let patched_targets = match map.get("targets") {
@@ -537,7 +570,7 @@ async fn update_plan(
                     "计划至少要有一个信源",
                 ));
             }
-            ensure_targets_owned(&state, project.id(), &targets).await?;
+            ensure_targets_owned(state, project_id, &targets).await?;
             Some(targets)
         }
         None => None,
@@ -586,11 +619,11 @@ async fn update_plan(
         if next.get("kind").and_then(Value::as_str) == Some("recurring")
             && next.get("interval").is_none()
         {
-            let default_interval = crate::settings::value(&state, "collection.defaultIntervalMs")
+            let default_interval = crate::settings::value(state, "collection.defaultIntervalMs")
                 .await?
                 .as_i64()
                 .unwrap_or(1_800_000);
-            let minimum = crate::settings::value(&state, "collection.minimumIntervalMs")
+            let minimum = crate::settings::value(state, "collection.minimumIntervalMs")
                 .await?
                 .as_i64()
                 .unwrap_or(60_000)
@@ -622,6 +655,8 @@ async fn update_plan(
         "priority",
         "queue",
         "enabled",
+        "pipeline",
+        "vectorize",
     ] {
         if let Some(value) = map.get(key) {
             doc.insert(key.into(), value.clone());
@@ -635,21 +670,21 @@ async fn update_plan(
         &config::LoadOptions::from_process(),
         &config::Draft {
             kind: "plan".into(),
-            slug: plan_id.clone(),
+            slug: plan_id.to_string(),
             doc: Value::Object(doc),
         },
     )?;
     state.services.config_reload()?;
     crate::delivery::sync_plan_rule(
-        &state,
-        &plan_id,
+        state,
+        plan_id,
         plan["name"].as_str().unwrap_or(""),
         map.get("deliveryTargets"),
         map.get("deliveryEnabled").and_then(Value::as_bool),
     )
     .await?;
     crate::observe::append_audit(
-        &state,
+        state,
         "collection.plan.update",
         "succeeded",
         "调整采集计划",
@@ -657,12 +692,19 @@ async fn update_plan(
         None,
     )
     .await?;
-    let plan = plan_rows(&state)
+    plan_with_runs(state, plan_id).await
+}
+
+/// 计划行 + 进度摘要：plan 写动词与 `plan.get` 共用的返回形状。
+async fn plan_with_runs(state: &AppState, plan_id: &str) -> Result<Value, ApiError> {
+    let bare = plan_id.strip_prefix("plan/").unwrap_or(plan_id);
+    let mut plan = plan_rows(state)
         .await?
         .into_iter()
-        .find(|plan| plan["id"] == plan_id)
-        .ok_or_else(|| ApiError::not_found(format!("采集计划 {plan_id}")))?;
-    Ok(util::ok(&plan))
+        .find(|plan| plan["id"] == bare)
+        .ok_or_else(|| ApiError::not_found(format!("采集计划 {bare}")))?;
+    plan["recentRuns"] = Value::Array(runs_for_plan(state, bare, 5).await?);
+    Ok(plan)
 }
 
 async fn pause_plan(
@@ -672,30 +714,8 @@ async fn pause_plan(
     headers: HeaderMap,
     Json(_body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let plan = plan_row_owned(&state, &plan_id, project.id()).await?;
-    util::if_match(&headers, plan["etag"].as_str().unwrap_or(""))?;
-    config::toggle(
-        &state.config_dir,
-        &config::LoadOptions::from_process(),
-        "plan",
-        &plan_id,
-        false,
-    )?;
-    state.services.config_reload()?;
-    crate::observe::append_audit(
-        &state,
-        "collection.plan.pause",
-        "succeeded",
-        "暂停采集计划",
-        json!({"planId": plan_id}),
-        None,
-    )
-    .await?;
-    let plan = plan_rows(&state)
-        .await?
-        .into_iter()
-        .find(|plan| plan["id"] == plan_id)
-        .ok_or_else(|| ApiError::not_found(format!("采集计划 {plan_id}")))?;
+    let etag = headers.get("if-match").and_then(|v| v.to_str().ok());
+    let plan = pause_resume_plan_value(&state, project.id(), &plan_id, etag, false).await?;
     Ok(util::ok(&plan))
 }
 
@@ -706,31 +726,70 @@ async fn resume_plan(
     headers: HeaderMap,
     Json(_body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let plan = plan_row_owned(&state, &plan_id, project.id()).await?;
-    util::if_match(&headers, plan["etag"].as_str().unwrap_or(""))?;
+    let etag = headers.get("if-match").and_then(|v| v.to_str().ok());
+    let plan = pause_resume_plan_value(&state, project.id(), &plan_id, etag, true).await?;
+    Ok(util::ok(&plan))
+}
+
+/// 可复用的暂停/恢复逻辑：HTTP pause/resume 与工具面 `plan.pause` / `plan.resume` 共用。
+/// `etag`：HTTP 面从 If-Match 头取；工具面传 `None` 时用当前计划版本自洽通过。
+pub(crate) async fn pause_resume_plan_value(
+    state: &AppState,
+    project_id: &str,
+    plan_id: &str,
+    etag: Option<&str>,
+    enable: bool,
+) -> Result<Value, ApiError> {
+    let plan = plan_row_owned(state, plan_id, project_id).await?;
+    if let Some(value) = etag {
+        util::if_match_value(value, plan["etag"].as_str().unwrap_or(""))?;
+    }
     config::toggle(
         &state.config_dir,
         &config::LoadOptions::from_process(),
         "plan",
-        &plan_id,
-        true,
+        plan_id,
+        enable,
     )?;
     state.services.config_reload()?;
+    let (kind, summary) = if enable {
+        ("collection.plan.resume", "恢复采集计划")
+    } else {
+        ("collection.plan.pause", "暂停采集计划")
+    };
     crate::observe::append_audit(
-        &state,
-        "collection.plan.resume",
+        state,
+        kind,
         "succeeded",
-        "恢复采集计划",
+        summary,
         json!({"planId": plan_id}),
         None,
     )
     .await?;
-    let plan = plan_rows(&state)
-        .await?
-        .into_iter()
-        .find(|plan| plan["id"] == plan_id)
-        .ok_or_else(|| ApiError::not_found(format!("采集计划 {plan_id}")))?;
-    Ok(util::ok(&plan))
+    plan_with_runs(state, plan_id).await
+}
+
+/// 计划维度的近期运行：工具面 `plan.get` / `plan.new` 的进度摘要，与运行记录同源。
+pub(crate) async fn runs_for_plan(
+    state: &AppState,
+    plan_id: &str,
+    limit: usize,
+) -> Result<Vec<Value>, ApiError> {
+    let filter = TaskFilter::default();
+    let result = state
+        .services
+        .queue_list(&filter, None, 200)
+        .await
+        .map_err(ApiError::from)?;
+    let mut runs: Vec<Value> = result.rows.iter().map(run_view).collect();
+    let owner = plan_owner_map(state).await?;
+    for run in &mut runs {
+        attribute_plan(run, &owner);
+    }
+    let plan = plan_id.strip_prefix("plan/").unwrap_or(plan_id);
+    runs.retain(|run| run["planId"].as_str() == Some(plan));
+    runs.truncate(limit);
+    Ok(runs)
 }
 
 async fn list_runs(
@@ -902,7 +961,14 @@ async fn create_run(
     State(state): State<Shared>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let map = util::object(&body)?;
+    let operation = create_run_value(&state, &body).await?;
+    Ok(accepted(&operation))
+}
+
+/// 可复用的手动触发逻辑：HTTP `POST /collection/runs` 与工具面 `plan.run` 共用，
+/// 返回异步操作值（202 信封由调用方包）。
+pub(crate) async fn create_run_value(state: &Shared, body: &Value) -> Result<Value, ApiError> {
+    let map = util::object(body)?;
     util::unknown(map, &["sourceId", "mode", "locator", "reason"])?;
     // 信源标识两种形态都接受：其它接口回的是带前缀的模块 id，回传时不能再叠一层前缀。
     let source_id = util::source_slug(&util::non_empty(map, "sourceId")?);
@@ -927,8 +993,8 @@ async fn create_run(
     }
     let reason = util::optional_text(map, "reason")?;
     let run_id = crate::new_id("run");
-    let operation = crate::operations::start(
-        &state,
+    crate::operations::start(
+        state,
         "collection.run",
         vec![json!({"kind": "collectionRun", "id": run_id})],
         json!({
@@ -940,8 +1006,7 @@ async fn create_run(
             "reason": reason,
         }),
     )
-    .await?;
-    Ok(accepted(&operation))
+    .await
 }
 
 pub async fn execute_run(

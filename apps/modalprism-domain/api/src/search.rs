@@ -262,7 +262,7 @@ async fn run_search(
 /// 搜索的可复用入口：工具面的 `tool.search` 与 `POST /search` 走同一实现。
 pub(crate) async fn search_value(state: &Shared, body: Value) -> Result<Value, ApiError> {
     let map = util::object(&body)?;
-    util::unknown(map, &["query", "engine", "projectId", "limit"])?;
+    util::unknown(map, &["query", "engine", "projectId", "limit", "scope"])?;
     let query = util::text(map, "query")?.trim().to_string();
     if query.is_empty() {
         return Err(ApiError::validation("query", "required", "关键词不能为空"));

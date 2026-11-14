@@ -83,6 +83,7 @@ pub const TOOLS: &[ToolSpec] = &[
             ToolParam { name: "sourceId", kind: "string", required: false, summary: "归属信源，缺省为临时信源" },
             ToolParam { name: "selectors", kind: "array", required: false, summary: "识别类型过滤" },
             ToolParam { name: "pipeline", kind: "array", required: false, summary: "显式适配器流水线" },
+            ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "写入后触发向量派生（缺省 false）" },
         ],
     },
     ToolSpec {
@@ -110,6 +111,15 @@ pub const TOOLS: &[ToolSpec] = &[
         ],
     },
     ToolSpec {
+        id: "ls",
+        summary: "发现信源与可挂载组件；可按组件 kind 与标签过滤目录",
+        write: false,
+        params: &[
+            ToolParam { name: "kind", kind: "string", required: false, summary: "组件类型过滤：accessor / adapter / type" },
+            ToolParam { name: "tag", kind: "string", required: false, summary: "标签过滤目录，仅用于发现，不用于调度" },
+        ],
+    },
+    ToolSpec {
         id: "fetch",
         summary: "按地址取回正文",
         write: false,
@@ -126,6 +136,7 @@ pub const TOOLS: &[ToolSpec] = &[
             ToolParam { name: "query", kind: "string", required: true, summary: "关键词" },
             ToolParam { name: "engine", kind: "string", required: false, summary: "引擎 id" },
             ToolParam { name: "limit", kind: "number", required: false, summary: "返回条数" },
+            ToolParam { name: "scope", kind: "string", required: false, summary: "web（默认）检索网页；content 检索已采集内容" },
         ],
     },
     ToolSpec {
@@ -148,11 +159,104 @@ pub const TOOLS: &[ToolSpec] = &[
             ToolParam { name: "variant", kind: "string", required: false, summary: "数据面变体" },
         ],
     },
+    ToolSpec {
+        id: "plan.ls",
+        summary: "列出采集计划（含 pipeline、vectorize 与运行态摘要）",
+        write: false,
+        params: &[
+            ToolParam { name: "status", kind: "string", required: false, summary: "按状态过滤：active / paused" },
+        ],
+    },
+    ToolSpec {
+        id: "plan.get",
+        summary: "读取采集计划详情（含 pipeline、vectorize 与进度）",
+        write: false,
+        params: &[
+            ToolParam { name: "planId", kind: "string", required: true, summary: "计划标识" },
+        ],
+    },
+    ToolSpec {
+        id: "plan.new",
+        summary: "新建采集计划，可声明 pipeline 与 vectorize",
+        write: true,
+        params: &[
+            ToolParam { name: "name", kind: "string", required: false, summary: "计划名称" },
+            ToolParam { name: "targets", kind: "array", required: true, summary: "目标信源" },
+            ToolParam { name: "trigger", kind: "object", required: false, summary: "触发器；缺省每 1 小时" },
+            ToolParam { name: "pipeline", kind: "array", required: false, summary: "计划级适配器流水线覆盖" },
+            ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "采集后写向量索引（缺省 false）" },
+            ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
+            ToolParam { name: "stopPolicy", kind: "object", required: false, summary: "停止条件" },
+            ToolParam { name: "deliveryTargets", kind: "array", required: false, summary: "投递目标" },
+            ToolParam { name: "deliveryEnabled", kind: "boolean", required: false, summary: "是否启用投递" },
+            ToolParam { name: "description", kind: "string", required: false, summary: "说明" },
+        ],
+    },
+    ToolSpec {
+        id: "plan.set",
+        summary: "修改采集计划（trigger、pipeline、vectorize 与进度相关字段）",
+        write: true,
+        params: &[
+            ToolParam { name: "planId", kind: "string", required: true, summary: "计划标识" },
+            ToolParam { name: "trigger", kind: "object", required: false, summary: "触发器" },
+            ToolParam { name: "pipeline", kind: "array", required: false, summary: "计划级适配器流水线覆盖" },
+            ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "采集后写向量索引" },
+            ToolParam { name: "targets", kind: "array", required: false, summary: "目标信源" },
+            ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
+            ToolParam { name: "stopPolicy", kind: "object", required: false, summary: "停止条件" },
+            ToolParam { name: "deliveryTargets", kind: "array", required: false, summary: "投递目标" },
+            ToolParam { name: "deliveryEnabled", kind: "boolean", required: false, summary: "是否启用投递" },
+            ToolParam { name: "enabled", kind: "boolean", required: false, summary: "启停" },
+            ToolParam { name: "name", kind: "string", required: false, summary: "计划名称" },
+            ToolParam { name: "description", kind: "string", required: false, summary: "说明" },
+        ],
+    },
+    ToolSpec {
+        id: "plan.pause",
+        summary: "暂停采集计划",
+        write: true,
+        params: &[ToolParam { name: "planId", kind: "string", required: true, summary: "计划标识" }],
+    },
+    ToolSpec {
+        id: "plan.resume",
+        summary: "恢复采集计划",
+        write: true,
+        params: &[ToolParam { name: "planId", kind: "string", required: true, summary: "计划标识" }],
+    },
+    ToolSpec {
+        id: "plan.run",
+        summary: "立即触发一次信源采集，返回异步操作",
+        write: true,
+        params: &[
+            ToolParam { name: "sourceId", kind: "string", required: true, summary: "信源标识" },
+            ToolParam { name: "mode", kind: "string", required: false, summary: "normal（默认）/ dryRun / singleLocator" },
+            ToolParam { name: "locator", kind: "string", required: false, summary: "singleLocator 模式的地址" },
+            ToolParam { name: "reason", kind: "string", required: false, summary: "触发原因" },
+        ],
+    },
 ];
 
 /// 按动词名取工具声明。
 pub fn tool(id: &str) -> Option<&'static ToolSpec> {
     TOOLS.iter().find(|item| item.id == id)
+}
+
+/// 对外默认宣传的工具短名：MCP Tools 与 CLI 短命令共用这一份。
+///
+/// 兼容别名（`tool.*` 长名、`plan.list`）不在宣传面里，但仍可调用（见 [`resolve_alias`]）。
+pub const ADVERTISED_TOOLS: &[&str] = &[
+    "once", "search", "ls", "read", "fetch", "plan.ls", "plan.get", "plan.new", "plan.set",
+    "plan.pause", "plan.resume", "plan.run",
+];
+
+/// 兼容别名解析：`tool.*` 长名剥前缀，`plan.list` 归一到 `plan.ls`。
+/// 解析结果如果仍是工具动词就照常分发；旧名是否用 profile 收敛是未决设计，这里不做。
+pub fn resolve_alias(name: &str) -> &str {
+    let stripped = name.strip_prefix("tool.").unwrap_or(name);
+    match stripped {
+        "plan.list" => "plan.ls",
+        other => other,
+    }
 }
 
 /// 工具面的全部动词名，与声明顺序一致。
@@ -265,9 +369,14 @@ pub const COLLECTOR: &[Ability] = &[
     Ability {
         id: "tool",
         methods: &[
-            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+            "catalog", "fetch", "ls", "once", "parse", "plan.get", "plan.ls", "plan.new",
+            "plan.pause", "plan.resume", "plan.run", "plan.set", "probe", "read", "save",
+            "search",
         ],
-        read_only: &["catalog", "fetch", "parse", "probe", "read", "search"],
+        read_only: &[
+            "catalog", "fetch", "ls", "parse", "plan.get", "plan.ls", "probe", "read",
+            "search",
+        ],
     },
     Ability {
         id: "type_article",
@@ -351,7 +460,9 @@ pub const COLLECTOR_OPS: &[Exposure] = &[
     Exposure {
         id: "tool",
         methods: &[
-            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+            "catalog", "fetch", "ls", "once", "parse", "plan.get", "plan.ls", "plan.new",
+            "plan.pause", "plan.resume", "plan.run", "plan.set", "probe", "read", "save",
+            "search",
         ],
     },
 ];
@@ -407,9 +518,14 @@ pub const AGENT: &[Ability] = &[
     Ability {
         id: "tool",
         methods: &[
-            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+            "catalog", "fetch", "ls", "once", "parse", "plan.get", "plan.ls", "plan.new",
+            "plan.pause", "plan.resume", "plan.run", "plan.set", "probe", "read", "save",
+            "search",
         ],
-        read_only: &["catalog", "fetch", "parse", "probe", "read", "search"],
+        read_only: &[
+            "catalog", "fetch", "ls", "parse", "plan.get", "plan.ls", "probe", "read",
+            "search",
+        ],
     },
 ];
 
@@ -485,7 +601,9 @@ pub const CONSOLE: &[Exposure] = &[
     Exposure {
         id: "tool",
         methods: &[
-            "catalog", "fetch", "once", "parse", "probe", "read", "save", "search",
+            "catalog", "fetch", "ls", "once", "parse", "plan.get", "plan.ls", "plan.new",
+            "plan.pause", "plan.resume", "plan.run", "plan.set", "probe", "read", "save",
+            "search",
         ],
     },
 ];
@@ -524,7 +642,10 @@ pub const AGENT_MCP: &[Exposure] = &[
     },
     Exposure {
         id: "tool",
-        methods: &["catalog", "fetch", "parse", "probe", "read", "search"],
+        methods: &[
+            "catalog", "fetch", "ls", "parse", "plan.get", "plan.ls", "probe", "read",
+            "search",
+        ],
     },
 ];
 
@@ -535,10 +656,13 @@ pub const AGENT_MCP_WRITES: &[Exposure] = &[
         id: "catalog_admin",
         methods: &["create", "toggle", "update"],
     },
-    // 单次采集与声明固化：可恢复写（内容追加、声明草稿），且必须先通过回环 API 的项目校验。
+    // 单次采集、声明固化与计划生命周期：可恢复写（内容追加、声明草稿），
+    // 且必须先通过回环 API 的项目校验。
     Exposure {
         id: "tool",
-        methods: &["once", "save"],
+        methods: &[
+            "once", "plan.new", "plan.pause", "plan.resume", "plan.run", "plan.set", "save",
+        ],
     },
 ];
 
@@ -654,6 +778,81 @@ mod tests {
                 "动词 {} 的读写声明与 TOOLS 表不一致",
                 spec.id
             );
+        }
+    }
+
+    /// 验收：默认宣传面（MCP Tools 与 CLI 短命令）必须是既定短名。
+    #[test]
+    fn default_surface_is_the_accepted_short_names() {
+        for name in ADVERTISED_TOOLS {
+            assert!(tool(name).is_some(), "默认宣传短名 {name} 不在 TOOLS 表");
+        }
+    }
+
+    /// 验收：once 与 plan.new/plan.set 都能承载 pipeline 与 vectorize 字段。
+    #[test]
+    fn pipeline_and_vectorize_are_carried_by_the_accepted_verbs() {
+        for verb in ["once", "plan.new", "plan.set"] {
+            let spec = tool(verb).expect("动词应存在");
+            for field in ["pipeline", "vectorize"] {
+                assert!(
+                    spec.params.iter().any(|param| param.name == field),
+                    "{verb} 缺少 {field} 字段"
+                );
+            }
+        }
+    }
+
+    /// 验收：不为分层或派生新增或宣传内部方法与新工具。
+    #[test]
+    fn forbidden_tools_stay_out_of_the_surface() {
+        for name in [
+            "processor.run",
+            "factor.compute",
+            "adapter.validate",
+            "pipeline.test",
+        ] {
+            assert!(tool(name).is_none(), "内部方法 {name} 不得成为工具动词");
+            assert!(
+                !name.split('.').next().is_some_and(|head| head == "vector"),
+                "vector.* 不得进入工具面"
+            );
+        }
+        assert!(
+            tool_ids().iter().all(|id| !id.starts_with("vector.")),
+            "vector.* 工具不得进入 TOOLS 表"
+        );
+        // 工具名与必填参数不得是模块路径 / crate 名 / 文件系统路径。
+        for spec in TOOLS {
+            assert!(
+                !spec.id.contains('/') && !spec.id.contains('\\'),
+                "工具名 {} 不得携带路径分隔符",
+                spec.id
+            );
+            for param in spec.params {
+                assert!(
+                    param.kind != "path",
+                    "{} 的参数 {} 不得要求文件系统路径",
+                    spec.id,
+                    param.name
+                );
+            }
+        }
+        // 开发 SKILL 不进主路径：没有任何动词以 skill 命名。
+        assert!(tool_ids().iter().all(|id| !id.starts_with("skill")));
+    }
+
+    /// 验收：兼容别名按设计保留——`tool.*` 长名与 `plan.list` 归一到默认短名，
+    /// 归一结果仍是可用动词；profile 收敛是未决项，这里不锁定。
+    #[test]
+    fn compat_aliases_resolve_to_accepted_verbs() {
+        assert_eq!(resolve_alias("tool.once"), "once");
+        assert_eq!(resolve_alias("tool.plan.new"), "plan.new");
+        assert_eq!(resolve_alias("plan.list"), "plan.ls");
+        // 非 tool.* 前缀的名字不受影响。
+        assert_eq!(resolve_alias("catalog_admin.list"), "catalog_admin.list");
+        for alias in ["tool.once", "plan.list"] {
+            assert!(tool(resolve_alias(alias)).is_some(), "别名 {alias} 应仍可用");
         }
     }
 }

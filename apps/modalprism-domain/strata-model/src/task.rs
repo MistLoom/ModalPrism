@@ -59,6 +59,13 @@ pub struct AccessTask {
     pub attempt: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_key: Option<String>,
+    /// 任务级管道覆盖（第一期第一步）：`None` 或空数组沿用信源默认路径。
+    /// 项形与信源/计划 pipeline 一致（when/run/run_if_accepts/binding/for/after/spec）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<Value>,
+    /// 是否要求向量化（第一期第一步只预留与透传，不写向量索引）。
+    #[serde(default)]
+    pub vectorize: bool,
     pub generation: u64,
 }
 

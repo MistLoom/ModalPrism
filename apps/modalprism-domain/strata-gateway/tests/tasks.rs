@@ -39,6 +39,8 @@ fn task(id: &str, locator: &str) -> AccessTask {
         lease_until: Timestamp::now(),
         attempt: 0,
         batch_key: None,
+        pipeline: None,
+        vectorize: false,
         generation: 1,
     }
 }
