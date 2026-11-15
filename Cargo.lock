@@ -1086,6 +1086,7 @@ dependencies = [
  "accessors-builtin",
  "adapters",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "config",
  "egress",

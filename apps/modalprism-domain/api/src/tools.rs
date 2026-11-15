@@ -52,14 +52,23 @@ async fn list_tools() -> Response {
     util::ok(&catalog())
 }
 
+/// 入口面标记：CLI（`x-modalprism-surface: cli`）与进程同主体，允许 `--file`
+/// 走统一摄入函数；MCP / 其它 HTTP 调用方一律不接受本地文件路径参数。
+const CLI_SURFACE: &str = "cli";
+
 async fn run_tool(
     State(state): State<Shared>,
     project: crate::ActiveProject,
+    headers: axum::http::HeaderMap,
     AxPath(verb): AxPath<String>,
     body: Option<axum::Json<Value>>,
 ) -> Result<Response, ApiError> {
     let args = body.map(|axum::Json(value)| value).unwrap_or(Value::Null);
-    let payload = call(&state, project.id(), &verb, args).await?;
+    let surface = headers
+        .get("x-modalprism-surface")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let payload = call(&state, project.id(), &verb, args, surface == CLI_SURFACE).await?;
     Ok(util::ok(&payload))
 }
 
@@ -69,6 +78,7 @@ pub async fn call(
     project_id: &str,
     verb: &str,
     args: Value,
+    allow_file: bool,
 ) -> Result<Value, ApiError> {
     let app: &AppState = state.as_ref();
     let args = if args.is_null() { json!({}) } else { args };
@@ -82,8 +92,8 @@ pub async fn call(
         .to_string();
     match verb {
         "catalog" => Ok(catalog()),
-        "once" => once(app, &args).await,
-        "probe" => probe(app, &args).await,
+        "once" => once(app, &args, allow_file).await,
+        "probe" => probe(app, &args, allow_file).await,
         "save" => save(app, &project_id, &args).await,
         "fetch" => crate::surface::fetch_value(state, args).await,
         // scope=content：检索已采集内容（含向量开启后的语义检索），与网页检索同一动词区分。
@@ -135,8 +145,8 @@ pub async fn call(
     }
 }
 
-async fn once(state: &AppState, args: &Value) -> Result<Value, ApiError> {
-    let request = assembly::tools::OnceRequest::parse(&state.services, args)
+async fn once(state: &AppState, args: &Value, allow_file: bool) -> Result<Value, ApiError> {
+    let request = assembly::tools::OnceRequest::parse_for_surface(&state.services, args, allow_file)
         .await
         .map_err(tool_error)?;
     assembly::tools::once(&state.services, request)
@@ -144,8 +154,8 @@ async fn once(state: &AppState, args: &Value) -> Result<Value, ApiError> {
         .map_err(tool_error)
 }
 
-async fn probe(state: &AppState, args: &Value) -> Result<Value, ApiError> {
-    assembly::tools::probe(&state.services, args)
+async fn probe(state: &AppState, args: &Value, allow_file: bool) -> Result<Value, ApiError> {
+    assembly::tools::probe(&state.services, args, allow_file)
         .await
         .map_err(tool_error)
 }

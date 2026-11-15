@@ -75,9 +75,10 @@ pub const TOOLS: &[ToolSpec] = &[
         summary: "一次完成 取数 → 识别 → 适配 → 写入或返回（类型未识别不失败）",
         write: true,
         params: &[
-            ToolParam { name: "url", kind: "string", required: false, summary: "要采集的地址" },
+            ToolParam { name: "url", kind: "string", required: false, summary: "要采集的地址（仅 http/https）" },
             ToolParam { name: "text", kind: "string", required: false, summary: "直接给出的文本" },
-            ToolParam { name: "file", kind: "string", required: false, summary: "本地文件路径" },
+            ToolParam { name: "content", kind: "string", required: false, summary: "直接给出的内容本体（base64）；url/text/content 三选一" },
+            ToolParam { name: "mediaType", kind: "string", required: false, summary: "text/content 的媒体类型，缺省按内容推导" },
             ToolParam { name: "mode", kind: "string", required: false, summary: "preview（默认）或 store" },
             ToolParam { name: "hint", kind: "string", required: false, summary: "content（默认）或 discover" },
             ToolParam { name: "sourceId", kind: "string", required: false, summary: "归属信源，缺省为临时信源" },
@@ -91,9 +92,9 @@ pub const TOOLS: &[ToolSpec] = &[
         summary: "只识别不落库：类型分布、区域与建议声明",
         write: false,
         params: &[
-            ToolParam { name: "url", kind: "string", required: false, summary: "要探测的地址" },
+            ToolParam { name: "url", kind: "string", required: false, summary: "要探测的地址（仅 http/https）" },
             ToolParam { name: "text", kind: "string", required: false, summary: "直接给出的文本" },
-            ToolParam { name: "file", kind: "string", required: false, summary: "本地文件路径" },
+            ToolParam { name: "content", kind: "string", required: false, summary: "直接给出的内容本体（base64）；url/text/content 三选一" },
             ToolParam { name: "selectors", kind: "array", required: false, summary: "识别类型过滤" },
         ],
     },
@@ -833,6 +834,12 @@ mod tests {
                 assert!(
                     param.kind != "path",
                     "{} 的参数 {} 不得要求文件系统路径",
+                    spec.id,
+                    param.name
+                );
+                assert!(
+                    param.name != "file" && param.name != "path",
+                    "{} 的参数 {} 不得进入工具宣传面：本机文件读取只开放给 CLI 入口",
                     spec.id,
                     param.name
                 );

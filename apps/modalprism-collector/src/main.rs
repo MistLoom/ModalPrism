@@ -128,6 +128,12 @@ async fn cli_tool(rest: Vec<String>) -> Result<(), assembly::Error> {
         return Ok(());
     }
     let verb = positional.remove(0);
+    // `--file` 只在 CLI 入口开放：调用者与进程同主体，本地文件读取由领域 API 的
+    // 统一摄入函数完成（摄入根 <data_dir>/inbox），MCP / 其它 HTTP 调用方不带此参数。
+    let file_value = pairs
+        .iter()
+        .position(|(name, _)| name.eq_ignore_ascii_case("file"))
+        .map(|index| pairs.remove(index).1);
     let spec = surface::tool(&verb).ok_or_else(|| {
         assembly::Error::new(format!(
             "未知工具动词: {verb}（可用: {}）",
@@ -186,8 +192,12 @@ async fn cli_tool(rest: Vec<String>) -> Result<(), assembly::Error> {
             )));
         }
     }
+    if let Some(path) = file_value {
+        payload.insert("file".to_string(), json!(path));
+    }
     let mut request = reqwest::Client::new()
         .post(format!("{http}/api/v1/tools/{verb}"))
+        .header("x-modalprism-surface", "cli")
         .json(&Value::Object(payload));
     if let Some(project) = project {
         request = request.header("x-project-id", project);

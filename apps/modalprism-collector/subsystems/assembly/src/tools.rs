@@ -4,13 +4,15 @@
 //! 任务来自临时请求而不是信源声明，因此没有重试与游标语义，失败按「降级返回」处理——
 //! 类型识别不出来也照样产出原始面与区域索引，不让一次临时采集因为识别问题直接失败。
 
-use std::path::Path;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use adapters::{
     Admission, DetectorChoice, PartBytes, Registry, RunRequest, empty_identities, parse_pipeline,
     run, source_view,
 };
+use base64::Engine;
 use bytes::Bytes;
 use strata_model::{
     ApplyOpts, FacetKind, IdentityKey, Locator, Op, PartId, PartRole, Producer, SourceId,
@@ -47,6 +49,7 @@ impl Mode {
 }
 
 /// 一次单次采集的入参。
+#[derive(Debug)]
 pub struct OnceRequest {
     /// URL / 文本 / 本地文件三选一。
     pub input: Vec<u8>,
@@ -63,8 +66,23 @@ pub struct OnceRequest {
 }
 
 impl OnceRequest {
-    /// 从工具参数解析。`file` 读取受工作区当前目录约束，避免任意路径读取。
+    /// 从工具参数解析（MCP / HTTP 默认面）。不接受 `file` / `path`：
+    /// 本地文件读取是 CLI 入口独有的取数能力，MCP 只收内容本体。
     pub async fn parse(services: &Arc<Services>, args: &Value) -> Result<Self, Error> {
+        Self::parse_for_surface(services, args, false).await
+    }
+
+    /// CLI 入口解析：调用者与进程同主体，允许 `--file` 经统一摄入函数读取。
+    pub async fn parse_for_cli(services: &Arc<Services>, args: &Value) -> Result<Self, Error> {
+        Self::parse_for_surface(services, args, true).await
+    }
+
+    /// 按入口面解析：`allow_file` 只对 CLI 入口为 true。
+    pub async fn parse_for_surface(
+        services: &Arc<Services>,
+        args: &Value,
+        allow_file: bool,
+    ) -> Result<Self, Error> {
         let mode = Mode::parse(args.get("mode").and_then(Value::as_str))?;
         let hint = args
             .get("hint")
@@ -85,18 +103,34 @@ impl OnceRequest {
             })
             .unwrap_or_else(|| format!("{ADHOC_PREFIX}adhoc"));
 
+        if args.get("path").and_then(Value::as_str).is_some() {
+            return Err(Error::new(
+                "path 不是本工具面的参数：请改用 url / text / content（本地文件仅 CLI 入口的 --file）",
+            ));
+        }
         let url = args
             .get("url")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let text = args.get("text").and_then(Value::as_str);
-        let file = args
-            .get("file")
-            .or_else(|| args.get("path"))
+        let content = args
+            .get("content")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
+        let file = if allow_file {
+            args.get("file")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        } else if args.get("file").and_then(Value::as_str).is_some() {
+            return Err(Error::new(
+                "file 不是本工具面的参数：本地文件读取只开放给 CLI 入口，MCP 请改用 url / text / content",
+            ));
+        } else {
+            None
+        };
 
         let (input, media_type, locator) = if let Some(url) = url {
             let parsed = url::Url::parse(url)
@@ -123,20 +157,26 @@ impl OnceRequest {
                     url: format!("text:{}", short_hash(text)),
                 },
             )
-        } else if let Some(path) = file {
-            let path = Path::new(path);
-            let bytes = std::fs::read(path).map_err(|error| {
-                Error::new(format!("读取文件失败（{}）: {error}", path.display()))
-            })?;
+        } else if let Some(encoded) = content {
+            let mut bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| Error::new("content 不是合法的 base64"))?;
+            bytes.truncate(MAX_BYTES);
+            let locator = content_locator(&bytes);
             (
-                bytes.iter().take(MAX_BYTES).copied().collect::<Vec<u8>>(),
-                guess_media(path),
-                Locator::Url {
-                    url: format!("file:{}", path.display()),
-                },
+                bytes,
+                args.get("mediaType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+                locator,
             )
+        } else if let Some(raw) = file {
+            let (bytes, media) = read_inbox_file(services, raw)?;
+            let locator = content_locator(&bytes);
+            (bytes, media, locator)
         } else {
-            return Err(Error::new("url / text / file 至少提供一个"));
+            return Err(Error::new("url / text / content 至少提供一个"));
         };
 
         // vectorize 只能是布尔（缺省 false）；本步只预留，不写向量索引。
@@ -327,7 +367,11 @@ pub async fn once(services: &Arc<Services>, request: OnceRequest) -> Result<Valu
 }
 
 /// 只识别不落库：类型分布、区域与建议的适配器/声明。
-pub async fn probe(services: &Arc<Services>, args: &Value) -> Result<Value, Error> {
+pub async fn probe(
+    services: &Arc<Services>,
+    args: &Value,
+    allow_file: bool,
+) -> Result<Value, Error> {
     let Some(prism) = services.prism() else {
         return Ok(json!({
             "available": false,
@@ -351,7 +395,7 @@ pub async fn probe(services: &Arc<Services>, args: &Value) -> Result<Value, Erro
     let text = match args.get("text").and_then(Value::as_str) {
         Some(text) if !text.trim().is_empty() => text.to_string(),
         _ => {
-            let request = OnceRequest::parse(services, args).await?;
+            let request = OnceRequest::parse_for_surface(services, args, allow_file).await?;
             String::from_utf8_lossy(&request.input).into_owned()
         }
     };
@@ -487,6 +531,63 @@ async fn fetch_bytes(services: &Arc<Services>, url: &str) -> Result<(Vec<u8>, St
         .copied()
         .collect::<Vec<u8>>();
     Ok((bytes, media))
+}
+
+/// 统一摄入函数：从摄入根 `<data_dir>/inbox` 读取一个普通文件。
+/// 相对路径相对摄入根解析；绝对路径规范化（含符号链接）后必须仍落在摄入根内，
+/// 借链接逃出根的一律拒绝；设备文件等非普通文件拒绝。按 [`MAX_BYTES`] 边读边截断，
+/// 不把整个文件先读进内存。
+fn read_inbox_file(services: &Arc<Services>, raw: &str) -> Result<(Vec<u8>, String), Error> {
+    let root = services.data_dir().join("inbox");
+    std::fs::create_dir_all(&root)
+        .map_err(|error| Error::new(format!("创建摄入根失败: {error}")))?;
+    let root = root
+        .canonicalize()
+        .map_err(|error| Error::new(format!("摄入根不可达: {error}")))?;
+    let raw_path = Path::new(raw);
+    let candidate: PathBuf = if raw_path.is_absolute() {
+        raw_path.to_path_buf()
+    } else {
+        root.join(raw_path)
+    };
+    // canonicalize 处理 `..` 与符号链接；路径不存在或中间环节不可达在此报错。
+    let resolved = candidate
+        .canonicalize()
+        .map_err(|error| Error::new(format!("文件不存在或不可达: {error}")))?;
+    if !resolved.starts_with(&root) {
+        return Err(Error::new("路径越界：只允许读取摄入根 inbox 内的文件"));
+    }
+    let meta = std::fs::metadata(&resolved)
+        .map_err(|error| Error::new(format!("读取文件元数据失败: {error}")))?;
+    if !meta.is_file() {
+        return Err(Error::new("只允许读取普通文件"));
+    }
+    let mut file = std::fs::File::open(&resolved)
+        .map_err(|error| Error::new(format!("打开文件失败: {error}")))?;
+    let mut bytes = Vec::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buf)
+            .map_err(|error| Error::new(format!("读取文件失败: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_BYTES.saturating_sub(bytes.len());
+        if remaining == 0 {
+            break;
+        }
+        let take = read.min(remaining);
+        bytes.extend_from_slice(&buf[..take]);
+    }
+    Ok((bytes, guess_media(&resolved)))
+}
+
+/// 内容身份：内容哈希。定位器不携带任何本机路径信息。
+fn content_locator(bytes: &[u8]) -> Locator {
+    Locator::Url {
+        url: format!("content:{}", strata_model::content_hash(bytes)),
+    }
 }
 
 fn guess_media(path: &Path) -> String {

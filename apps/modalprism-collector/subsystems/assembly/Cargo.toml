@@ -12,6 +12,7 @@ accessors = { path = "../accessors" }
 accessors-builtin = { path = "../accessors-builtin" }
 adapters = { path = "../adapters" }
 async-trait.workspace = true
+base64.workspace = true
 bytes.workspace = true
 config = { path = "../../../modalprism-domain/config" }
 egress = { path = "../egress" }

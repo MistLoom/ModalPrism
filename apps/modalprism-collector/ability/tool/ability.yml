@@ -17,7 +17,8 @@ methods:
       properties:
         url: { type: string }
         text: { type: string }
-        file: { type: string }
+        content: { type: string, description: 内容本体（base64）；url/text/content 三选一 }
+        mediaType: { type: string }
         mode: { type: string }
         hint: { type: string }
         sourceId: { type: string }
@@ -35,7 +36,7 @@ methods:
       properties:
         url: { type: string }
         text: { type: string }
-        file: { type: string }
+        content: { type: string }
         selectors:
           type: array
           items: { type: string }
