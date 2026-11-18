@@ -7,6 +7,7 @@ mod persist;
 mod planner;
 mod queue;
 mod runner;
+mod storage;
 
 pub use cadence::{CadenceInput, next_interval};
 pub use error::PlannerError;
@@ -14,4 +15,4 @@ pub use health::{Health, Thresholds, counts_toward_health};
 pub use persist::{MemoryPersist, Persist};
 pub use planner::{Capacities, Planner, SourcePlan, SourceStatus, make_task};
 pub use queue::{MemoryQueue, Queue};
-pub use runner::{Classified, Handler, Quality, ReceiptBody, Receipts, TaskSuccess, backoff};
+pub use runner::{BatchCommit, Classified, Handler, Quality, ReceiptBody, Receipts, TaskSuccess, backoff};

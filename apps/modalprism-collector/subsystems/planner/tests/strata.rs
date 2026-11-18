@@ -44,6 +44,7 @@ fn plan() -> SourcePlan {
         ceiling: Duration::from_secs(6 * 60 * 60),
         batch_key: None,
         enabled: true,
+        paused: false,
         expected_period: None,
         yield_drop_ratio: 0.3,
         failure_threshold: 5,
@@ -55,6 +56,9 @@ fn plan() -> SourcePlan {
         stagnation_cycles: None,
         pipeline: None,
         vectorize: false,
+        storage_root: None,
+        storage_classify: false,
+        strategy: None,
     }
 }
 
@@ -292,6 +296,7 @@ impl Handler for Write {
             cost: 0,
             adapters: Vec::new(),
             follows: Vec::new(),
+            ops_committed: false,
         })
     }
 }

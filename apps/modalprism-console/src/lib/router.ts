@@ -5,6 +5,7 @@ export type PageId =
   | "projects"
   | "sources"
   | "plans"
+  | "strategies"
   | "tasks"
   | "content"
   | "delivery"
@@ -27,6 +28,7 @@ export const ROUTES: RouteDef[] = [
   { id: "projects", label: "项目", kicker: "projects", group: "workspace" },
   { id: "sources", label: "信源", kicker: "sources", group: "workspace" },
   { id: "plans", label: "计划", kicker: "plans", group: "workspace" },
+  { id: "strategies", label: "策略", kicker: "strategies", group: "workspace" },
   { id: "tasks", label: "任务", kicker: "tasks", group: "workspace" },
   { id: "content", label: "内容", kicker: "content", group: "workspace" },
   { id: "delivery", label: "内容投递", kicker: "delivery", group: "workspace" },

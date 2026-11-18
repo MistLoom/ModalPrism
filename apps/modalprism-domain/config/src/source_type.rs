@@ -526,6 +526,7 @@ pub const BUILTIN_SOURCES: &[BuiltinSource] = &[
     source("stat-news", HEALTH),
     source("the-lancet", HEALTH),
     source("ieee-spectrum", TECH),
+    source("crates-io-index", TECH),
     source("mit-technology-review", TECH),
     source("wired", TECH),
     source("inbound-items", ACCESS),
@@ -631,8 +632,8 @@ mod tests {
         // 计划覆盖的信源不参与调度，需用户自建计划。
         let plans = crate::author::entries(&dir, "plan").expect("读取内置计划");
         assert!(
-            (2..=3).contains(&plans.len()),
-            "自带计划只保留 2-3 个示例，实际 {} 个",
+            (2..=4).contains(&plans.len()),
+            "自带计划只保留 2-4 个示例，实际 {} 个",
             plans.len()
         );
         let mut covered: std::collections::BTreeMap<&str, Vec<&str>> =

@@ -28,6 +28,16 @@ pub fn routes() -> Router<Shared> {
         .route("/collection/jobs", post(create_job))
         .route("/collection/runs", get(list_runs).post(create_run))
         .route("/collection/runs/{runId}", get(get_run))
+        .route(
+            "/collection/strategies",
+            get(list_strategies).post(create_strategy),
+        )
+        .route(
+            "/collection/strategies/{strategyId}",
+            get(get_strategy)
+                .patch(update_strategy)
+                .delete(delete_strategy),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +73,23 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
             .cloned()
     };
     let mut plans = Vec::new();
+    // 运行中判定共用一次队列查询：有处于 running 状态任务的计划投影为 running。
+    let filter = TaskFilter::default();
+    let task_rows = state
+        .services
+        .queue_list(&filter, None, 200)
+        .await
+        .map_err(ApiError::from)?
+        .rows;
+    let running_plans: std::collections::BTreeSet<String> = task_rows
+        .iter()
+        .filter(|row| row.status == "leased")
+        .filter_map(|row| {
+            row.plan_id
+                .as_deref()
+                .map(|id| id.strip_prefix("plan/").unwrap_or(id).to_string())
+        })
+        .collect();
     for plan in list["plans"].as_array().cloned().unwrap_or_default() {
         let slug = plan["slug"].as_str().unwrap_or_default().to_string();
         let targets: Vec<String> = plan["targets"]
@@ -73,20 +100,32 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
             .filter_map(|value| value.as_str().map(util::source_slug))
             .collect();
         let enabled = plan["enabled"].as_bool().unwrap_or(true);
+        // paused 与 enabled 是两个可持久化字段（切片 2）：enabled 表示是否投入调度，
+        // paused 只在 enabled 为 true 时表示主动中断（保留游标与已落盘数据）。
+        let paused = plan["paused"]
+            .as_bool()
+            .or_else(|| plan["doc"]["paused"].as_bool())
+            .unwrap_or(false);
         // 计划归属：声明优先，其次按首个目标信源的归属派生，最后回落默认项目。
         let project = plan_project(&plan, &targets, &sources);
         // 运行态借首个目标信源的调度视图（节律按目标数复制派发，视图取其一即足）。
         let first = targets.first().and_then(|id| source_status(id));
-        let status = if !enabled {
-            "paused"
-        } else if first
+        let exhausted = first
             .as_ref()
-            .and_then(|row| row["enabled"].as_bool())
-            .unwrap_or(true)
-        {
-            "active"
-        } else {
+            .and_then(|row| row["skipReason"].as_str())
+            .is_some_and(|reason| reason == "quota-paused" || reason == "quota-exhausted");
+        let status = if !enabled {
+            // enabled=false：草稿/停用，未投入调度；与主动中断的 paused 可区分。
             "disabled"
+        } else if paused {
+            "paused"
+        } else if running_plans.contains(&slug) {
+            "running"
+        } else if exhausted {
+            // 已有的 exhausted：计划累计额度耗尽。
+            "exhausted"
+        } else {
+            "active"
         };
         let etag = util::etag(&[&slug, &util::hash_short(&plan["doc"].to_string())]);
         let rule = delivery.get(&slug).cloned().unwrap_or(Value::Null);
@@ -106,6 +145,7 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
             "pipeline": plan["doc"]["pipeline"].as_array().cloned().unwrap_or_default(),
             "vectorize": plan["doc"]["vectorize"].as_bool().unwrap_or(false),
             "enabled": enabled,
+            "paused": paused,
             "status": status,
             "health": first.as_ref().map(|row| row["health"].clone()).unwrap_or(Value::Null),
             "nextRunAt": first.as_ref().map(|row| row["nextRunAt"].clone()).unwrap_or(Value::Null),
@@ -143,6 +183,55 @@ fn plan_project(plan: &Value, targets: &[String], sources: &[Value]) -> String {
         }
     }
     crate::projects::DEFAULT_PROJECT_ID.to_string()
+}
+
+/// 计划级管道校验（切片 2 预留）：形状必须是 `[{ "run": [适配器id…] }]`，引用的
+/// 适配器必须存在于当前配置清单；不兼容的管道在 new/set 时拒绝。缺省（null / 空数组）
+/// 表示沿用信源默认路径；本切片不实现内容处理器或向量写入，只做声明校验与透传。
+fn validate_pipeline(state: &AppState, value: Option<&Value>) -> Result<(), ApiError> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| ApiError::validation("pipeline", "type", "pipeline 必须是数组"))?;
+    if items.is_empty() {
+        return Ok(());
+    }
+    let snapshot = config::validate(&state.config_dir, &crate::catalog::options())?;
+    let known: std::collections::BTreeSet<&str> = snapshot
+        .modules
+        .iter()
+        .filter(|(_, module)| module.get("kind").and_then(Value::as_str) == Some("adapter"))
+        .map(|(id, _)| id.as_str())
+        .collect();
+    for item in items {
+        let run = item.get("run").and_then(Value::as_array).ok_or_else(|| {
+            ApiError::validation(
+                "pipeline",
+                "invalid",
+                format!("管道步骤必须是 {{\"run\": [适配器…]}}: {item}"),
+            )
+        })?;
+        for adapter in run {
+            let Some(id) = adapter.as_str() else {
+                return Err(ApiError::validation(
+                    "pipeline",
+                    "invalid",
+                    "run 数组元素必须是适配器 id 字符串",
+                ));
+            };
+            if !known.contains(id) {
+                let available = known.iter().copied().collect::<Vec<_>>().join(" / ");
+                return Err(ApiError::validation(
+                    "pipeline",
+                    "unknownAdapter",
+                    format!("未知适配器: {id}（已声明: {available}）"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 取属于当前项目的计划；他项目的计划一律按不存在处理，不泄露存在性。
@@ -290,6 +379,33 @@ async fn create_plan(
     Ok(util::ok(&plan))
 }
 
+/// M-05：storage 声明校验。root 需配合 classify: true——独立库路由（自有
+/// StoragePaths）未实现，当前只有可读文件树物化；拒绝「设了根却以为数据在根下」的误配。
+fn validate_storage(storage: Option<&Value>) -> Result<(), ApiError> {
+    let Some(storage) = storage else {
+        return Ok(());
+    };
+    let root = storage
+        .get("root")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if root.is_empty() {
+        return Ok(());
+    }
+    let classify = storage
+        .get("classify")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !classify {
+        return Err(ApiError::validation(
+            "storage",
+            "invalid",
+            "storage.root 当前需配合 storage.classify: true 使用（独立库路由未实现，只落可读文件树）",
+        ));
+    }
+    Ok(())
+}
+
 /// 可复用的新建计划逻辑：HTTP `POST /collection/plans` 与工具面 `plan.new` 共用，
 /// 返回计划行值（信封由调用方包）。
 pub(crate) async fn create_plan_value(
@@ -306,6 +422,9 @@ pub(crate) async fn create_plan_value(
             "description",
             "targets",
             "sourceIds",
+            "urls",
+            "fromSearch",
+            "strategy",
             "trigger",
             "queue",
             "priority",
@@ -316,23 +435,81 @@ pub(crate) async fn create_plan_value(
             "deliveryEnabled",
             "pipeline",
             "vectorize",
+            "storage",
         ],
     )?;
     let targets = extract_targets(map);
-    if targets.is_empty() {
+    // URL 目标（切片 2）：`mp plan new --from-search` 的产物——oneShot 计划可以只有
+    // URL 目标，运行时逐条走 once 的统一摄入路径；不引入浏览器自动化。
+    let urls = match map.get("urls") {
+        Some(value) if value.is_array() => {
+            let urls: Vec<String> = value
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect();
+            for url in &urls {
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err(ApiError::validation(
+                        "urls",
+                        "invalid",
+                        format!("URL 目标仅支持 http/https: {url}"),
+                    ));
+                }
+            }
+            urls
+        }
+        Some(_) => {
+            return Err(ApiError::validation(
+                "urls",
+                "invalid",
+                "urls 必须是字符串数组",
+            ))
+        }
+        None => Vec::new(),
+    };
+    // M-06：`plan.new --from-search <searchId>` —— 从持久化检索记录取 URL 生成
+    // oneShot 计划（与 CLI 同语义）；记录缺失给出引导性 404。
+    let from_search_urls = match map.get("fromSearch").and_then(Value::as_str) {
+        Some(search_id) if !search_id.trim().is_empty() => {
+            let record = crate::search::load_search_record(&state.data_dir, search_id.trim())
+                .map_err(ApiError::not_found)?;
+            record
+                .pointer("/result/results")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|hit| hit.get("url").and_then(Value::as_str).map(str::to_string))
+                .collect::<Vec<String>>()
+        }
+        _ => Vec::new(),
+    };
+    let urls: Vec<String> = urls.into_iter().chain(from_search_urls).collect();
+    if targets.is_empty() && urls.is_empty() {
         return Err(ApiError::validation(
             "targets",
             "required",
-            "计划至少要有一个信源",
+            "计划至少要有一个信源或 URL 目标",
         ));
-    }
-    // 归属校验：跨项目引用会被写进计划，必须在落盘前拒绝。
+    }    // 归属校验：跨项目引用会被写进计划，必须在落盘前拒绝。
     ensure_targets_owned(state, project_id, &targets).await?;
+    validate_pipeline(state, map.get("pipeline"))?;
+    validate_storage(map.get("storage"))?;
     let trigger = map
         .get("trigger")
         .filter(|value| !value.is_null())
         .cloned()
-        .unwrap_or_else(|| json!({"kind": "recurring", "interval": "1h"}));
+        .unwrap_or_else(|| {
+            if targets.is_empty() {
+                // 只有 URL 目标的计划没有信源节律可言：一次性，跑完即止。
+                json!({"kind": "oneShot", "fireAt": "immediate"})
+            } else {
+                json!({"kind": "recurring", "interval": "1h"})
+            }
+        });
     let slug = derive_plan_slug(map, &targets);
     let mut doc = json!({
         "id": format!("plan/{slug}"),
@@ -352,10 +529,15 @@ pub(crate) async fn create_plan_value(
             "enabled",
             "pipeline",
             "vectorize",
+            "storage",
+            "strategy",
         ] {
             if let Some(value) = map.get(key) {
                 object.insert(key.to_string(), value.clone());
             }
+        }
+        if !urls.is_empty() {
+            object.insert("urls".to_string(), json!(urls));
         }
     }
     config::create(
@@ -413,6 +595,270 @@ async fn delete_plan(
     )
     .await?;
     Ok(util::ok(&json!({"id": plan_id, "deleted": true})))
+}
+
+// ---------------------------------------------------------------------------
+// 采集策略：可复用的行为定义（节律/队列/额度/停止策略），无状态、可被多个计划引用。
+// 计划通过 `strategy` 字段引用策略，并可在引用处做字段级覆写；运行状态（游标、
+// paused、配额计数）始终归属计划自身，两个计划共用一条策略互不干扰。
+// ---------------------------------------------------------------------------
+
+pub(crate) fn strategy_rows(state: &AppState) -> Result<Vec<Value>, ApiError> {
+    let list = config::list(&state.config_dir)?;
+    Ok(list["strategies"].as_array().cloned().unwrap_or_default())
+}
+
+pub(crate) fn strategy_row_owned(state: &AppState, strategy_id: &str) -> Result<Value, ApiError> {
+    strategy_rows(state)?
+        .into_iter()
+        .find(|row| {
+            row["slug"].as_str() == Some(strategy_id) || row["id"].as_str() == Some(strategy_id)
+        })
+        .ok_or_else(|| ApiError::not_found(format!("采集策略 {strategy_id}")))
+}
+
+async fn list_strategies(State(state): State<Shared>) -> Result<Response, ApiError> {
+    Ok(util::ok(&json!(strategy_rows(&state)?)))
+}
+
+async fn get_strategy(
+    State(state): State<Shared>,
+    Path(strategy_id): Path<String>,
+) -> Result<Response, ApiError> {
+    Ok(util::ok(&strategy_row_owned(&state, &strategy_id)?))
+}
+
+/// 可复用的新建策略逻辑：HTTP `POST /collection/strategies` 与工具面 `strategy.new` 共用。
+pub(crate) async fn create_strategy_value(
+    state: &AppState,
+    project_id: &str,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    let map = util::object(body)?;
+    util::unknown(
+        map,
+        &[
+            "id",
+            "name",
+            "description",
+            "trigger",
+            "queue",
+            "priority",
+            "quota",
+            "stopPolicy",
+            "storage",
+            "enabled",
+        ],
+    )?;
+    validate_storage(map.get("storage"))?;
+    let trigger = map
+        .get("trigger")
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| {
+            ApiError::validation("trigger", "required", "策略至少要定义 trigger（节律）")
+        })?;
+    if trigger.get("kind").and_then(Value::as_str).is_none() {
+        return Err(ApiError::validation(
+            "trigger.kind",
+            "required",
+            "trigger.kind 必须是 recurring 或 oneShot",
+        ));
+    }
+    let slug = match map.get("id").and_then(Value::as_str) {
+        Some(id) => id.trim_start_matches("strategy/").to_string(),
+        None => format!("strategy-{}", util::hash_short(&json!(map).to_string())),
+    };
+    let mut doc = json!({
+        "id": format!("strategy/{slug}"),
+        "kind": "strategy",
+        "name": map.get("name").cloned().unwrap_or(json!("采集策略")),
+        "project": project_id,
+        "trigger": trigger,
+    });
+    if let Some(object) = doc.as_object_mut() {
+        for key in [
+            "description",
+            "queue",
+            "priority",
+            "quota",
+            "stopPolicy",
+            "storage",
+            "enabled",
+        ] {
+            if let Some(value) = map.get(key) {
+                object.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    config::create(
+        &state.config_dir,
+        &config::LoadOptions::from_process(),
+        &config::Draft {
+            kind: "strategy".into(),
+            slug: slug.clone(),
+            doc,
+        },
+    )?;
+    state.services.config_reload()?;
+    crate::observe::append_audit(
+        state,
+        "collection.strategy.create",
+        "succeeded",
+        "新建采集策略",
+        json!({"strategyId": slug}),
+        None,
+    )
+    .await?;
+    strategy_row_owned(state, &slug)
+}
+
+async fn create_strategy(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let strategy = create_strategy_value(&state, project.id(), &body).await?;
+    Ok(util::ok(&strategy))
+}
+
+/// 可复用的修改策略逻辑：HTTP `PATCH` 与工具面 `strategy.set` 共用。
+pub(crate) async fn update_strategy_value(
+    state: &AppState,
+    strategy_id: &str,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    let map = util::object(body)?;
+    util::unknown(
+        map,
+        &[
+            "name",
+            "description",
+            "trigger",
+            "queue",
+            "priority",
+            "quota",
+            "stopPolicy",
+            "storage",
+            "enabled",
+        ],
+    )?;
+    validate_storage(map.get("storage"))?;
+    let entry = config::entries(&state.config_dir, "strategy")?
+        .into_iter()
+        .find(|entry| entry.slug == strategy_id)
+        .ok_or_else(|| ApiError::not_found(format!("采集策略 {strategy_id}")))?;
+    let mut doc = entry.doc.as_object().cloned().unwrap_or_default();
+    if let Some(trigger) = util::optional_object(map, "trigger")? {
+        let mut next = doc
+            .get("trigger")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for (key, value) in trigger {
+            next.insert(key, value);
+        }
+        doc.insert("trigger".into(), Value::Object(next));
+    }
+    for key in [
+        "name",
+        "description",
+        "queue",
+        "priority",
+        "quota",
+        "stopPolicy",
+        "storage",
+        "enabled",
+    ] {
+        if let Some(value) = map.get(key) {
+            doc.insert(key.into(), value.clone());
+        }
+    }
+    config::update(
+        &state.config_dir,
+        &config::LoadOptions::from_process(),
+        &config::Draft {
+            kind: "strategy".into(),
+            slug: strategy_id.to_string(),
+            doc: Value::Object(doc),
+        },
+    )?;
+    state.services.config_reload()?;
+    crate::observe::append_audit(
+        state,
+        "collection.strategy.update",
+        "succeeded",
+        "调整采集策略",
+        json!({"strategyId": strategy_id}),
+        None,
+    )
+    .await?;
+    strategy_row_owned(state, strategy_id)
+}
+
+async fn update_strategy(
+    State(state): State<Shared>,
+    Path(strategy_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let strategy = update_strategy_value(&state, &strategy_id, &body).await?;
+    Ok(util::ok(&strategy))
+}
+
+/// 可复用的删除策略逻辑：HTTP `DELETE` 与工具面 `strategy.remove` 共用。
+pub(crate) async fn delete_strategy_value(
+    state: &AppState,
+    strategy_id: &str,
+) -> Result<Value, ApiError> {
+    strategy_row_owned(state, strategy_id)?;
+    // 引用护栏：还有计划在引用的策略直接拒删并回显占用方，避免计划静默失去节律。
+    let list = config::list(&state.config_dir)?;
+    let referring: Vec<String> = list["plans"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|plan| {
+            let plan_id = plan["slug"].as_str()?;
+            let strategy = plan
+                .pointer("/doc/strategy")
+                .or_else(|| plan.get("strategy"))?
+                .as_str()?
+                .trim_start_matches("strategy/");
+            (strategy == strategy_id).then(|| plan_id.to_string())
+        })
+        .collect();
+    if !referring.is_empty() {
+        return Err(ApiError::validation(
+            "strategy",
+            "inUse",
+            format!("策略仍被计划引用: {}", referring.join(", ")),
+        ));
+    }
+    config::remove(
+        &state.config_dir,
+        &config::LoadOptions::from_process(),
+        "strategy",
+        strategy_id,
+    )?;
+    state.services.config_reload()?;
+    crate::observe::append_audit(
+        state,
+        "collection.strategy.delete",
+        "succeeded",
+        "删除采集策略",
+        json!({"strategyId": strategy_id}),
+        None,
+    )
+    .await?;
+    Ok(json!({"id": strategy_id, "deleted": true}))
+}
+
+async fn delete_strategy(
+    State(state): State<Shared>,
+    Path(strategy_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let payload = delete_strategy_value(&state, &strategy_id).await?;
+    Ok(util::ok(&payload))
 }
 
 /// 批量作业：一次多信源单次采集。建一份临时 oneShot 计划留痕，并即时派发各目标任务。
@@ -537,6 +983,7 @@ pub(crate) async fn update_plan_value(
     util::unknown(
         map,
         &[
+            "strategy",
             "trigger",
             "schedule",
             "quota",
@@ -545,14 +992,18 @@ pub(crate) async fn update_plan_value(
             "queue",
             "enabled",
             "targets",
+            "urls",
+            "appendUrls",
             "name",
             "description",
             "deliveryTargets",
             "deliveryEnabled",
             "pipeline",
             "vectorize",
+            "storage",
         ],
     )?;
+    validate_storage(map.get("storage"))?;
     let plan = plan_row_owned(state, plan_id, project_id).await?;
     match etag {
         Some(value) => util::if_match_value(value, plan["etag"].as_str().unwrap_or(""))?,
@@ -575,6 +1026,7 @@ pub(crate) async fn update_plan_value(
         }
         None => None,
     };
+    validate_pipeline(state, map.get("pipeline"))?;
     let entry = config::entries(&state.config_dir, "plan")?
         .into_iter()
         .find(|entry| entry.slug == plan_id)
@@ -657,10 +1109,47 @@ pub(crate) async fn update_plan_value(
         "enabled",
         "pipeline",
         "vectorize",
+        "urls",
+        "storage",
+        "strategy",
     ] {
         if let Some(value) = map.get(key) {
             doc.insert(key.into(), value.clone());
         }
+    }
+    // URL 目标追加（`mp search --into <计划>` / `plan.set appendUrls`）：去重、保序。
+    if let Some(append) = util::optional_array(map, "appendUrls")? {
+        let mut urls: Vec<String> = doc
+            .get("urls")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for value in append {
+            let Some(url) = value.as_str().map(str::to_string) else {
+                return Err(ApiError::validation(
+                    "appendUrls",
+                    "invalid",
+                    "appendUrls 必须是字符串数组",
+                ));
+            };
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(ApiError::validation(
+                    "appendUrls",
+                    "invalid",
+                    format!("URL 目标仅支持 http/https: {url}"),
+                ));
+            }
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+        doc.insert("urls".into(), json!(urls));
     }
     if let Some(targets) = patched_targets {
         doc.insert("targets".into(), json!(targets));
@@ -707,19 +1196,178 @@ async fn plan_with_runs(state: &AppState, plan_id: &str) -> Result<Value, ApiErr
     Ok(plan)
 }
 
-async fn pause_plan(
-    State(state): State<Shared>,
-    project: crate::ActiveProject,
-    Path(plan_id): Path<String>,
-    headers: HeaderMap,
-    Json(_body): Json<Value>,
-) -> Result<Response, ApiError> {
-    let etag = headers.get("if-match").and_then(|v| v.to_str().ok());
-    let plan = pause_resume_plan_value(&state, project.id(), &plan_id, etag, false).await?;
-    Ok(util::ok(&plan))
+/// `plan.get`：计划详情 + 进度 + 每信源游标。
+///
+/// 游标语义：accepted 是恢复时续取的位置，visible 是快照可见位置；只支持游标的
+/// 访问器（rss / api / paid）才有值，http、browser、bundle、push、search 返回 null。
+/// 配置指纹（configHash）变化会丢弃游标（迁移代除外）——这是已有行为，这里原样透出。
+pub(crate) async fn plan_get_value(state: &AppState, project_id: &str, plan_id: &str) -> Result<Value, ApiError> {
+    let mut plan = plan_with_runs(state, plan_id).await?;
+    if plan["project"].as_str() != Some(project_id) {
+        return Err(ApiError::not_found(format!("采集计划 {plan_id}")));
+    }
+    let sources = crate::catalog::source_rows(state).await?;
+    let mut cursors = Vec::new();
+    for target in plan["targets"].as_array().cloned().unwrap_or_default() {
+        let Some(source_id) = target.as_str().map(util::source_slug) else {
+            continue;
+        };
+        let (accepted, visible, cumulative) = state
+            .services
+            .source_cursor(&util::source_ref(&source_id))
+            .await
+            .map_err(ApiError::from)?;
+        let row = sources.iter().find(|row| row["id"].as_str() == Some(source_id.as_str()));
+        cursors.push(json!({
+            "sourceId": source_id,
+            // 累计产出条数（跨全部日桶），与派发侧 totalItems 上限判定同源。
+            "itemCount": cumulative,
+            "acceptedCursor": accepted.unwrap_or(Value::Null),
+            "visibleCursor": visible.unwrap_or(Value::Null),
+            "lastRunAt": row.map(|row| row["lastRunAt"].clone()).unwrap_or(Value::Null),
+            "lastError": row.map(|row| row["lastError"].clone()).unwrap_or(Value::Null),
+            "health": row.map(|row| row["health"].clone()).unwrap_or(Value::Null),
+            "nextRunAt": row.map(|row| row["nextRunAt"].clone()).unwrap_or(Value::Null),
+        }));
+    }
+    plan["cursors"] = Value::Array(cursors);
+    // M-05：计划级存储根与分类规则可查询。effectiveRoot 相对路径相对进程工作目录解析，
+    // 与执行侧落盘解析一致；classifyRule 是约定目录的固定说明串。
+    if let Ok(entries) = config::entries(&state.config_dir, "plan") {
+        let slug = plan["id"].as_str().unwrap_or_default().trim_start_matches("plan/");
+        if let Some(entry) = entries.into_iter().find(|entry| entry.slug == slug) {
+            let storage = entry.doc.get("storage").cloned().unwrap_or(Value::Null);
+            let root = storage
+                .get("root")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let classify = storage
+                .get("classify")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let (effective_root, rule) = if root.is_empty() {
+                (Value::Null, Value::Null)
+            } else {
+                // M-05：相对 root 相对 --data 解析，与执行侧落盘（materialize）一致。
+                let effective = std::path::Path::new(root)
+                    .is_absolute()
+                    .then(|| root.to_string())
+                    .unwrap_or_else(|| {
+                        state
+                            .data_dir
+                            .join(root)
+                            .to_string_lossy()
+                            .into_owned()
+                    });
+                (
+                    json!(effective),
+                    json!(format!(
+                        "{{effectiveRoot}}/{{sourceId}}/{{kind}}/{{itemId}}{{ext}}"
+                    )),
+                )
+            };
+            plan["storage"] = json!({
+                "root": storage.get("root").cloned().unwrap_or(Value::Null),
+                "classify": classify,
+                "effectiveRoot": effective_root,
+                "classifyRule": rule,
+            });
+        }
+    }
+    Ok(plan)
 }
 
-async fn resume_plan(
+/// 计划级立即执行一轮：不重置游标，从上一已接受游标继续；已暂停或停用的计划拒绝。
+///
+/// 与 HTTP /collection/runs 的手动触发共用派发入口（dispatch_round），跑一轮后照常
+/// 提交游标；对带 `urls` 的 oneShot 计划（来自 `mp plan new --from-search`），逐条
+/// URL 走 once 的统一摄入路径（直接 HTTP，不经浏览器自动化）。
+pub(crate) async fn plan_run_value(state: &Shared, project_id: &str, plan_id: &str) -> Result<Value, ApiError> {
+    let plan = plan_row_owned(state, plan_id, project_id).await?;
+    if !plan["enabled"].as_bool().unwrap_or(true) {
+        return Err(ApiError::validation(
+            "enabled",
+            "conflict",
+            format!("采集计划 {plan_id} 已停用（enabled=false），不能运行；先启用计划"),
+        ));
+    }
+    if plan["paused"].as_bool().unwrap_or(false) {
+        return Err(ApiError::validation(
+            "paused",
+            "conflict",
+            format!("采集计划 {plan_id} 已暂停；先 resume 再运行（暂停是主动中断，不悄悄解除）"),
+        ));
+    }
+    // 带显式目标列表的 oneShot 计划（`mp plan new --from-search` 产物）不走
+    // 信源派发：逐条 URL 走 once 的统一摄入路径（直接 HTTP，不经浏览器自动化）。
+    let urls: Vec<String> = config::entries(&state.config_dir, "plan")?
+        .into_iter()
+        .find(|entry| entry.slug == plan_id)
+        .and_then(|entry| entry.doc.get("urls").cloned())
+        .and_then(|value| value.as_array().cloned())
+        .map(|items| {
+            items
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut results = Vec::new();
+    for url in &urls {
+        // 直接走 once 的统一摄入实现，不经工具面分发（避免 plan.run → tools.call 的
+        // 互相递归）；mode 固定 store，无 --file 面。
+        let args = json!({ "url": url, "mode": "store" });
+        let outcome = async {
+            let request = assembly::tools::OnceRequest::parse_for_surface(&state.services, &args, false)
+                .await
+                .map_err(crate::tools::tool_error)?;
+            assembly::tools::once(&state.services, request)
+                .await
+                .map_err(crate::tools::tool_error)
+        };
+        match outcome.await {
+            Ok(value) => results.push(json!({ "url": url, "ok": true, "result": value })),
+            Err(error) => results.push(json!({ "url": url, "ok": false, "error": error.body() })),
+        }
+    }
+    let mut dispatched = Vec::new();
+    let mut failed = Vec::new();
+    for target in plan["targets"].as_array().cloned().unwrap_or_default() {
+        let Some(source_id) = target.as_str().map(util::source_slug) else {
+            continue;
+        };
+        match state
+            .services
+            .dispatch_round(Some(&util::source_ref(&source_id)))
+            .await
+        {
+            Ok(round) => dispatched.push(json!({
+                "sourceId": source_id,
+                "leased": round.leased,
+                "executed": round.executed.len(),
+                "failed": round.failed.len(),
+            })),
+            Err(error) => failed.push(json!({ "sourceId": source_id, "error": error.to_string() })),
+        }
+    }
+    crate::observe::append_audit(
+        state,
+        "collection.plan.run",
+        if failed.is_empty() { "succeeded" } else { "partial" },
+        "计划立即执行一轮",
+        json!({"planId": plan_id, "targets": dispatched.len(), "urls": urls.len()}),
+        None,
+    )
+    .await?;
+    Ok(json!({
+        "planId": plan_id,
+        "dispatched": dispatched,
+        "failed": failed,
+        "urls": results,
+    }))
+}
+
+async fn pause_plan(
     State(state): State<Shared>,
     project: crate::ActiveProject,
     Path(plan_id): Path<String>,
@@ -731,38 +1379,74 @@ async fn resume_plan(
     Ok(util::ok(&plan))
 }
 
+async fn resume_plan(
+    State(state): State<Shared>,
+    project: crate::ActiveProject,
+    Path(plan_id): Path<String>,
+    headers: HeaderMap,
+    Json(_body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let etag = headers.get("if-match").and_then(|v| v.to_str().ok());
+    let plan = pause_resume_plan_value(&state, project.id(), &plan_id, etag, false).await?;
+    Ok(util::ok(&plan))
+}
+
 /// 可复用的暂停/恢复逻辑：HTTP pause/resume 与工具面 `plan.pause` / `plan.resume` 共用。
 /// `etag`：HTTP 面从 If-Match 头取；工具面传 `None` 时用当前计划版本自洽通过。
+///
+/// 切片 2 语义变更：暂停不再把 `enabled` 改成 false，而是写入独立的 `paused` 字段
+/// （仅当 enabled 为 true 时有意义）。暂停期间不派发新任务；已开始的任务允许做完
+/// 并提交游标后停；不回滚已提交数据，下次从上一已接受游标继续（去重兜底）。
+/// 对停用（enabled=false）计划调用 pause/resume 返回明确错误。
 pub(crate) async fn pause_resume_plan_value(
     state: &AppState,
     project_id: &str,
     plan_id: &str,
     etag: Option<&str>,
-    enable: bool,
+    pause: bool,
 ) -> Result<Value, ApiError> {
     let plan = plan_row_owned(state, plan_id, project_id).await?;
     if let Some(value) = etag {
         util::if_match_value(value, plan["etag"].as_str().unwrap_or(""))?;
     }
-    config::toggle(
+    if !plan["enabled"].as_bool().unwrap_or(true) {
+        return Err(ApiError::validation(
+            "enabled",
+            "conflict",
+            format!("采集计划 {plan_id} 已停用（enabled=false），不能暂停或恢复；先启用计划"),
+        ));
+    }
+    if plan["paused"].as_bool().unwrap_or(false) == pause {
+        // 幂等：重复 pause/resume 不改文档、不触发重载，直接返回当前视图。
+        return plan_with_runs(state, plan_id).await;
+    }
+    let entry = config::entries(&state.config_dir, "plan")?
+        .into_iter()
+        .find(|entry| entry.slug == plan_id)
+        .ok_or_else(|| ApiError::not_found(format!("采集计划 {plan_id}")))?;
+    let mut doc = entry.doc.as_object().cloned().unwrap_or_default();
+    doc.insert("paused".into(), json!(pause));
+    config::update(
         &state.config_dir,
         &config::LoadOptions::from_process(),
-        "plan",
-        plan_id,
-        enable,
+        &config::Draft {
+            kind: "plan".into(),
+            slug: plan_id.to_string(),
+            doc: Value::Object(doc),
+        },
     )?;
     state.services.config_reload()?;
-    let (kind, summary) = if enable {
-        ("collection.plan.resume", "恢复采集计划")
-    } else {
+    let (kind, summary) = if pause {
         ("collection.plan.pause", "暂停采集计划")
+    } else {
+        ("collection.plan.resume", "恢复采集计划")
     };
     crate::observe::append_audit(
         state,
         kind,
         "succeeded",
         summary,
-        json!({"planId": plan_id}),
+        json!({"planId": plan_id, "paused": pause}),
         None,
     )
     .await?;

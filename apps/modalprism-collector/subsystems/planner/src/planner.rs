@@ -38,6 +38,9 @@ pub struct SourcePlan {
     pub ceiling: Duration,
     pub batch_key: Option<String>,
     pub enabled: bool,
+    /// 计划级主动中断（切片 2）：只在 enabled 为 true 时有意义。暂停期间不再派发
+    /// 新任务；已开始的任务允许做完并提交游标，不回滚已提交数据、不杀进程。
+    pub paused: bool,
     pub expected_period: Option<Duration>,
     pub yield_drop_ratio: f64,
     pub failure_threshold: u32,
@@ -57,6 +60,14 @@ pub struct SourcePlan {
     pub on_budget_exhausted: String,
     /// 连续空命中升级为告警的周期数（v3 R18，来自信源类型）；`None` 表示不做停滞升级。
     pub stagnation_cycles: Option<u32>,
+    /// 计划级存储根（M-05）：设置后该计划接受的条目按
+    /// `{effectiveRoot}/{sourceId}/{kind}/{itemId}{ext}` 落一份可读文件树。
+    pub storage_root: Option<String>,
+    /// 是否按约定目录分类落盘（M-05）：缺省 false。
+    pub storage_classify: bool,
+    /// 引用的策略身份（`strategy/<slug>@<内容哈希>`）；None = 计划自带行为定义。
+    /// run 与观测按此判定「这个任务当时为什么这么跑」，策略改动即翻版本。
+    pub strategy: Option<String>,
 }
 
 impl SourcePlan {
@@ -168,7 +179,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         let due = due_ids(&db, plans, now);
         let mut chosen = Vec::new();
         for plan in plans {
-            if !due.contains(plan.source_id.as_str()) || !plan.enabled {
+            if !due.contains(plan.source_id.as_str()) || !plan.enabled || plan.paused {
                 continue;
             }
             // 一次性计划派发完成后不再进入本轮选择。
@@ -267,6 +278,13 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             .keys()
             .map(|source| (source.clone(), status_of(&db, source, now)))
             .collect())
+    }
+
+    /// 某信源跨全部日桶的累计产出条数（计划 `totalItems` 上限判定的同源口径）。
+    pub async fn cumulative_yield(&self, source: &str) -> Result<u64, PlannerError> {
+        let _guard = self.lock.lock().await;
+        let db = load_db(&self.persist).await?;
+        Ok(cumulative_yield(&db.yields, source))
     }
 
     pub async fn make_due(&self, source: &str, now: Timestamp) -> Result<(), PlannerError> {
@@ -525,6 +543,9 @@ fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
     row.generation = plan.generation;
     if paused {
         row.skip_reason = Some("queue-paused".into());
+    } else if plan.paused {
+        // 计划级主动中断：不再派发新任务；已开始的任务不受影响，做完即停。
+        row.skip_reason = Some("plan-paused".into());
     } else if total_exhausted {
         // 计划累计额度耗尽：按 stopPolicy 记 pause / skip，派发侧凭 total_items 门槛停派。
         row.skip_reason = Some(if plan.on_budget_exhausted == "pause" {
@@ -536,7 +557,7 @@ fn prepare_source(db: &mut Db, plan: &SourcePlan, today: &str, now: Timestamp) {
         row.skip_reason = Some("daily-cap".into());
     } else if matches!(
         row.skip_reason.as_deref(),
-        Some("queue-paused" | "daily-cap" | "quota-paused" | "quota-exhausted")
+        Some("queue-paused" | "plan-paused" | "daily-cap" | "quota-paused" | "quota-exhausted")
     ) {
         row.skip_reason = None;
     }
@@ -596,6 +617,7 @@ fn due_ids(db: &Db, plans: &[SourcePlan], now: Timestamp) -> BTreeSet<String> {
 fn dispatchable(db: &Db, plan: &SourcePlan, today: &str) -> bool {
     let cumulative = cumulative_yield(&db.yields, plan.source_id.as_str());
     plan.enabled
+        && !plan.paused
         && !db.paused.contains(plan.queue.label())
         && plan
             .daily_limit

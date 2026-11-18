@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use egress::Resolver;
-use planner::SourceStatus;
+use planner::{Queue as PlannerQueue, SourceStatus};
 use serde_json::Value;
 use strata_client::{STATUS_CANCELLED, STATUS_DONE, TaskFilter, TaskPage, TaskRow, TaskStats};
 use strata_model::{
@@ -385,7 +385,7 @@ impl Services {
     }
 
     pub async fn planner_tick(&self) -> Result<Vec<AccessTask>, Error> {
-        let plans = plans::plans_of(&self.config.applied());
+        let plans = plans::plans_of(&self.config.applied(), self.data_dir());
         Ok(self
             .planner
             .tick(&plans, &capacities(), Timestamp::now())
@@ -406,6 +406,19 @@ impl Services {
         Ok(self.planner.source_statuses().await?)
     }
 
+    /// 每信源游标与进度：accepted（已接受，恢复时从此续取）、visible（快照可见）、
+    /// 累计产出条数。只支持游标的访问器（rss / api / paid）游标才有值；http、
+    /// browser、bundle、push、search 等无跨请求游标，两项均为 null。
+    pub async fn source_cursor(
+        &self,
+        source: &str,
+    ) -> Result<(Option<Value>, Option<Value>, u64), Error> {
+        let accepted = self.planner.queue().accepted_cursor(source).await?;
+        let visible = self.planner.queue().visible_cursor(source).await?;
+        let cumulative = self.planner.cumulative_yield(source).await?;
+        Ok((accepted, visible, cumulative))
+    }
+
     /// 执行一个任务。信源已从配置里消失时改成 nack。
     ///
     /// 手动任务不依赖计划覆盖：未被任何一等计划覆盖的信源用 `plans::manual_plan`
@@ -413,11 +426,11 @@ impl Services {
     /// 消失，仍按 nack 退回。
     pub async fn runner_run(&self, task: AccessTask) -> Result<RunOutcome, Error> {
         let snapshot = self.config.applied();
-        let Some(mut plan) = plans::plans_of(&snapshot)
+        let Some(mut plan) = plans::plans_of(&snapshot, self.data_dir())
             .into_iter()
             .find(|plan| plan.source_id == task.source_id)
             .or_else(|| match task.reason {
-                TaskReason::Manual => plans::manual_plan(&snapshot, task.source_id.as_str()),
+                TaskReason::Manual => plans::manual_plan(&snapshot, task.source_id.as_str(), self.data_dir()),
                 _ => None,
             })
         else {
@@ -466,7 +479,7 @@ impl Services {
             return Err(Error::new("任务已终态"));
         }
         let task = if stored.status == strata_client::STATUS_QUEUED {
-            let lease_for = plans::plans_of(&self.config.applied())
+            let lease_for = plans::plans_of(&self.config.applied(), self.data_dir())
                 .into_iter()
                 .find(|plan| plan.source_id == stored.task.source_id)
                 .map(|plan| plan.timeout.saturating_mul(3) / 2)
@@ -546,12 +559,12 @@ impl Services {
         locator: Option<String>,
     ) -> Result<TaskRow, Error> {
         let applied = self.config.applied();
-        let mut plan = plans::plans_of(&applied)
+        let mut plan = plans::plans_of(&applied, self.data_dir())
             .into_iter()
             .find(|plan| plan.source_id.as_str() == source)
             // 未被任何计划覆盖的信源仍要能手动采集：就地合成一条一次性计划，
             // 只用于本次即时派发，不改变该信源的自动采集资格。
-            .or_else(|| plans::manual_plan(&applied, source))
+            .or_else(|| plans::manual_plan(&applied, source, self.data_dir()))
             .ok_or_else(|| Error::new("信源不可采集"))?;
         if let Some(queue) = queue {
             plan.queue = queue;

@@ -196,6 +196,8 @@ export interface Plan {
   name: string;
   description?: string | null;
   targets?: string[];
+  // 引用的策略（`strategy/<slug>` 或裸 slug）；计划自带的 trigger/quota 等字段是对它的覆写。
+  strategy?: string | null;
   trigger?: {
     kind?: string;
     interval?: string;
@@ -229,6 +231,34 @@ export interface Plan {
   deliveryEnabled?: boolean | null;
   deliveryLastRunAt?: string | null;
   etag: string;
+}
+
+/** 可复用的策略定义：无状态，被多个计划引用；计划自带字段是对它的覆写。 */
+export interface Strategy {
+  id: string;
+  slug: string;
+  name?: string | null;
+  description?: string | null;
+  enabled?: boolean | null;
+  trigger?: {
+    kind?: string;
+    interval?: string;
+    floor?: string;
+    ceiling?: string;
+    adaptive?: boolean;
+    expectedPeriod?: string;
+  } | null;
+  queue?: string | null;
+  priority?: number | null;
+  quota?: {
+    perRunItems?: number;
+    totalItems?: number;
+    maxAge?: string;
+    dedupWindow?: string;
+  } | null;
+  stopPolicy?: Record<string, unknown> | null;
+  storage?: Record<string, unknown> | null;
+  doc?: Record<string, unknown> | null;
 }
 
 export interface Task {

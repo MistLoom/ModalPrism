@@ -168,3 +168,51 @@ methods:
         locator: { type: string }
         reason: { type: string }
       required: [sourceId]
+  - id: strategy.ls
+    description: 列出采集策略（可复用的节律/额度/停止策略定义）
+    input:
+      type: object
+  - id: strategy.get
+    description: 读取采集策略详情
+    input:
+      type: object
+      properties:
+        strategyId: { type: string }
+      required: [strategyId]
+  - id: strategy.new
+    description: 新建采集策略，供多个计划引用复用
+    input:
+      type: object
+      properties:
+        name: { type: string }
+        trigger: { type: object }
+        queue: { type: string }
+        priority: { type: number }
+        quota: { type: object }
+        stopPolicy: { type: object }
+        storage: { type: object }
+        description: { type: string }
+      required: [trigger]
+  - id: strategy.set
+    description: 修改采集策略；引用它的计划在下次解析时生效
+    input:
+      type: object
+      properties:
+        strategyId: { type: string }
+        trigger: { type: object }
+        queue: { type: string }
+        priority: { type: number }
+        quota: { type: object }
+        stopPolicy: { type: object }
+        storage: { type: object }
+        enabled: { type: boolean }
+        name: { type: string }
+        description: { type: string }
+      required: [strategyId]
+  - id: strategy.remove
+    description: 删除采集策略；仍被计划引用时拒绝
+    input:
+      type: object
+      properties:
+        strategyId: { type: string }
+      required: [strategyId]

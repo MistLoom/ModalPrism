@@ -114,6 +114,26 @@ impl Accessor for ApiAccessor {
         request: AccessRequest,
         ctx: &AccessContext,
     ) -> Result<Vec<strata_model::RawEnvelope>, AccessError> {
+        let deadline = request.deadline;
+        let mut out = Vec::new();
+        self.access_batched(
+            request,
+            ctx,
+            &mut accessors::CollectingBatches { out: &mut out },
+        )
+        .await?;
+        if out.is_empty() {
+            ready(ctx, deadline)?;
+        }
+        Ok(out)
+    }
+
+    async fn access_batched(
+        &self,
+        request: AccessRequest,
+        ctx: &AccessContext,
+        batches: &mut (dyn accessors::BatchHandler + Send),
+    ) -> Result<(), AccessError> {
         ready(ctx, request.deadline)?;
         let spec = parse_spec(&request.spec)?;
         let mut url = endpoint(&request.locator)?;
@@ -138,7 +158,6 @@ impl Accessor for ApiAccessor {
             .and_then(|cursor| cursor.get("token"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let mut out = Vec::new();
         for _ in 0..spec.pages {
             if ctx.is_cancelled() {
                 return Err(AccessError::cancelled());
@@ -176,7 +195,8 @@ impl Accessor for ApiAccessor {
                 token = Some(value.to_string());
             }
             let stop = cursor.is_null() || !(200..300).contains(&status);
-            out.push(from_page(
+            // 每页即建信封即推送：回调返回后本页内存即可丢弃，驻留不超过一页 + 缓冲。
+            let envelope = from_page(
                 ctx,
                 &request.policy,
                 started,
@@ -201,7 +221,9 @@ impl Accessor for ApiAccessor {
                     extra: Vec::new(),
                     document: true,
                 },
-            )?);
+            )?;
+            let page_cursor = envelope.cursor_candidate.clone();
+            batches.batch(vec![envelope], page_cursor).await?;
             if stop {
                 break;
             }
@@ -209,10 +231,7 @@ impl Accessor for ApiAccessor {
                 url = next.to_string();
             }
         }
-        if out.is_empty() {
-            ready(ctx, request.deadline)?;
-        }
-        Ok(out)
+        Ok(())
     }
 }
 

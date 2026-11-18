@@ -25,6 +25,59 @@ const SEARCH_RECORD_KIND: &str = "search_record";
 const PLATFORM_KIND: &str = "search_platform_config";
 const PLATFORM_ID: &str = "default";
 
+/// 检索记录的统一读写（M-06）：CLI 与 API/MCP 共用同一份实现，避免格式漂移。
+/// 记录形态：`{searchId, query, engine, savedAt, result}`，落 `{data_dir}/searches/{searchId}.json`。
+pub fn search_record_path(data_dir: &std::path::Path, search_id: &str) -> std::path::PathBuf {
+    data_dir.join("searches").join(format!("{search_id}.json"))
+}
+
+pub fn new_search_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!("s{nanos:x}")
+}
+
+/// 保存完整结果集并返回记录（含 searchId）；调用方把 searchId 回填进自己的响应。
+pub fn save_search_record(
+    data_dir: &std::path::Path,
+    result: &Value,
+) -> Result<Value, String> {
+    let search_id = new_search_id();
+    let saved_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let record = json!({
+        "searchId": search_id,
+        "query": result.get("query").cloned().unwrap_or(Value::Null),
+        "engine": result.get("engine").cloned().unwrap_or(Value::Null),
+        "savedAt": saved_at,
+        "result": result,
+    });
+    let path = search_record_path(data_dir, &search_id);
+    std::fs::create_dir_all(path.parent().expect("searches 目录"))
+        .map_err(|error| format!("建检索记录目录失败: {error}"))?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&record).map_err(|error| format!("序列化检索记录失败: {error}"))?,
+    )
+    .map_err(|error| format!("写检索记录失败: {error}"))?;
+    Ok(record)
+}
+
+/// 按 searchId 读取检索记录；找不到/解析失败给出引导性错误。
+pub fn load_search_record(data_dir: &std::path::Path, search_id: &str) -> Result<Value, String> {
+    let path = search_record_path(data_dir, search_id);
+    let text = std::fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "找不到检索结果 {search_id}（先 search persist，再 once --from-search {search_id}）: {error}"
+        )
+    })?;
+    serde_json::from_str(&text).map_err(|error| format!("检索记录解析失败: {error}"))
+}
+
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/search/engines", get(list_engines))
@@ -262,7 +315,7 @@ async fn run_search(
 /// 搜索的可复用入口：工具面的 `tool.search` 与 `POST /search` 走同一实现。
 pub(crate) async fn search_value(state: &Shared, body: Value) -> Result<Value, ApiError> {
     let map = util::object(&body)?;
-    util::unknown(map, &["query", "engine", "projectId", "limit", "scope"])?;
+    util::unknown(map, &["query", "engine", "projectId", "limit", "scope", "persist"])?;
     let query = util::text(map, "query")?.trim().to_string();
     if query.is_empty() {
         return Err(ApiError::validation("query", "required", "关键词不能为空"));
@@ -429,6 +482,14 @@ pub(crate) async fn search_value(state: &Shared, body: Value) -> Result<Value, A
     }
     if !project_id.is_empty() {
         payload["projectId"] = json!(project_id);
+    }
+    // M-06：可选持久化——完整结果集落为可引用记录，返回 searchId；
+    // `once --from-search <searchId>` / `plan new --from-search` 用它发现条目。
+    if map.get("persist").and_then(Value::as_bool).unwrap_or(false) {
+        let record = save_search_record(&state.data_dir, &payload).map_err(|error| {
+            ApiError::validation("persist", "io", format!("写检索记录失败: {error}"))
+        })?;
+        payload["searchId"] = record["searchId"].clone();
     }
     Ok(payload)
 }

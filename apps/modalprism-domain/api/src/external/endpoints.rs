@@ -155,6 +155,12 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     ep("plans", "GET", "/collection/runs", "采集运行记录", Some("limit,cursor,status,sourceId"), None),
     ep("plans", "POST", "/collection/runs", "手动触发一次采集，返回异步操作", None, Some("sourceId、mode、locator、reason")),
     ep("plans", "GET", "/collection/runs/{runId}", "单次采集运行的明细", None, None),
+    // strategies
+    ep("plans", "GET", "/collection/strategies", "策略清单：可复用的节律/额度/停止策略定义", None, None),
+    ep("plans", "POST", "/collection/strategies", "新建策略，供多个计划引用复用", None, Some("name、trigger、quota、stopPolicy、storage")),
+    ep("plans", "GET", "/collection/strategies/{strategyId}", "策略详情", None, None),
+    ep("plans", "PATCH", "/collection/strategies/{strategyId}", "修改策略；引用它的计划在下次解析时生效", None, Some("trigger、quota、stopPolicy、storage、enabled")),
+    ep("plans", "DELETE", "/collection/strategies/{strategyId}", "删除策略；仍被计划引用时拒绝", None, None),
     // content
     ep("content", "GET", "/content/items", "内容清单；sourceId 形如 source/xxx", Some("limit,cursor,offset,query,sourceId,sourceType,status"), None),
     ep("content", "GET", "/content/items/{contentId}", "内容详情与正文", None, None),

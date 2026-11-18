@@ -176,7 +176,12 @@ fn check_plan(
     diags: &mut Vec<Diagnostic>,
 ) {
     let targets = string_array(module.get("targets"));
-    if targets.is_empty() {
+    // 切片 2：只有 URL 目标的计划（`mp plan new --from-search` 产物）允许 targets 为空。
+    let has_urls = module
+        .get("urls")
+        .and_then(Value::as_array)
+        .is_some_and(|urls| !urls.is_empty());
+    if targets.is_empty() && !has_urls {
         diags.push(of(id, "计划缺少 targets"));
     }
     for target in &targets {

@@ -6689,6 +6689,7 @@ dependencies = [
  "leaf-monitor",
  "modalprism-agent",
  "paid_gateway",
+ "planner",
  "reqwest 0.12.28",
  "runner",
  "serde",

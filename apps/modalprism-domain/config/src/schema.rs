@@ -259,7 +259,10 @@ fn module_schema() -> Value {
         "required": ["id", "kind", "name"],
         "properties": {
             "id": {"type": "string", "minLength": 1},
-            "kind": {"enum": ["preset", "profile", "accessor", "adapter", "binding", "source", "plan", "type"]},
+            "kind": {"enum": ["preset", "profile", "accessor", "adapter", "binding", "source", "plan", "strategy", "type"]},
+            // 计划引用的策略（`strategy/<slug>` 或裸 slug）；trigger/quota 等字段
+            // 出现在计划上时作为对该策略的字段级覆写。
+            "strategy": {"type": "string", "minLength": 1},
             "name": {"type": "string", "minLength": 1},
             "targets": {"type": "array", "items": {"type": "string", "minLength": 1}},
             "trigger": {
@@ -297,6 +300,19 @@ fn module_schema() -> Value {
             },
             "description": {"type": "string"},
             "enabled": {"type": "boolean"},
+            "paused": {"type": "boolean"},
+            "storage": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "root": {"type": "string", "minLength": 1},
+                    "classify": {"type": "boolean"}
+                }
+            },
+            "urls": {
+                "type": "array",
+                "items": {"type": "string", "pattern": "^https?://.+$"}
+            },
             "project": {"type": "string", "minLength": 1},
             "shared": {"type": "boolean"},
             "labels": {"type": "object", "additionalProperties": {"type": "string"}},

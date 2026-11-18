@@ -562,6 +562,7 @@ pub fn list(dir: &Path) -> Result<Value, Error> {
     let adapters = entries(dir, "adapter")?;
     let bindings = entries(dir, "binding")?;
     let plans = entries(dir, "plan")?;
+    let strategies = entries(dir, "strategy")?;
     let all: Vec<&Entry> = sources
         .iter()
         .chain(accessors.iter())
@@ -585,13 +586,35 @@ pub fn list(dir: &Path) -> Result<Value, Error> {
         .map(|entry| binding_row(entry, &all))
         .collect();
     let plans: Vec<Value> = plans.iter().map(plan_row).collect();
+    let strategies: Vec<Value> = strategies.iter().map(strategy_row).collect();
     Ok(json!({
         "sources": sources,
         "accessors": accessors,
         "adapters": adapters,
         "bindings": bindings,
         "plans": plans,
+        "strategies": strategies,
     }))
+}
+
+/// 策略行：可复用的行为定义（节律、额度、停止策略），无状态、被计划引用。
+fn strategy_row(entry: &Entry) -> Value {
+    let doc = &entry.doc;
+    json!({
+        "id": id_of(entry),
+        "slug": entry.slug,
+        "file": entry.file,
+        "name": name_of(doc, &entry.slug),
+        "description": doc.get("description").cloned().unwrap_or(Value::Null),
+        "enabled": enabled_of(doc),
+        "trigger": doc.get("trigger").cloned().unwrap_or(Value::Null),
+        "queue": doc.get("queue").cloned().unwrap_or(Value::Null),
+        "priority": doc.get("priority").cloned().unwrap_or(Value::Null),
+        "quota": doc.get("quota").cloned().unwrap_or(Value::Null),
+        "stopPolicy": doc.get("stopPolicy").cloned().unwrap_or(Value::Null),
+        "storage": doc.get("storage").cloned().unwrap_or(Value::Null),
+        "doc": doc,
+    })
 }
 
 /// 计划行：一等采集计划的声明视图（节律、额度、目标信源、优先级、启停）。
@@ -791,6 +814,7 @@ fn folder_of(kind: &str) -> Result<(&'static str, &'static str), Error> {
         "adapter" => Ok(("adapters", "adapter")),
         "binding" => Ok(("bindings", "binding")),
         "plan" => Ok(("plans", "plan")),
+        "strategy" => Ok(("strategies", "strategy")),
         _ => Err(invalid("", "只支持信源、访问器、适配器、绑定与计划")),
     }
 }

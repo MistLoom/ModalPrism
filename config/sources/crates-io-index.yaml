@@ -1,0 +1,32 @@
+access:
+  accessor: accessor/api
+  locator:
+    endpoint: "https://crates.io/api/v1/crates?per_page=100&sort=alpha"
+  spec:
+    pages: 5
+    headers:
+      - - user-agent
+        - ModalPrism-collector (https://example.org; contact via repo issue)
+    pagination:
+      type: offset
+      param: page
+      start: 1
+      step: 1
+admission: {}
+id: source/crates-io-index
+kind: source
+labels:
+  tier: T1
+  topic: 注册表
+name: crates.io · 公共注册表
+pipeline:
+  - run:
+      - adapter/json-list
+    spec:
+      adapter/json-list:
+        items: /crates
+        urlTemplate: "{repository}"
+project: proj_default
+shared: true
+sourceType: api
+groupId: grp_builtin_tech

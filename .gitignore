@@ -7,6 +7,7 @@ target/
 node_modules/
 dist/
 *.tsbuildinfo
+/assets/fig
 
 # Python 缓存
 __pycache__/
@@ -31,3 +32,8 @@ __pycache__/
 
 # 本地 IDE/Agent 会话产物（审计、日志、prompt 快照）
 /.atomcode
+/.cache
+/.thinking
+/.vscode
+文章撰写规范.md
+config/sources/open-vsx.yaml

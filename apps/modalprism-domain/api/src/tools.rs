@@ -105,7 +105,11 @@ pub async fn call(
         "read" => read(app, &project_id, &args).await,
         "ls" => ls(app, &args).await,
         "plan.ls" => plan_ls(app, &args).await,
-        "plan.get" => plan_get(app, &project_id, &args).await,
+        "plan.get" => {
+            let map = util::object(&args)?;
+            let plan_id = util::text(map, "planId")?.trim().to_string();
+            crate::collection::plan_get_value(state, &project_id, &plan_id).await
+        }
         "plan.new" => crate::collection::create_plan_value(app, &project_id, &args).await,
         "plan.set" => {
             let map = util::object(&args)?;
@@ -129,11 +133,46 @@ pub async fn call(
                 &project_id,
                 &plan_id,
                 etag,
-                verb == "plan.resume",
+                // 切片 2：paused 独立于 enabled，pause=true / resume=false。
+                verb == "plan.pause",
             )
             .await
         }
-        "plan.run" => crate::collection::create_run_value(state, &args).await,
+        "plan.run" => {
+            // 计划级一轮（planId）与单信源手动触发（sourceId，旧契约）二选一：
+            // 带 planId 时立即跑一轮不重置游标；旧客户端的 sourceId 路径不变。
+            let map = util::object(&args)?;
+            if let Some(plan_id) = util::optional_text(map, "planId")?.filter(|id| !id.is_empty())
+            {
+                return crate::collection::plan_run_value(state, &project_id, plan_id.trim())
+                    .await;
+            }
+            crate::collection::create_run_value(state, &args).await
+        }
+        "strategy.ls" => crate::collection::strategy_rows(app).map(|rows| json!(rows)),
+        "strategy.get" => {
+            let map = util::object(&args)?;
+            let strategy_id = util::text(map, "strategyId")?.trim().to_string();
+            crate::collection::strategy_row_owned(app, &strategy_id)
+        }
+        "strategy.new" => {
+            crate::collection::create_strategy_value(app, &project_id, &args).await
+        }
+        "strategy.set" => {
+            let map = util::object(&args)?;
+            let strategy_id = util::text(map, "strategyId")?.trim().to_string();
+            let mut body = args.clone();
+            // strategyId 是工具面的定位参数，不属于策略文档字段，进复用逻辑前剥掉。
+            if let Some(object) = body.as_object_mut() {
+                object.remove("strategyId");
+            }
+            crate::collection::update_strategy_value(app, &strategy_id, &body).await
+        }
+        "strategy.remove" => {
+            let map = util::object(&args)?;
+            let strategy_id = util::text(map, "strategyId")?.trim().to_string();
+            crate::collection::delete_strategy_value(app, &strategy_id).await
+        }
         other => Err(ApiError::validation(
             "verb",
             "invalid",
@@ -146,12 +185,74 @@ pub async fn call(
 }
 
 async fn once(state: &AppState, args: &Value, allow_file: bool) -> Result<Value, ApiError> {
+    // M-06：`once --from-search <searchId>` —— 从已持久化的检索记录取 URL，
+    // 逐条走 once 的统一摄入路径（缺省 preview 不落盘）。MCP/HTTP 与 CLI 同语义。
+    if let Some(search_id) = args
+        .get("fromSearch")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return once_from_search(state, args, search_id, allow_file).await;
+    }
     let request = assembly::tools::OnceRequest::parse_for_surface(&state.services, args, allow_file)
         .await
         .map_err(tool_error)?;
     assembly::tools::once(&state.services, request)
         .await
         .map_err(tool_error)
+}
+
+/// 从检索记录取 URL 逐条执行 once：`index` 缺省按序全部（串行），指定则只跑一条。
+async fn once_from_search(
+    state: &AppState,
+    args: &Value,
+    search_id: &str,
+    allow_file: bool,
+) -> Result<Value, ApiError> {
+    let record = crate::search::load_search_record(&state.data_dir, search_id)
+        .map_err(ApiError::not_found)?;
+    let urls: Vec<String> = record
+        .pointer("/result/results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|hit| hit.get("url").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    if urls.is_empty() {
+        return Err(ApiError::not_found(format!(
+            "检索记录 {search_id} 里没有可用 URL"
+        )));
+    }
+    let index = args.get("index").and_then(Value::as_u64).map(|value| value as usize);
+    let targets: Vec<(usize, &String)> = urls
+        .iter()
+        .enumerate()
+        .filter(|(position, _)| index.is_none_or(|index| *position == index))
+        .collect();
+    let mut ran = Vec::new();
+    let mut request = args.clone();
+    if let Some(object) = request.as_object_mut() {
+        object.remove("fromSearch");
+        object.remove("index");
+    }
+    for (position, url) in targets {
+        let mut once_args = request.clone();
+        once_args["url"] = json!(url);
+        let parsed = assembly::tools::OnceRequest::parse_for_surface(
+            &state.services,
+            &once_args,
+            allow_file,
+        )
+        .await
+        .map_err(tool_error)?;
+        let outcome = assembly::tools::once(&state.services, parsed)
+            .await
+            .map_err(tool_error)?;
+        ran.push(json!({"index": position, "url": url, "once": outcome}));
+    }
+    Ok(json!({"fromSearch": search_id, "count": ran.len(), "runs": ran}))
 }
 
 async fn probe(state: &AppState, args: &Value, allow_file: bool) -> Result<Value, ApiError> {
@@ -374,7 +475,7 @@ async fn plan_get(state: &AppState, project_id: &str, args: &Value) -> Result<Va
 }
 
 /// 工具面错误：输入类错误保留字段语义，其余按依赖失败返回。
-fn tool_error(error: assembly::Error) -> ApiError {
+pub(crate) fn tool_error(error: assembly::Error) -> ApiError {
     if assembly::invalid_input(&error.message) {
         ApiError::validation("args", "invalid", error.message)
     } else {

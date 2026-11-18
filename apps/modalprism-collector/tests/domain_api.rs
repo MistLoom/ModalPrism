@@ -870,13 +870,15 @@ async fn tool_plan_set_carries_plan_id_and_etag_without_unknown_field_rejection(
     assert_eq!(plan["pipeline"], json!([]), "缺省 pipeline 应为空列表");
 
     // 工具面完整参数：planId + etag + 计划字段，必须通过而非报未知字段。
+    // 切片 2 行为变更：new/set 会校验管道——引用的适配器必须在配置清单里，
+    // 未声明适配器（如内容处理器占位 id）在写入前被拒绝。
     let response = tool("plan.set")
         .json(&json!({
             "planId": plan_id,
             "etag": etag,
             "name": "已修改计划",
             "vectorize": true,
-            "pipeline": [{"run": ["content-processor/text-filter"]}],
+            "pipeline": [{"run": ["adapter/smart-discover"]}],
         }))
         .send()
         .await
@@ -888,12 +890,21 @@ async fn tool_plan_set_carries_plan_id_and_etag_without_unknown_field_rejection(
     assert_eq!(updated["vectorize"], json!(true));
     assert_eq!(
         updated["pipeline"][0]["run"][0],
-        json!("content-processor/text-filter")
+        json!("adapter/smart-discover")
     );
-    assert_eq!(updated["vectorize"], json!(true));
-    assert_eq!(
-        updated["pipeline"][0]["run"][0],
-        json!("content-processor/text-filter")
+
+    // 不兼容的管道：引用未声明适配器，写入前拒绝。
+    let response = tool("plan.set")
+        .json(&json!({
+            "planId": plan_id,
+            "pipeline": [{"run": ["content-processor/text-filter"]}],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        !response.status().is_success(),
+        "未知适配器的管道必须被拒绝"
     );
 
     running.shutdown().await.unwrap();

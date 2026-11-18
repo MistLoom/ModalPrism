@@ -39,6 +39,7 @@ fn plan() -> SourcePlan {
         ceiling: Duration::from_secs(6 * 60 * 60),
         batch_key: None,
         enabled: true,
+        paused: false,
         expected_period: Some(Duration::from_secs(7 * 24 * 60 * 60)),
         yield_drop_ratio: 0.3,
         failure_threshold: 5,
@@ -50,6 +51,9 @@ fn plan() -> SourcePlan {
         stagnation_cycles: None,
         pipeline: None,
         vectorize: false,
+        storage_root: None,
+        storage_classify: false,
+        strategy: None,
     }
 }
 
@@ -148,6 +152,7 @@ impl Handler for Script {
             cost: 0,
             adapters: Vec::new(),
             follows: Vec::new(),
+            ops_committed: false,
         })
     }
 }
@@ -630,6 +635,7 @@ impl Handler for Fixed {
             cost: 0,
             adapters: Vec::new(),
             follows: Vec::new(),
+            ops_committed: false,
         })
     }
 }

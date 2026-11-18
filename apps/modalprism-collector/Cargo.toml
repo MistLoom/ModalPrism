@@ -7,6 +7,15 @@ rust-version.workspace = true
 description = "一条命令初始化存储并进入采集循环"
 publish = false
 
+# 同一份 main.rs 出两个二进制：mp 是短调用名，modalprism-collector 是长二进制名（保留兼容）。
+[[bin]]
+name = "mp"
+path = "src/main.rs"
+
+[[bin]]
+name = "modalprism-collector"
+path = "src/main.rs"
+
 [dependencies]
 ability-core.workspace = true
 ability-support.workspace = true
@@ -28,6 +37,7 @@ frame-core.workspace = true
 health = { path = "../../abilitys/ops/health" }
 health_record = { path = "ability/health_record" }
 leaf-monitor = { path = "../monitor" }
+modalprism-agent = { path = "../modalprism-agent" }
 paid_gateway = { path = "ability/paid_gateway" }
 reqwest.workspace = true
 runner = { path = "ability/runner" }
@@ -56,6 +66,7 @@ embedded-s3 = ["assembly/embedded-s3"]
 
 [dev-dependencies]
 modalprism-agent = { path = "../modalprism-agent" }
+planner = { path = "subsystems/planner" }
 reqwest.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true

@@ -30,6 +30,7 @@ import { OverviewPage } from "./pages/Overview";
 import { PlansPage } from "./pages/Plans";
 import { ProjectsPage } from "./pages/Projects";
 import { SettingsPage } from "./pages/Settings";
+import { StrategiesPage } from "./pages/Strategies";
 import { SourcesPage } from "./pages/Sources";
 import { TasksPage } from "./pages/Tasks";
 import { ToolsPage } from "./pages/Tools";
@@ -39,6 +40,7 @@ const NAV_ICONS: Record<PageId, React.ReactNode> = {
   projects: <IconSources />,
   sources: <IconSources />,
   plans: <IconTasks />,
+  strategies: <IconTasks />,
   tasks: <IconTasks />,
   content: <IconContent />,
   delivery: <IconDelivery />,
@@ -350,6 +352,8 @@ function Page({ page, online }: { page: PageId; online: boolean | null }) {
       return <SourcesPage />;
     case "plans":
       return <PlansPage />;
+    case "strategies":
+      return <StrategiesPage />;
     case "tasks":
       return <TasksPage />;
     case "content":

@@ -142,6 +142,50 @@ pub trait Accessor: Send + Sync {
         request: AccessRequest,
         ctx: &AccessContext,
     ) -> Result<Vec<RawEnvelope>, AccessError>;
+
+    /// 按批流式访问：每完成一页（批）即推送给 `batches`，回调成功返回后该批方可丢弃。
+    /// 有界内存采集（万级按批落盘）依赖该路径；缺省回退到一次性 `access`（整批单次回调），
+    /// 未改造的访问器行为不变。
+    async fn access_batched(
+        &self,
+        request: AccessRequest,
+        ctx: &AccessContext,
+        batches: &mut (dyn BatchHandler + Send),
+    ) -> Result<(), AccessError> {
+        let envelopes = self.access(request, ctx).await?;
+        let cursor = envelopes
+            .last()
+            .and_then(|item| item.cursor_candidate.clone());
+        batches.batch(envelopes, cursor).await
+    }
+}
+
+/// 每批回调：`envelopes` 是一批（通常一页）的信封，`cursor` 是该批结束时的续取游标
+///（取最后一条信封的 `cursor_candidate`，无更多页时为 None）。
+#[async_trait]
+pub trait BatchHandler {
+    async fn batch(
+        &mut self,
+        envelopes: Vec<RawEnvelope>,
+        cursor: Option<Value>,
+    ) -> Result<(), AccessError>;
+}
+
+/// 把 `BatchHandler` 回调收集进 Vec 的一次性路径适配器（供 `access` 复用）。
+pub struct CollectingBatches<'a> {
+    pub out: &'a mut Vec<RawEnvelope>,
+}
+
+#[async_trait]
+impl BatchHandler for CollectingBatches<'_> {
+    async fn batch(
+        &mut self,
+        envelopes: Vec<RawEnvelope>,
+        _cursor: Option<Value>,
+    ) -> Result<(), AccessError> {
+        self.out.extend(envelopes);
+        Ok(())
+    }
 }
 
 pub fn config_error(message: impl Into<String>) -> AccessError {

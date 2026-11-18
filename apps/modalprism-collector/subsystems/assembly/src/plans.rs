@@ -10,7 +10,7 @@ use strata_model::{Locator, SourceId, content_hash};
 pub const YIELD_DROP_RATIO: f64 = 0.3;
 pub const FAILURE_THRESHOLD: u32 = 5;
 
-pub fn plans_of(snapshot: &Snapshot) -> Vec<SourcePlan> {
+pub fn plans_of(snapshot: &Snapshot, data_dir: &std::path::Path) -> Vec<SourcePlan> {
     let mut plans = Vec::new();
     let mut covered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // 主路径：遍历一等计划，逐 target 把信源静态声明与计划节律/限制 join 成 SourcePlan。
@@ -31,7 +31,7 @@ pub fn plans_of(snapshot: &Snapshot) -> Vec<SourcePlan> {
             if source_module.get("kind").and_then(Value::as_str) != Some("source") {
                 continue;
             }
-            if let Some(plan) = join_plan(snapshot, plan_id, plan_module, target, source_module) {
+            if let Some(plan) = join_plan(snapshot, plan_id, plan_module, target, source_module, data_dir) {
                 plans.push(plan);
             }
         }
@@ -46,7 +46,7 @@ pub fn plans_of(snapshot: &Snapshot) -> Vec<SourcePlan> {
             continue;
         }
         let plan_id = format!("plan/{}", slug_of(id));
-        if let Some(plan) = legacy_plan(snapshot, id, source_module, &plan_id) {
+        if let Some(plan) = legacy_plan(snapshot, id, source_module, &plan_id, data_dir) {
             plans.push(plan);
         }
     }
@@ -69,7 +69,11 @@ pub fn plans_of(snapshot: &Snapshot) -> Vec<SourcePlan> {
 /// 规划器轮次，因此不会让「未配置计划」的内置信源变成按节律自动采集。
 /// 节律缺省、不限量，只沿用信源自身的取数形态与队列；推送与非内置访问器入口返回
 /// `None`，仍按不可采集处理。
-pub fn manual_plan(snapshot: &Snapshot, source_id: &str) -> Option<SourcePlan> {
+pub fn manual_plan(
+    snapshot: &Snapshot,
+    source_id: &str,
+    data_dir: &std::path::Path,
+) -> Option<SourcePlan> {
     let module = snapshot.modules.get(source_id)?;
     if module.get("kind").and_then(Value::as_str) != Some("source") {
         return None;
@@ -83,14 +87,59 @@ pub fn manual_plan(snapshot: &Snapshot, source_id: &str) -> Option<SourcePlan> {
         &Value::Null,
         &Value::Null,
         true,
+        false,
         true,
         None,
         None,
+        &Value::Null,
+        None,
+        data_dir,
     )
 }
 
 fn slug_of(id: &str) -> &str {
     id.split('/').next_back().unwrap_or(id)
+}
+
+/// 解析计划引用的策略：计划自身的 trigger/quota/stopPolicy 等字段是对策略的
+/// 字段级覆写，未覆写的维度回落策略定义。无 strategy 引用时返回 None，
+/// 调用方按计划自带行为定义处理。
+fn resolve_strategy<'a>(
+    snapshot: &'a Snapshot,
+    plan_module: &'a Value,
+) -> Option<&'a Value> {
+    let reference = plan_module.get("strategy")?.as_str()?;
+    let strategy_id = if reference.contains('/') {
+        reference.to_string()
+    } else {
+        format!("strategy/{reference}")
+    };
+    let strategy = snapshot.modules.get(&strategy_id)?;
+    if strategy.get("kind").and_then(Value::as_str) != Some("strategy") {
+        return None;
+    }
+    Some(strategy)
+}
+
+/// 计划对策略的字段级覆写：对象维度逐键合并（计划键优先），非对象维度整体覆盖。
+fn override_of(strategy: Option<&Value>, plan_module: &Value, key: &str) -> Value {
+    let plan_value = plan_module.get(key);
+    match (strategy, plan_value) {
+        (_, Some(Value::Object(plan_map))) => {
+            let mut merged = strategy
+                .and_then(|s| s.get(key))
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            for (key, value) in plan_map {
+                merged.insert(key.clone(), value.clone());
+            }
+            Value::Object(merged)
+        }
+        (_, Some(value)) => value.clone(),
+        (Some(strategy), None) => strategy.get(key).cloned().unwrap_or(Value::Null),
+        (None, None) => Value::Null,
+    }
 }
 
 /// 从一等计划与信源 join 出一个 SourcePlan：节律/限制取自计划，取数形态取自信源。
@@ -100,21 +149,49 @@ fn join_plan(
     plan_module: &Value,
     source_id: &str,
     source_module: &Value,
+    data_dir: &std::path::Path,
 ) -> Option<SourcePlan> {
-    let trigger = plan_module.get("trigger")?;
+    let strategy = resolve_strategy(snapshot, plan_module);
+    // 节律解析：计划自带 trigger 是覆写；否则回落策略定义；两者皆无则不参与调度。
+    let trigger = plan_module
+        .get("trigger")
+        .filter(|value| !value.is_null())
+        .or_else(|| strategy.and_then(|s| s.get("trigger")).filter(|v| !v.is_null()))?;
     let cadence = normalize_cadence(trigger);
-    let quota = plan_module.get("quota").cloned().unwrap_or(Value::Null);
+    let quota = override_of(strategy, plan_module, "quota");
     let one_shot = trigger.get("kind").and_then(Value::as_str) == Some("oneShot");
     let source_enabled = source_enabled(source_module);
     let plan_enabled = plan_module
         .get("enabled")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let queue_override = plan_module.get("queue").and_then(Value::as_str);
-    let stop_policy = plan_module
-        .get("stopPolicy")
-        .cloned()
-        .unwrap_or(Value::Null);
+    // 计划级主动中断（切片 2）：paused 与 enabled 是两个可持久化字段；
+    // 派发闸门同时看两者，暂停期间不派发新任务、已开始任务做完即停。
+    let plan_paused = plan_module
+        .get("paused")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let queue_override = override_of(strategy, plan_module, "queue")
+        .as_str()
+        .map(str::to_string);
+    let stop_policy = override_of(strategy, plan_module, "stopPolicy");
+    let storage = match (
+        plan_module.get("storage"),
+        strategy.and_then(|s| s.get("storage")),
+    ) {
+        (Some(plan_storage), _) => plan_storage,
+        (None, Some(strategy_storage)) => strategy_storage,
+        (None, None) => &Value::Null,
+    };
+    // 策略身份：`strategy/<slug>@<内容哈希>`；内容变化即翻版本，run 可按此追溯
+    // 「当时生效的策略」。无引用的计划不携带该标记。
+    let strategy_tag = strategy.map(|doc| {
+        let id = doc
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("strategy/unknown");
+        format!("{id}@{}", &content_hash(&serde_json::to_vec(doc).unwrap_or_default())[..8])
+    });
     build_plan(
         snapshot,
         source_id,
@@ -124,9 +201,13 @@ fn join_plan(
         &quota,
         &stop_policy,
         source_enabled && plan_enabled,
+        plan_paused,
         one_shot,
-        queue_override,
+        queue_override.as_deref(),
         plan_pipeline(plan_module, source_module),
+        storage,
+        strategy_tag,
+        data_dir,
     )
 }
 
@@ -136,6 +217,7 @@ fn legacy_plan(
     source_id: &str,
     source_module: &Value,
     plan_id: &str,
+    data_dir: &std::path::Path,
 ) -> Option<SourcePlan> {
     let schedule = source_module.get("schedule")?;
     let cadence = normalize_cadence(schedule);
@@ -157,8 +239,12 @@ fn legacy_plan(
         &Value::Null,
         source_enabled(source_module),
         false,
+        false,
         None,
         None,
+        &Value::Null,
+        None,
+        data_dir,
     )
 }
 
@@ -221,9 +307,13 @@ fn build_plan(
     quota: &Value,
     stop_policy: &Value,
     enabled: bool,
+    paused: bool,
     one_shot: bool,
     queue_override: Option<&str>,
     pipeline_override: Option<(Option<Value>, bool)>,
+    storage: &Value,
+    strategy_tag: Option<String>,
+    data_dir: &std::path::Path,
 ) -> Option<SourcePlan> {
     let locator = locator_of(module.get("access")?.get("locator")?)?;
     if matches!(locator, Locator::PushChannel { .. }) {
@@ -302,6 +392,7 @@ fn build_plan(
             .filter(|value| !value.is_empty())
             .map(str::to_string),
         enabled,
+        paused,
         expected_period,
         yield_drop_ratio: YIELD_DROP_RATIO,
         failure_threshold,
@@ -311,6 +402,24 @@ fn build_plan(
         total_items,
         on_budget_exhausted,
         stagnation_cycles,
+        storage_root: storage
+            .get("root")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(|root| {
+                // M-05：相对 root 相对 --data 解析（与 plan.get 的 effectiveRoot 一致）。
+                let path = std::path::Path::new(root);
+                if path.is_absolute() {
+                    root.to_string()
+                } else {
+                    data_dir.join(root).to_string_lossy().into_owned()
+                }
+            }),
+        storage_classify: storage
+            .get("classify")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        strategy: strategy_tag,
         pipeline: pipeline_override
             .as_ref()
             .and_then(|(pipeline, _)| pipeline.clone()),
@@ -504,7 +613,7 @@ pub fn dry_run_migration_gate(
 ) -> Result<GateReport, String> {
     let options = config::LoadOptions::default();
     let before = config::validate(dir, &options).map_err(|error| error.to_string())?;
-    let before_index: std::collections::BTreeMap<String, String> = plans_of(&before)
+    let before_index: std::collections::BTreeMap<String, String> = plans_of(&before, dir)
         .iter()
         .map(|plan| (plan.source_id.as_str().to_string(), plan_fingerprint(plan)))
         .collect();
@@ -513,7 +622,7 @@ pub fn dry_run_migration_gate(
     copy_tree(dir, staging).map_err(|error| format!("复制配置副本失败: {error}"))?;
     let plan = config::apply_migration(staging, &options).map_err(|error| error.to_string())?;
     let after = config::validate(staging, &options).map_err(|error| error.to_string())?;
-    let after_index: std::collections::BTreeMap<String, String> = plans_of(&after)
+    let after_index: std::collections::BTreeMap<String, String> = plans_of(&after, staging)
         .iter()
         .map(|plan| (plan.source_id.as_str().to_string(), plan_fingerprint(plan)))
         .collect();
@@ -603,7 +712,7 @@ mod tests {
             modules,
             origins: BTreeMap::new(),
         };
-        let plans = plans_of(&snapshot);
+        let plans = plans_of(&snapshot, std::path::Path::new("."));
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].queue, strata_model::QueueName::Paid);
         assert!(plans[0].paid);
@@ -702,7 +811,7 @@ mod tests {
         write_fixture(dir.path());
         let before =
             config::validate(dir.path(), &config::LoadOptions::default()).expect("before 校验");
-        let before_map: std::collections::BTreeMap<String, String> = plans_of(&before)
+        let before_map: std::collections::BTreeMap<String, String> = plans_of(&before, std::path::Path::new("."))
             .iter()
             .map(|plan| {
                 (
@@ -729,7 +838,7 @@ mod tests {
         );
         let after =
             config::validate(migrated.path(), &config::LoadOptions::default()).expect("after 校验");
-        let after_map: std::collections::BTreeMap<String, String> = plans_of(&after)
+        let after_map: std::collections::BTreeMap<String, String> = plans_of(&after, std::path::Path::new("."))
             .iter()
             .map(|plan| {
                 (
@@ -775,7 +884,7 @@ mod tests {
             modules,
             origins: std::collections::BTreeMap::new(),
         };
-        let plans = plans_of(&snapshot);
+        let plans = plans_of(&snapshot, std::path::Path::new("."));
         assert_eq!(plans.len(), 2, "同一信源的两个计划应各自成一条");
         let keys: std::collections::BTreeSet<String> =
             plans.iter().map(|plan| plan.dedup_key()).collect();
@@ -807,10 +916,10 @@ mod tests {
             origins: std::collections::BTreeMap::new(),
         };
         assert!(
-            plans_of(&snapshot).is_empty(),
+            plans_of(&snapshot, std::path::Path::new(".")).is_empty(),
             "无计划覆盖时调度视图应为空，不得隐式启用采集"
         );
-        let plan = manual_plan(&snapshot, "source/loose").expect("手动采集应可合成计划");
+        let plan = manual_plan(&snapshot, "source/loose", std::path::Path::new(".")).expect("手动采集应可合成计划");
         assert_eq!(plan.source_id.as_str(), "source/loose");
         assert!(plan.plan_id.is_none(), "兜底计划不落盘，不带计划标识");
         assert!(plan.one_shot, "手动采集是一次性任务");
@@ -854,12 +963,12 @@ mod tests {
             modules,
             origins: std::collections::BTreeMap::new(),
         };
-        assert!(manual_plan(&snapshot, "source/inbox").is_none(), "推送信源无取数入口");
+        assert!(manual_plan(&snapshot, "source/inbox", std::path::Path::new(".")).is_none(), "推送信源无取数入口");
         assert!(
-            manual_plan(&snapshot, "source/custom").is_none(),
+            manual_plan(&snapshot, "source/custom", std::path::Path::new(".")).is_none(),
             "非内置访问器不由采集侧直调"
         );
-        assert!(manual_plan(&snapshot, "source/missing").is_none());
+        assert!(manual_plan(&snapshot, "source/missing", std::path::Path::new(".")).is_none());
     }
 
     /// R11.5：对**真实 `config/` 全量信源**做 dry-run，断言迁移前后计划视图与 config_hash 稳定。
@@ -973,7 +1082,7 @@ mod pipeline_flow_tests {
             modules,
             origins: BTreeMap::new(),
         };
-        let plans = plans_of(&snapshot);
+        let plans = plans_of(&snapshot, std::path::Path::new("."));
         let plan = plans
             .iter()
             .find(|plan| plan.plan_id.as_deref() == Some("plan/override"))
@@ -999,8 +1108,122 @@ mod pipeline_flow_tests {
         assert!(task.vectorize);
 
         // 未声明计划的 manual_plan：pipeline 缺省（沿用信源默认路径）、vectorize false。
-        let manual = manual_plan(&snapshot, "source/demo").expect("手动计划应存在");
+        let manual = manual_plan(&snapshot, "source/demo", std::path::Path::new(".")).expect("手动计划应存在");
         assert!(manual.pipeline.is_none());
         assert!(!manual.vectorize);
+    }
+
+    /// 策略为焦点的复用语义：两个计划引用同一策略，各自携带独立状态与覆写；
+    /// 策略内容变化即翻版本标记。
+    #[test]
+    fn strategy_is_reused_with_overrides_and_version_tag() {
+        let data_dir = std::env::temp_dir();
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "accessor/rss".into(),
+            json!({
+                "kind": "accessor",
+                "implementation": "builtin:rss",
+                "limits": {"timeout": "30s"}
+            }),
+        );
+        for source_id in ["source/a", "source/b"] {
+            modules.insert(
+                source_id.into(),
+                json!({
+                    "kind": "source",
+                    "access": {
+                        "accessor": "accessor/rss",
+                        "locator": {"url": "https://example.com/feed"}
+                    }
+                }),
+            );
+        }
+        modules.insert(
+            "strategy/shared".into(),
+            json!({
+                "id": "strategy/shared",
+                "kind": "strategy",
+                "trigger": {"kind": "recurring", "interval": "1h"},
+                "quota": {"perRunItems": 10}
+            }),
+        );
+        // 计划 A：引用策略并覆写单轮额度；计划 B：原样引用。
+        modules.insert(
+            "plan/with-override".into(),
+            json!({
+                "kind": "plan",
+                "targets": ["source/a"],
+                "strategy": "strategy/shared",
+                "quota": {"perRunItems": 5}
+            }),
+        );
+        modules.insert(
+            "plan/plain".into(),
+            json!({
+                "kind": "plan",
+                "targets": ["source/b"],
+                "strategy": "shared"
+            }),
+        );
+        let snapshot = config::Snapshot {
+            generation: 1,
+            system: json!({}),
+            modules: modules.clone(),
+            origins: BTreeMap::new(),
+        };
+        let plans = plans_of(&snapshot, &data_dir);
+        assert_eq!(plans.len(), 2, "两个计划应各自成一条 SourcePlan");
+        let overridden = plans
+            .iter()
+            .find(|plan| plan.plan_id.as_deref() == Some("plan/with-override"))
+            .expect("计划 A 应存在");
+        let plain = plans
+            .iter()
+            .find(|plan| plan.plan_id.as_deref() == Some("plan/plain"))
+            .expect("计划 B 应存在");
+        // 复用：两条计划带同一策略身份；节律取自策略（计划未覆写 trigger）。
+        let tag_a = overridden.strategy.as_deref().expect("计划 A 应携带策略身份");
+        let tag_b = plain.strategy.as_deref().expect("计划 B 应携带策略身份");
+        assert!(
+            tag_a.starts_with("strategy/shared@") && tag_a == tag_b,
+            "两条计划应携带同一策略版本: {tag_a} vs {tag_b}"
+        );
+        assert_eq!(overridden.interval, plain.interval);
+        // 覆写：计划 A 的单轮额度取计划值，计划 B 回落策略值。
+        assert_eq!(overridden.per_run_items, Some(5));
+        assert_eq!(plain.per_run_items, Some(10));
+        // 版本：策略内容变化必须翻版本标记。
+        let mut changed_modules = modules.clone();
+        changed_modules.insert(
+            "strategy/shared".into(),
+            json!({
+                "id": "strategy/shared",
+                "kind": "strategy",
+                "trigger": {"kind": "recurring", "interval": "2h"},
+                "quota": {"perRunItems": 10}
+            }),
+        );
+        let changed = config::Snapshot {
+            generation: 1,
+            system: json!({}),
+            modules: changed_modules,
+            origins: BTreeMap::new(),
+        };
+        let changed_plans = plans_of(&changed, &data_dir);
+        let changed_plain = changed_plans
+            .iter()
+            .find(|plan| plan.plan_id.as_deref() == Some("plan/plain"))
+            .expect("变更后的计划 B 应存在");
+        assert_ne!(
+            plain.strategy.as_deref(),
+            changed_plain.strategy.as_deref(),
+            "策略内容变化应翻版本标记"
+        );
+        assert_eq!(
+            changed_plain.interval,
+            Duration::from_secs(2 * 3_600),
+            "计划未覆写节律时跟随新策略"
+        );
     }
 }

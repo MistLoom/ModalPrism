@@ -170,9 +170,9 @@ Boundaries: only Strata touches storage; accessors reach the network solely thro
 
 | Process | Description | Surface |
 |---|---|---|
-| `modalprism-collector` | One command: initialize storage, expose the domain API, run the collection and delivery loops | Loopback `/api/v1` on `:17880`, forward proxy `:17881`, push `:17882` |
-| `modalprism-console` (Node) | Serves the SPA and proxies `/api/v1` byte-for-byte | HTTP, `127.0.0.1:17890` |
-| `modalprism-agent` | Read-only surface (query / health / source inventory / provenance / type views) | MCP stdio |
+| `mp` (same program as `modalprism-collector`) | Collection and delivery process; short commands `mp once/search/ls/read/fetch` run the information main path in-process, `mp agent` starts the read-only MCP, `mp serve` starts the collection loop | Loopback `/api/v1` on `:17880`, forward proxy `:17881`, push `:17882` |
+| `modalprism-console` (Node) | Hosts the SPA and transparently proxies `/api/v1` byte for byte | HTTP, `127.0.0.1:17890` |
+| `modalprism-agent` | Read-only surface (query / health / source inventory / provenance / type views); `mp agent` is its short entry | MCP stdio |
 
 ## Quick start
 
@@ -186,7 +186,7 @@ That is the complete build — no extra flags, and no system `protoc` install (t
 
 ### Start collecting
 
-Run from the repository root; the first run initializes storage. Built-in sources and plans are ready with plans disabled — enable them on the Plans page after confirming the cadence:
+Run from the repository root; the first run initializes storage. Built-in sources and plans are ready with plans disabled — enable them on the Plans page after confirming the cadence. The build produces the short entry `mp` (`mp.exe` on Windows); `cargo run -p modalprism-collector` points at the same program:
 
 ```sh
 cargo run -p modalprism-collector
@@ -205,10 +205,41 @@ Open `http://127.0.0.1:5178`; API calls go straight to the collector. Navigation
 ### Start the read-only MCP process
 
 ```sh
-cargo run -p modalprism-agent
+mp agent
 ```
 
-It uses the same data and config directories as the collector; integration details are in the Public API section.
+This is `cargo run -p modalprism-agent`; it uses the same data and config directories as the collector, and integration details are in the Public API section.
+
+### Agent main path (short commands)
+
+Search and one-shot collection work without starting a collector: `once / search / ls / read / fetch` run the full collection stack in-process by default; if a collector is already live on the default address (`:17880`) they attach to it, or point at one explicitly with `--http <addr>`. Failures print an error JSON and exit non-zero:
+
+```sh
+mp search "modalprism rust" --save      # search and save the hits; output carries a searchId
+mp once --from-search s19a2b3c4d5e6     # ingest the saved search results one by one
+mp once https://example.com/feed --save # one-shot collection, stored to disk (default preview stores nothing)
+mp read <contentId>                     # read a stored content's details
+mp fetch https://example.com/page       # fetch a page body by address
+mp ls --kind accessor                   # discover sources and mountable parts (catalog is an alias)
+```
+
+Plan verbs run on the same CLI and MCP main path:
+
+```sh
+mp plan ls                              # plan list (disabled / paused / running / active / exhausted)
+mp plan get <planId>                    # details + progress + per-source cursors (accepted / visible / item count / lastError / health)
+mp plan new <source…> --name "name"     # create a plan
+mp plan set <planId> --enabled          # update a plan
+mp plan pause <planId>                  # intentional interruption: no new dispatches, cursors and stored data kept
+mp plan resume <planId>                 # continue from the last accepted cursor
+mp plan run <planId>                    # run one round now (alias continue); cursors are not reset
+mp plan new --from-search <searchId>    # build a oneShot URL plan from saved search results
+mp search "query" --into <planId>       # append search hits to an existing plan
+```
+
+Aliases: `list=ls`, `create=new`, `update=set`, `continue=run`. Pausing and enabling are two independent fields: `enabled=false` means draft/disabled, while `paused=true` means an intentional interruption that only applies while enabled; pause/resume/run on a disabled plan return a clear error, and run/continue on a paused plan is refused instead of silently unpausing. Cursors only exist for accessors with cross-request cursors (rss / api / paid); the rest are null. Note: changing a plan's access shape (access, cadence, quota — the config fingerprint) drops the cursor and recollection starts from the new declaration; compare via `plan get`.
+
+Behavior change: `POST /collection/plans/{id}/pause` and `plan.pause` used to set `enabled` to false; they now write the independent `paused` field (`enabled` stays unchanged), and pause/resume on a disabled plan now fails explicitly instead of silently succeeding.
 
 ## Declaring sources and plans
 
@@ -323,7 +354,7 @@ Projects are first-class: collected resources bind to a project; `POST /fetch` a
 
 ### MCP
 
-A separate read-only process next to the collector (start it from the Quick start) serves any MCP-capable client. Tools are named `capability.method`, e.g. `strata_read.query` (search), `type_article.project` (article view), `catalog_admin.templates` (source templates). Writes are limited to a recoverable whitelist (creating, rewriting, and toggling source/accessor/adapter declarations); destructive deletes and system settings never appear in the tool list.
+A separate read-only process next to the collector (start it from the Quick start) serves any MCP-capable client. The tool-face main path is exposed under short names: `once` (one-shot collection), `search`, `ls` (catalog discovery), `read` (content details), `fetch` (page body); the remaining methods follow `capability.method`, e.g. `strata_read.query` (search), `type_article.project` (article view), `catalog_admin.templates` (source templates). The legacy `tool.*` long names remain as compatibility aliases. Writes are limited to a recoverable whitelist (creating, rewriting, and toggling source/accessor/adapter declarations); destructive deletes and system settings never appear in the tool list.
 
 ### SKILL package
 

@@ -234,7 +234,10 @@ async fn factory_reset_keeps_builtin_groups_and_filing() {
     let plan_items = plans["items"].as_array().unwrap();
     assert_eq!(plan_items.len(), 1, "{plans}");
     assert_eq!(plan_items[0]["enabled"], json!(false), "{plans}");
-    assert_eq!(plan_items[0]["status"], json!("paused"), "{plans}");
+    // 切片 2 行为变更：enabled=false 投影为 disabled（草稿/停用），与主动中断的
+    // paused 可区分；过去这里断言的是 "paused"。
+    assert_eq!(plan_items[0]["status"], json!("disabled"), "{plans}");
+    assert_eq!(plan_items[0]["paused"], json!(false), "{plans}");
     assert!(
         !fs::read_to_string(config.path().join("sources/google-ai-blog.yaml"))
             .unwrap()

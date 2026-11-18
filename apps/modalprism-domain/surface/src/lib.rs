@@ -85,6 +85,8 @@ pub const TOOLS: &[ToolSpec] = &[
             ToolParam { name: "selectors", kind: "array", required: false, summary: "识别类型过滤" },
             ToolParam { name: "pipeline", kind: "array", required: false, summary: "显式适配器流水线" },
             ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "写入后触发向量派生（缺省 false）" },
+            ToolParam { name: "fromSearch", kind: "string", required: false, summary: "从持久化检索记录（searchId）取 URL 逐条执行" },
+            ToolParam { name: "index", kind: "number", required: false, summary: "fromSearch 的第 N 条（0 起）；缺省按序全部" },
         ],
     },
     ToolSpec {
@@ -235,6 +237,56 @@ pub const TOOLS: &[ToolSpec] = &[
             ToolParam { name: "reason", kind: "string", required: false, summary: "触发原因" },
         ],
     },
+    ToolSpec {
+        id: "strategy.ls",
+        summary: "列出采集策略（可复用的节律/额度/停止策略定义）",
+        write: false,
+        params: &[],
+    },
+    ToolSpec {
+        id: "strategy.get",
+        summary: "读取采集策略详情",
+        write: false,
+        params: &[ToolParam { name: "strategyId", kind: "string", required: true, summary: "策略标识" }],
+    },
+    ToolSpec {
+        id: "strategy.new",
+        summary: "新建采集策略，供多个计划引用复用",
+        write: true,
+        params: &[
+            ToolParam { name: "name", kind: "string", required: false, summary: "策略名称" },
+            ToolParam { name: "trigger", kind: "object", required: true, summary: "节律定义（kind: recurring/oneShot）" },
+            ToolParam { name: "queue", kind: "string", required: false, summary: "队列覆盖" },
+            ToolParam { name: "priority", kind: "number", required: false, summary: "优先级" },
+            ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
+            ToolParam { name: "stopPolicy", kind: "object", required: false, summary: "停止条件" },
+            ToolParam { name: "storage", kind: "object", required: false, summary: "存储根声明" },
+            ToolParam { name: "description", kind: "string", required: false, summary: "说明" },
+        ],
+    },
+    ToolSpec {
+        id: "strategy.set",
+        summary: "修改采集策略；引用它的计划在下次解析时生效",
+        write: true,
+        params: &[
+            ToolParam { name: "strategyId", kind: "string", required: true, summary: "策略标识" },
+            ToolParam { name: "trigger", kind: "object", required: false, summary: "节律定义" },
+            ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
+            ToolParam { name: "stopPolicy", kind: "object", required: false, summary: "停止条件" },
+            ToolParam { name: "queue", kind: "string", required: false, summary: "队列覆盖" },
+            ToolParam { name: "priority", kind: "number", required: false, summary: "优先级" },
+            ToolParam { name: "storage", kind: "object", required: false, summary: "存储根声明" },
+            ToolParam { name: "enabled", kind: "boolean", required: false, summary: "启停" },
+            ToolParam { name: "name", kind: "string", required: false, summary: "策略名称" },
+            ToolParam { name: "description", kind: "string", required: false, summary: "说明" },
+        ],
+    },
+    ToolSpec {
+        id: "strategy.remove",
+        summary: "删除采集策略；仍被计划引用时拒绝",
+        write: true,
+        params: &[ToolParam { name: "strategyId", kind: "string", required: true, summary: "策略标识" }],
+    },
 ];
 
 /// 按动词名取工具声明。
@@ -248,17 +300,47 @@ pub fn tool(id: &str) -> Option<&'static ToolSpec> {
 pub const ADVERTISED_TOOLS: &[&str] = &[
     "once", "search", "ls", "read", "fetch", "plan.ls", "plan.get", "plan.new", "plan.set",
     "plan.pause", "plan.resume", "plan.run",
+    "strategy.ls", "strategy.get", "strategy.new", "strategy.set", "strategy.remove",
 ];
 
-/// 兼容别名解析：`tool.*` 长名剥前缀，`plan.list` 归一到 `plan.ls`。
+/// 兼容别名解析：`tool.*` 长名剥前缀，计划长名归一到短名（list→ls 等）。
 /// 解析结果如果仍是工具动词就照常分发；旧名是否用 profile 收敛是未决设计，这里不做。
 pub fn resolve_alias(name: &str) -> &str {
     let stripped = name.strip_prefix("tool.").unwrap_or(name);
     match stripped {
         "plan.list" => "plan.ls",
+        "plan.create" => "plan.new",
+        "plan.update" => "plan.set",
+        "plan.continue" => "plan.run",
         other => other,
     }
 }
+
+/// 计划面的动词契约（M-03）：短名是宣传名，别名是兼容写法（语义不变）。
+/// CLI 的 `mp plan <短名|别名>` 与 MCP 的 `plan.<短名>` 全部由这里派生。
+pub struct PlanVerbSpec {
+    /// 短名（CLI 副命令，也是 MCP `plan.<短名>` 的后缀）。
+    pub short: &'static str,
+    /// 对应的工具动词（`plan.<short>`）。
+    pub tool: &'static str,
+    /// 兼容别名（长名），语义与短名相同。
+    pub aliases: &'static [&'static str],
+    /// 是否可能写存储。
+    pub write: bool,
+    pub summary: &'static str,
+}
+
+/// 计划面的唯一事实源：与 [`TOOLS`] 的 `plan.*` 条目、[`ADVERTISED_TOOLS`]、
+/// CLI `mp plan --help` 同源，由契约测试守住。
+pub const PLANS: &[PlanVerbSpec] = &[
+    PlanVerbSpec { short: "ls", tool: "plan.ls", aliases: &["list"], write: false, summary: "列出计划" },
+    PlanVerbSpec { short: "get", tool: "plan.get", aliases: &[], write: false, summary: "计划详情与进度游标" },
+    PlanVerbSpec { short: "new", tool: "plan.new", aliases: &["create"], write: true, summary: "新建计划" },
+    PlanVerbSpec { short: "set", tool: "plan.set", aliases: &["update"], write: true, summary: "更新计划" },
+    PlanVerbSpec { short: "pause", tool: "plan.pause", aliases: &[], write: true, summary: "主动中断：不丢游标与已落盘数据" },
+    PlanVerbSpec { short: "resume", tool: "plan.resume", aliases: &[], write: true, summary: "从上一已接受游标继续" },
+    PlanVerbSpec { short: "run", tool: "plan.run", aliases: &["continue"], write: true, summary: "立即跑一轮（不重置游标）" },
+];
 
 /// 工具面的全部动词名，与声明顺序一致。
 pub fn tool_ids() -> Vec<&'static str> {
@@ -372,11 +454,12 @@ pub const COLLECTOR: &[Ability] = &[
         methods: &[
             "catalog", "fetch", "ls", "once", "parse", "plan.get", "plan.ls", "plan.new",
             "plan.pause", "plan.resume", "plan.run", "plan.set", "probe", "read", "save",
-            "search",
+            "search", "strategy.get", "strategy.ls", "strategy.new", "strategy.remove",
+            "strategy.set",
         ],
         read_only: &[
             "catalog", "fetch", "ls", "parse", "plan.get", "plan.ls", "probe", "read",
-            "search",
+            "search", "strategy.get", "strategy.ls",
         ],
     },
     Ability {

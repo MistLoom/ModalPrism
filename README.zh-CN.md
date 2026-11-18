@@ -170,9 +170,9 @@ pipeline:
 
 | 进程 | 说明 | 对外表面 |
 |---|---|---|
-| `modalprism-collector` | 一条命令初始化存储、暴露领域 API 并运行采集与投递循环 | 环回 `/api/v1`（`:17880`）、正向代理 `:17881`、推送 `:17882` |
+| `mp`（即 `modalprism-collector`） | 采集与投递进程；短命令 `mp once/search/ls/read/fetch` 在进程内执行信息主路径，`mp agent` 启动只读 MCP，`mp serve` 启动采集循环 | 环回 `/api/v1`（`:17880`）、正向代理 `:17881`、推送 `:17882` |
 | `modalprism-console`（Node） | 托管 SPA，把 `/api/v1` 逐字节透明代理 | HTTP，`127.0.0.1:17890` |
-| `modalprism-agent` | 只读表面（查询 / 健康 / 信源清单 / 配置溯源 / 类型视图） | MCP stdio |
+| `modalprism-agent` | 只读表面（查询 / 健康 / 信源清单 / 配置溯源 / 类型视图），`mp agent` 是它的短调用名 | MCP stdio |
 
 ## 快速开始
 
@@ -186,7 +186,7 @@ cargo build --workspace
 
 ### 启动采集
 
-在仓库根目录执行；首次运行自动初始化存储，内置信源与采集计划开箱可用，计划默认关闭，确认后在计划页启用：
+在仓库根目录执行；首次运行自动初始化存储，内置信源与采集计划开箱可用，计划默认关闭，确认后在计划页启用。构建产物里的短调用名是 `mp`（Windows 上为 `mp.exe`），`cargo run -p modalprism-collector` 与它指向同一程序：
 
 ```sh
 cargo run -p modalprism-collector
@@ -205,10 +205,41 @@ cd apps/modalprism-console && pnpm install && pnpm dev
 ### 启动只读 MCP 进程
 
 ```sh
-cargo run -p modalprism-agent
+mp agent
 ```
 
-数据与配置目录与 collector 相同，接入方式见「公共 API」。
+即 `cargo run -p modalprism-agent`，数据与配置目录与 collector 相同，接入方式见「公共 API」。
+
+### 智能体主路径（短命令）
+
+不启动采集进程也可以直接完成检索与一次采集：`once / search / ls / read / fetch` 默认在本进程内执行完整采集栈；默认地址（`:17880`）上已有 collector 在跑时自动附加到它，或用 `--http <地址>` 显式指定。失败时打印错误 JSON 并以非零退出码结束：
+
+```sh
+mp search "modalprism rust" --save      # 检索并保存结果，输出带 searchId
+mp once --from-search s19a2b3c4d5e6     # 逐条采集已保存的检索结果
+mp once https://example.com/feed --save # 一次采集并落盘（缺省 preview 不落盘）
+mp read <内容ID>                        # 读取已入库内容详情
+mp fetch https://example.com/page       # 按地址取回正文
+mp ls --kind accessor                   # 发现信源与可挂载组件（catalog 是别名）
+```
+
+计划动词走同一套 CLI 与 MCP 主路径：
+
+```sh
+mp plan ls                              # 计划清单（disabled / paused / running / active / exhausted）
+mp plan get <计划ID>                    # 详情 + 进度 + 每信源游标（accepted / visible / 条数 / lastError / health）
+mp plan new <信源…> --name 备份计划      # 新建计划
+mp plan set <计划ID> --enabled          # 修改计划
+mp plan pause <计划ID>                  # 主动中断：不派发新任务，游标与已落盘数据保留
+mp plan resume <计划ID>                 # 从上一已接受游标继续
+mp plan run <计划ID>                    # 立即跑一轮（别名 continue）；不重置游标
+mp plan new --from-search <searchId>    # 用已保存的检索结果生成 oneShot URL 计划
+mp search "关键词" --into <计划ID>       # 把检索结果追加进既有计划
+```
+
+别名：`list=ls`、`create=new`、`update=set`、`continue=run`。暂停与启停是两个独立字段：`enabled=false` 是草稿/停用，`paused=true` 只在启用时表示主动中断；对停用计划调用 pause/resume/run 返回明确错误，已暂停计划的 run/continue 会拒绝而不是悄悄解除暂停。游标只对支持跨请求游标的访问器有意义（rss / api / paid），其余访问器为 null。注意：计划的取数形态（access、节律、quota 等配置指纹）变化会丢弃游标，从新声明的起点重新采集——`plan get` 里可对照指纹确认。
+
+行为变更说明：`POST /collection/plans/{id}/pause` 与 `plan.pause` 过去把 `enabled` 改成 false，现在写入独立的 `paused` 字段（`enabled` 保持不变）；对停用计划的 pause/resume 由静默成功改为明确报错。
 
 ## 信源与计划声明
 
@@ -323,7 +354,7 @@ curl -s -X POST http://127.0.0.1:17880/api/v1/collection/runs \
 
 ### MCP
 
-collector 之外另起一个只读进程（启动见「快速开始」），供任意支持 MCP 的客户端查询已采集数据。工具按「能力实例.方法」命名，例如 `strata_read.query`（检索）、`type_article.project`（文章视图）、`catalog_admin.templates`（信源模板）。写侧只开一份可恢复写白名单（信源/访问器/适配器声明的新建、改写与启停）；破坏性删除与系统设置不在工具列表里。
+collector 之外另起一个只读进程（启动见「快速开始」），供任意支持 MCP 的客户端查询已采集数据。工具面主路径以短名暴露：`once`（一次采集）、`search`（检索）、`ls`（目录发现）、`read`（内容详情）、`fetch`（取回正文），其余方法按「能力实例.方法」命名，例如 `strata_read.query`（检索）、`type_article.project`（文章视图）、`catalog_admin.templates`（信源模板）；旧客户端使用的 `tool.*` 长名保留为兼容别名。写侧只开一份可恢复写白名单（信源/访问器/适配器声明的新建、改写与启停）；破坏性删除与系统设置不在工具列表里。
 
 ### SKILL 包
 

@@ -47,6 +47,8 @@ pub struct TaskSuccess {
     pub cost: u64,
     pub adapters: Vec<String>,
     pub follows: Vec<strata_model::AccessTask>,
+    /// 批式路径已逐批提交（每页 apply + 游标）：`ops` 为空，`succeed` 只记账不再重复提交。
+    pub ops_committed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +66,57 @@ pub trait Handler: Send + Sync {
         task: &strata_model::AccessTask,
         cursor: Option<Value>,
     ) -> Result<TaskSuccess, Classified>;
+
+    /// 按批流式执行：每完成一页（批）即经 `sink.commit` 提交 ops 与该批游标，
+    /// 返回的 `TaskSuccess.ops_committed` 为 true、`ops` 为空。
+    /// 缺省回退到一次性 `execute`（不提交任何批），未改造的 handler 行为不变。
+    async fn execute_batched(
+        &self,
+        task: &strata_model::AccessTask,
+        cursor: Option<Value>,
+        sink: &(dyn BatchCommit + Send + Sync),
+    ) -> Result<TaskSuccess, Classified> {
+        let _ = sink;
+        self.execute(task, cursor).await
+    }
+}
+
+/// 批式执行的提交口：runner 侧实现，逐批 `apply` ops 并写入该批结束时的
+/// `accepted_cursor`（带 config_hash 戳）。一批失败不回滚之前已提交的批。
+#[async_trait]
+pub trait BatchCommit: Send + Sync {
+    async fn commit(&self, ops: Vec<Op>, cursor: Option<Value>) -> Result<(), PlannerError>;
+}
+
+/// runner 内部把 `BatchCommit` 落到队列：与 `succeed` 同一条 changeset 路径。
+struct RunCommits<'a, Q: Queue, P: Persist> {
+    planner: &'a Planner<Q, P>,
+    plan: &'a SourcePlan,
+    committed: &'a std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl<Q: Queue, P: Persist> BatchCommit for RunCommits<'_, Q, P> {
+    async fn commit(&self, mut ops: Vec<Op>, cursor: Option<Value>) -> Result<(), PlannerError> {
+        // 逐批提交不带 ack：任务确认只在 succeed 结算时随最终游标提交一次，
+        // 同一 ack 重复 apply 会被队列以「任务不存在/已完成」拒绝。
+        crate::storage::materialize(self.plan, &ops);
+        if let Some(cursor) = cursor {
+            ops.push(Op::SetState {
+                scope: "cursor".into(),
+                key: String::new(),
+                value: stamp_hash(cursor, &self.plan.config_hash),
+                expect_version: None,
+            });
+        }
+        self.planner
+            .queue()
+            .apply(changeset(self.plan, None, ops))
+            .await?;
+        self.committed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -100,14 +153,26 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
         } else {
             strip_cursor(cursor, &plan.config_hash)
         };
-        let first = handler.execute(&task, cursor.clone()).await;
+        let committed = std::sync::atomic::AtomicUsize::new(0);
+        let first = handler.execute_batched(&task, cursor.clone(), &RunCommits {
+            planner: self,
+            plan,
+            committed: &committed,
+        }).await;
         let outcome = match first {
             Err(error)
                 if error.class == ErrorClass::Transient
                     && now < deadline
-                    && counts_toward_health(error.class, &error.message) =>
+                    && counts_toward_health(error.class, &error.message)
+                    && committed.load(std::sync::atomic::Ordering::Relaxed) == 0 =>
             {
-                handler.execute(&task, cursor).await
+                // 只有尚未提交任何批（游标未推进）才允许整任务重试；
+                // 已有批提交则不回滚、不重跑，交给下一轮从已接受游标续取。
+                handler.execute_batched(&task, cursor, &RunCommits {
+                    planner: self,
+                    plan,
+                    committed: &committed,
+                }).await
             }
             other => other,
         };
@@ -130,9 +195,12 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
     ) -> Result<Vec<strata_model::AccessTask>, PlannerError> {
         let _guard = self.lock().await;
         if task.reason != strata_model::TaskReason::Schedule {
-            self.queue()
-                .apply(changeset(plan, Some(task.task_id.clone()), success.ops))
-                .await?;
+            // 批式路径已逐批提交，这里不再重复 apply（避免双写）。
+            if !success.ops_committed {
+                self.queue()
+                    .apply(changeset(plan, Some(task.task_id.clone()), success.ops))
+                    .await?;
+            }
             // 向量写入阶段：只在任务显式开启 vectorize 时触发；once 默认不等
             // 向量写完（嵌入走派生任务，本调用只入队即返回）。
             self.maybe_vectorize(task).await?;
@@ -174,6 +242,7 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             .clone()
             .map(|value| stamp_hash(value, &plan.config_hash));
         let ops = changeset_ops(&success, cursor);
+        crate::storage::materialize(plan, &ops);
         self.save(&db).await?;
         self.queue()
             .apply(changeset(plan, Some(task.task_id.clone()), ops))
@@ -464,7 +533,12 @@ fn stamp_hash(value: Value, hash: &str) -> Value {
 }
 
 fn changeset_ops(success: &TaskSuccess, cursor: Option<Value>) -> Vec<Op> {
-    let mut ops = success.ops.clone();
+    // 批式路径：ops 已逐批提交，这里只结算最终游标（幂等重写同一位置）。
+    let mut ops = if success.ops_committed {
+        Vec::new()
+    } else {
+        success.ops.clone()
+    };
     if let Some(cursor) = cursor {
         ops.push(Op::SetState {
             scope: "cursor".into(),

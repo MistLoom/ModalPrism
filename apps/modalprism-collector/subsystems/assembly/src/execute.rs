@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use accessors::{AccessContext, AccessHints, AccessRequest, Accessor, Session, SessionPool};
+use accessors::{AccessContext, AccessError, AccessHints, AccessRequest, Accessor, Session, SessionPool};
 use accessors_builtin::{BrowserAccessor, MoliCommand, by_id};
 use adapters::{
     Admission, DetectorChoice, FollowRequest, Mount, PartBytes, Registry, empty_identities,
@@ -60,12 +60,25 @@ pub(crate) struct Fetched {
     pub max_fetches: usize,
 }
 
-pub async fn fetch(
+/// `fetch` 与 `fetch_batched` 共用的准备段：解析访问器、管道与出站策略，构造请求上下文。
+pub(crate) struct PreparedFetch {
+    pub module: Value,
+    pub pipeline: Value,
+    pub initial: bool,
+    pub max_fetches: usize,
+    pub request: AccessRequest,
+    pub context: AccessContext,
+    pub accessor: Box<dyn Accessor>,
+    pub source_proxy: egress::ProxySetting,
+    pub egress_policy: egress::Policy,
+}
+
+pub(crate) async fn prepare_fetch(
     state: &FetchState,
     task: &strata_model::AccessTask,
     cursor: Option<Value>,
-    resource: Option<Rid>,
-) -> Result<Fetched, Classified> {
+    _resource: Option<&Rid>,
+) -> Result<PreparedFetch, Classified> {
     let module = state
         .snapshot
         .modules
@@ -134,20 +147,6 @@ pub async fn fetch(
         }),
         cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
-    let deadline = request.deadline;
-    let envelopes = crate::transport::REQUEST_DEADLINE
-        .scope(
-            deadline,
-            crate::transport::SOURCE_PROXY.scope(
-                source_proxy,
-                crate::transport::EGRESS_POLICY
-                    .scope(egress_policy, accessor.access(request, &context)),
-            ),
-        )
-        .await
-        .map_err(from_access)?;
-    // 原文就绪：浏览器取数与详情跟页与普通任务一样在此广播 raw.ready。
-    state.events.raw_ready(task, envelopes.len());
     let pipeline = if let Some(override_pipeline) = task
         .pipeline
         .as_ref()
@@ -161,6 +160,227 @@ pub async fn fetch(
             .cloned()
             .unwrap_or(Value::Array(Vec::new()))
     };
+    let max_fetches = detail_budget(&module);
+    Ok(PreparedFetch {
+        module,
+        pipeline,
+        initial,
+        max_fetches,
+        request,
+        context,
+        accessor,
+        source_proxy,
+        egress_policy,
+    })
+}
+
+/// 单批处理：一条（页）信封 → 管道 ops。与 `fetch` 的整批路径共用同一套回退语义。
+async fn process_batch(
+    state: &FetchState,
+    task: &strata_model::AccessTask,
+    module: &Value,
+    pipeline: &Value,
+    initial: bool,
+    resource: Option<&Rid>,
+    envelopes: &[RawEnvelope],
+) -> Result<(Vec<Op>, Vec<FollowRequest>), Classified> {
+    if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
+        match adapted_ops(
+            state,
+            task,
+            module,
+            envelopes,
+            &default_pipeline(task.reason),
+            initial,
+            resource,
+        )
+        .await
+        {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                // 采集不因适配失败而中断：退回「只存原文」，失败原因留运行日志。
+                tracing::warn!(task = %task.task_id, error = %error.message, "管道适配失败，退回只存原文");
+                Ok((raw_ops(envelopes)?, Vec::new()))
+            }
+        }
+    } else {
+        match adapted_ops(state, task, module, envelopes, pipeline, initial, resource).await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                tracing::warn!(task = %task.task_id, error = %error.message, "批式适配失败");
+                Err(error)
+            }
+        }
+    }
+}
+
+/// 按批流式执行：每页信封 → ops → 立即经 `sink` 提交（apply + 该批游标）。
+/// 驻留内存不超过当前页 + 固定缓冲；返回的 TaskSuccess `ops_committed=true`、
+/// `ops` 为空，`succeed` 只做节奏记账，不重复提交。
+pub async fn fetch_batched(
+    state: &FetchState,
+    task: &strata_model::AccessTask,
+    cursor: Option<Value>,
+    resource: Option<Rid>,
+    sink: &(dyn planner::BatchCommit + Send + Sync),
+) -> Result<Fetched, Classified> {
+    let prepared = prepare_fetch(state, task, cursor, resource.as_ref()).await?;
+    let PreparedFetch {
+        module,
+        pipeline,
+        initial,
+        max_fetches,
+        request,
+        context,
+        accessor,
+        source_proxy,
+        egress_policy,
+    } = prepared;
+    let deadline = request.deadline;
+    let mut batch_ops = BatchOpsCommit {
+        state,
+        task,
+        module: &module,
+        pipeline: &pipeline,
+        initial,
+        resource: resource.as_ref(),
+        sink,
+        new_resources: 0,
+        follow_requests: Vec::new(),
+        last: None,
+    };
+    crate::transport::REQUEST_DEADLINE
+        .scope(
+            deadline,
+            crate::transport::SOURCE_PROXY.scope(
+                source_proxy,
+                crate::transport::EGRESS_POLICY
+                    .scope(egress_policy, accessor.access_batched(request, &context, &mut batch_ops)),
+            ),
+        )
+        .await
+        .map_err(from_access)?;
+    let BatchOpsCommit {
+        new_resources,
+        follow_requests,
+        last,
+        ..
+    } = batch_ops;
+    let follows = if task.reason == TaskReason::Schedule && max_fetches > 0 {
+        follow_tasks(task, &follow_requests)?
+    } else {
+        Vec::new()
+    };
+    let success = TaskSuccess {
+        ops: Vec::new(),
+        cursor: last.as_ref().and_then(|item| item.cursor_candidate.clone()),
+        receipt: match &last {
+            Some(envelope) => receipt_of(&state.paid, envelope).await?,
+            None => None,
+        },
+        quality: Quality::Ok,
+        selector_miss: false,
+        blocked: false,
+        ttl: last.as_ref().and_then(|item| item.signals.ttl),
+        retry_after: last.as_ref().and_then(|item| item.signals.retry_after),
+        cache_max_age: last.as_ref().and_then(|item| item.signals.cache_max_age),
+        expires: None,
+        new_resources,
+        render_level: last
+            .as_ref()
+            .and_then(|item| item.transport.render_level)
+            .map(render_name)
+            .map(str::to_string),
+        cost: 0,
+        adapters: Vec::new(),
+        follows: Vec::new(),
+        ops_committed: true,
+    };
+    Ok(Fetched {
+        success,
+        follows,
+        max_fetches,
+    })
+}
+
+/// 每批回调实现：一条信封即一批。适配 → 计数 → 提交，回调返回后本页内存可丢弃。
+struct BatchOpsCommit<'a> {
+    state: &'a FetchState,
+    task: &'a strata_model::AccessTask,
+    module: &'a Value,
+    pipeline: &'a Value,
+    initial: bool,
+    resource: Option<&'a Rid>,
+    sink: &'a (dyn planner::BatchCommit + Send + Sync),
+    new_resources: u64,
+    follow_requests: Vec<FollowRequest>,
+    last: Option<RawEnvelope>,
+}
+
+#[async_trait]
+impl accessors::BatchHandler for BatchOpsCommit<'_> {
+    async fn batch(
+        &mut self,
+        envelopes: Vec<RawEnvelope>,
+        cursor: Option<Value>,
+    ) -> Result<(), AccessError> {
+        self.state.events.raw_ready(self.task, envelopes.len());
+        let result = process_batch(
+            self.state,
+            self.task,
+            self.module,
+            self.pipeline,
+            self.initial,
+            self.resource,
+            &envelopes,
+        )
+        .await;
+        self.initial = false;
+        let (ops, follow_requests) = result.map_err(|error| {
+            AccessError::new(error.class, error.message)
+        })?;
+        self.state.events.normalized_ready(self.task, ops.len());
+        self.follow_requests.extend(follow_requests);
+        self.new_resources += ops
+            .iter()
+            .filter(|op| matches!(op, Op::Ensure { .. }))
+            .count() as u64;
+        if let Some(envelope) = envelopes.last() {
+            self.last = Some(envelope.clone());
+        }
+        self.sink
+            .commit(ops, cursor)
+            .await
+            .map_err(|error| AccessError::new(ErrorClass::Transient, error.message))
+    }
+}
+
+pub async fn fetch(
+    state: &FetchState,
+    task: &strata_model::AccessTask,
+    cursor: Option<Value>,
+    resource: Option<Rid>,
+) -> Result<Fetched, Classified> {
+    let prepared = prepare_fetch(state, task, cursor, resource.as_ref()).await?;
+    let deadline = prepared.request.deadline;
+    let envelopes = crate::transport::REQUEST_DEADLINE
+        .scope(
+            deadline,
+            crate::transport::SOURCE_PROXY.scope(
+                prepared.source_proxy.clone(),
+                crate::transport::EGRESS_POLICY.scope(
+                    prepared.egress_policy.clone(),
+                    prepared.accessor.access(prepared.request.clone(), &prepared.context),
+                ),
+            ),
+        )
+        .await
+        .map_err(from_access)?;
+    // 原文就绪：浏览器取数与详情跟页与普通任务一样在此广播 raw.ready。
+    state.events.raw_ready(task, envelopes.len());
+    let module = &prepared.module;
+    let pipeline = &prepared.pipeline;
+    let initial = prepared.initial;
     let (ops, follow_requests) =
         if pipeline.as_array().is_some_and(Vec::is_empty) || pipeline.is_null() {
             // 未声明管道不等于放弃解析：默认交给智能适配器（识别可用时按区域切分），
@@ -168,7 +388,7 @@ pub async fn fetch(
             match adapted_ops(
                 state,
                 task,
-                &module,
+                module,
                 &envelopes,
                 &default_pipeline(task.reason),
                 initial,
@@ -180,20 +400,12 @@ pub async fn fetch(
                 Err(_) => (raw_ops(&envelopes)?, Vec::new()),
             }
         } else {
-            adapted_ops(
-                state,
-                task,
-                &module,
-                &envelopes,
-                &pipeline,
-                initial,
-                resource.as_ref(),
-            )
-            .await?
+            adapted_ops(state, task, module, &envelopes, pipeline, initial, resource.as_ref())
+                .await?
         };
     // 规整就绪：管道产出数据面之后广播 normalized.ready。
     state.events.normalized_ready(task, ops.len());
-    let max_fetches = detail_budget(&module);
+    let max_fetches = prepared.max_fetches;
     let follows = if task.reason == TaskReason::Schedule && max_fetches > 0 {
         follow_tasks(task, &follow_requests)?
     } else {
@@ -226,6 +438,7 @@ pub async fn fetch(
         cost: 0,
         adapters: Vec::new(),
         follows: Vec::new(),
+        ops_committed: false,
     };
     Ok(Fetched {
         success,

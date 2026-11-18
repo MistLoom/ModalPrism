@@ -222,3 +222,44 @@ async fn collector_surface_matches_providers_manifests_and_logic() {
 
     running.shutdown().await.unwrap();
 }
+
+/// 计划面契约（M-03）：`surface::PLANS` 的短名与别名必须与 TOOLS 的 `plan.*` 条目、
+/// MCP 宣传面（ADVERTISED_TOOLS）、别名解析三方一致——一处新增、处处同步。
+#[test]
+fn plans_contract_matches_tools_and_mcp() {
+    assert!(!surface::PLANS.is_empty(), "计划面动词不得为空");
+    for verb in surface::PLANS {
+        let tool_id = format!("plan.{}", verb.short);
+        // 对应的 plan.* 工具必须在 TOOLS 里声明，且写标记一致。
+        let spec = surface::tool(&tool_id)
+            .unwrap_or_else(|| panic!("PLANS 的 {tool_id} 未在 TOOLS 声明"));
+        assert_eq!(spec.write, verb.write, "{tool_id} 的写标记与 PLANS 不一致");
+        // MCP 宣传面必须包含该短名。
+        assert!(
+            surface::ADVERTISED_TOOLS.contains(&tool_id.as_str()),
+            "MCP 宣传面缺少 {tool_id}"
+        );
+        // 别名解析后必须落回同一工具动词。
+        for alias in verb.aliases {
+            assert_eq!(
+                surface::resolve_alias(&format!("plan.{alias}")),
+                tool_id.as_str(),
+                "别名 plan.{alias} 应解析到 {tool_id}"
+            );
+        }
+    }
+    // 宣传面里的全部 plan.* 短名都必须在 PLANS 里，不得只有工具表单方面声明。
+    for tool_id in surface::ADVERTISED_TOOLS {
+        if let Some(short) = tool_id.strip_prefix("plan.") {
+            assert!(
+                surface::PLANS.iter().any(|verb| verb.short == short),
+                "MCP 宣传面 {tool_id} 未在 PLANS 声明"
+            );
+        }
+    }
+    // 已知别名核对：list/create/update/continue 是宣传名的兼容写法。
+    assert_eq!(surface::resolve_alias("plan.list"), "plan.ls");
+    assert_eq!(surface::resolve_alias("plan.create"), "plan.new");
+    assert_eq!(surface::resolve_alias("plan.update"), "plan.set");
+    assert_eq!(surface::resolve_alias("plan.continue"), "plan.run");
+}

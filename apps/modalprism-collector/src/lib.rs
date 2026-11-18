@@ -23,6 +23,8 @@ pub struct Running {
     services: Arc<Services>,
     host: Arc<AbilityHost>,
     gateway: Arc<dyn Gateway>,
+    /// 领域 API 状态：`mp once/search/…` 短命令在进程内直接调它，不经 HTTP。
+    api: domain_api::Shared,
     monitor: Arc<leaf_monitor::MonitorApp>,
     http: SocketAddr,
     proxy: SocketAddr,
@@ -43,6 +45,11 @@ impl Running {
 
     pub fn gateway(&self) -> Arc<dyn Gateway> {
         Arc::clone(&self.gateway)
+    }
+
+    /// 领域 API 状态（内联短命令直接调用工具面）。
+    pub fn api(&self) -> domain_api::Shared {
+        Arc::clone(&self.api)
     }
 
     pub fn http(&self) -> SocketAddr {
@@ -80,6 +87,9 @@ pub async fn boot(
 pub struct BootOpts {
     /// 强制不安装 rawprism Guest：/parse 落回 412 前置失败（负向场景用）。
     pub disable_parse_guest: bool,
+    /// 内联模式：`mp once/search/…` 短命令只借完整启动栈在进程内执行一次调用，
+    /// 不起采集循环、不做配置热加载、不打印启动横幅。
+    pub inline: bool,
 }
 
 pub async fn boot_opts(
@@ -200,8 +210,9 @@ pub async fn boot_opts(
         assembly::serve_push(push_services, push_listener).await;
     }));
     let maintenance = Arc::clone(&api.maintenance);
+    let api_server = Arc::clone(&api);
     tasks.push(tokio::spawn(async move {
-        if let Err(error) = axum::serve(http_listener, domain_api::router(api)).await {
+        if let Err(error) = axum::serve(http_listener, domain_api::router(api_server)).await {
             tracing::error!(%error, "领域 API 退出");
         }
     }));
@@ -211,28 +222,31 @@ pub async fn boot_opts(
         .upstream_proxy()
         .map(|route| route.display())
         .unwrap_or_else(|| "direct".into());
-    println!(
-        "modalprism: data={} metadata={metadata} blobs={blobs} vectors={} http=http://{http} proxy=http://{proxy} push=http://{push} upstream={upstream} parse={} mode={}",
-        services.data_dir().display(),
-        if services.strata().vector_accelerated() {
-            "sqlite-vec"
-        } else {
-            "scan"
-        },
-        if parse_ready { "ready" } else { "absent" },
-        services.proxy_setting().label(),
-    );
-    tasks.extend(spawn_loops(
-        Arc::clone(&host),
-        Arc::clone(&services),
-        Arc::clone(&stop),
-        maintenance,
-    ));
+    if !opts.inline {
+        println!(
+            "modalprism: data={} metadata={metadata} blobs={blobs} vectors={} http=http://{http} proxy=http://{proxy} push=http://{push} upstream={upstream} parse={} mode={}",
+            services.data_dir().display(),
+            if services.strata().vector_accelerated() {
+                "sqlite-vec"
+            } else {
+                "scan"
+            },
+            if parse_ready { "ready" } else { "absent" },
+            services.proxy_setting().label(),
+        );
+        tasks.extend(spawn_loops(
+            Arc::clone(&host),
+            Arc::clone(&services),
+            Arc::clone(&stop),
+            maintenance,
+        ));
+    }
     let watch = config::watch(services.config(), Duration::from_secs(2))?;
     Ok(Running {
         services,
         host,
         gateway,
+        api,
         monitor,
         http,
         proxy,

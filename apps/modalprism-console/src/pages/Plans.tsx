@@ -13,17 +13,20 @@ import {
   listPlans,
   listSources,
   listSourceTypes,
+  listStrategies,
   pausePlan,
   resumePlan,
   updatePlan,
 } from "../lib/api";
 import { relative, stamp } from "../lib/format";
 import { navigate, useRoute } from "../lib/router";
-import type { DeliveryTarget, DeliveryTargetGroup, Plan, Source, SourceTypeRecord } from "../lib/types";
+import type { DeliveryTarget, DeliveryTargetGroup, Plan, Source, SourceTypeRecord, Strategy } from "../lib/types";
 
 interface Draft {
   name: string;
   targets: string[];
+  // 引用的策略（裸 slug）；空串表示不使用策略。选择后表单字段按策略预填，可覆写。
+  strategy: string;
   kind: "recurring" | "oneShot";
   interval: string;
   perRunItems: string;
@@ -41,6 +44,7 @@ interface Draft {
 const EMPTY: Draft = {
   name: "",
   targets: [],
+  strategy: "",
   kind: "recurring",
   interval: "",
   perRunItems: "",
@@ -93,6 +97,8 @@ export function PlansPage() {
   // 投递目标目录：计划表单里直接选，底层存成监听该计划的自动投递规则。
   const [deliveryTargets, setDeliveryTargets] = useState<DeliveryTarget[]>([]);
   const [deliveryGroups, setDeliveryGroups] = useState<DeliveryTargetGroup[]>([]);
+  // 策略目录：新建/编辑时选择引用，表单字段按所选策略预填，可覆写。
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   // 信源页「关联计划」跳转：#plans?target=source/xxx 按信源过滤。
   const target = params.get("target") ?? "";
 
@@ -150,17 +156,20 @@ export function PlansPage() {
     setLoading(true);
     setError(null);
     try {
-      const [planPage, sourcePage, typePage, catalog] = await Promise.all([
+      const [planPage, sourcePage, typePage, catalog, strategyPage] = await Promise.all([
         listPlans(),
         listSources({ limit: 200 }),
         listSourceTypes(),
         listDeliveryTargets(),
+        listStrategies().catch(() => null),
       ]);
       setPlans(planPage.items);
       setSources(sourcePage.items);
       setTypeRecords(typePage.items);
       setDeliveryTargets(catalog.items);
       setDeliveryGroups(catalog.groups);
+      // 策略目录缺失（旧后端）不阻塞计划页：仅下拉不可用。
+      if (strategyPage) setStrategies(strategyPage.items);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -190,6 +199,27 @@ export function PlansPage() {
       return { kind: value.slice(0, at), id: value.slice(at + 1) };
     });
 
+  // 选择策略：节律/额度/停止策略按所选策略预填，用户仍可覆写；选回"不使用"即恢复空白。
+  const pickStrategy = (slug: string) => {
+    const hit = strategies.find((item) => item.slug === slug);
+    if (!hit) {
+      setDraft((current) => ({ ...current, strategy: "", interval: "", perRunItems: "", totalItems: "", maxAge: "", onBudgetExhausted: "", onFailureThreshold: "" }));
+      return;
+    }
+    const quota = hit.quota ?? {};
+    const stop = (hit.stopPolicy ?? {}) as { onBudgetExhausted?: string; onFailureThreshold?: number };
+    setDraft((current) => ({
+      ...current,
+      strategy: hit.slug,
+      interval: hit.trigger?.interval ?? current.interval,
+      perRunItems: quota.perRunItems != null ? String(quota.perRunItems) : current.perRunItems,
+      totalItems: quota.totalItems != null ? String(quota.totalItems) : current.totalItems,
+      maxAge: quota.maxAge ?? current.maxAge,
+      onBudgetExhausted: stop.onBudgetExhausted ?? current.onBudgetExhausted,
+      onFailureThreshold: stop.onFailureThreshold != null ? String(stop.onFailureThreshold) : current.onFailureThreshold,
+    }));
+  };
+
   const submit = async () => {
     if (draft.targets.length === 0) {
       notify("warn", "至少选择一个信源");
@@ -218,6 +248,8 @@ export function PlansPage() {
             trigger,
             quota,
             stopPolicy,
+            // 空串表示取消策略引用，改回计划自带行为定义。
+            strategy: draft.strategy,
             enabled: draft.enabled,
             deliveryTargets: deliveryPayload(),
             deliveryEnabled: draft.deliveryEnabled,
@@ -235,6 +267,7 @@ export function PlansPage() {
           };
           if (Object.keys(quota).length) input.quota = quota;
           if (Object.keys(stopPolicy).length) input.stopPolicy = stopPolicy;
+          if (draft.strategy) input.strategy = draft.strategy;
           await createPlan(input);
           notify("ok", draft.enabled ? "计划已创建并启用" : "计划已创建（未启用采集）");
         }
@@ -269,6 +302,7 @@ export function PlansPage() {
     setDraft({
       name: plan.name ?? "",
       targets: plan.targets ?? [],
+      strategy: plan.strategy ? plan.strategy.replace(/^strategy\//, "") : "",
       kind: plan.trigger?.kind === "oneShot" ? "oneShot" : "recurring",
       interval: plan.trigger?.interval ?? "2h",
       perRunItems: quota?.perRunItems ? String(quota.perRunItems) : "",
@@ -439,6 +473,9 @@ export function PlansPage() {
             <button type="button" className="btn btn-sm" onClick={() => start("job")}>
               批量采集作业
             </button>
+            <button type="button" className="btn btn-sm" onClick={() => navigate("strategies")}>
+              策略管理
+            </button>
             <button type="button" className="btn btn-sm" onClick={() => start("plan")}>
               <IconPlus size={15} /> 新建计划
             </button>
@@ -499,6 +536,15 @@ export function PlansPage() {
                           {plan.name}
                         </RowSubject>
                         <span className="small muted cell-ellipsis" title={plan.id}>{plan.id}</span>
+                        {plan.strategy ? (
+                          <span
+                            className="badge neutral"
+                            title={`引用策略 ${plan.strategy}；计划自带字段是对它的覆写`}
+                            style={{ alignSelf: "flex-start" }}
+                          >
+                            策略 · {plan.strategy.replace(/^strategy\//, "")}
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                     <td className="small w-targets">
@@ -608,6 +654,28 @@ export function PlansPage() {
                     <input className="input" style={{ maxWidth: 120 }} value={draft.interval} placeholder="2h" onChange={(event) => setDraft({ ...draft, interval: event.target.value })} />
                   ) : null}
                 </div>
+              </Field>
+            ) : null}
+            {mode !== "job" ? (
+              <Field label="策略（可复用的节律与额度定义）">
+                <select
+                  className="input"
+                  value={draft.strategy}
+                  onChange={(event) => pickStrategy(event.target.value)}
+                  disabled={strategies.length === 0}
+                >
+                  <option value="">不使用策略{strategies.length === 0 ? "（暂无可用策略）" : ""}</option>
+                  {strategies.map((item) => (
+                    <option key={item.slug} value={item.slug}>
+                      {item.name ?? item.slug}
+                    </option>
+                  ))}
+                </select>
+                {draft.strategy ? (
+                  <span className="small muted">
+                    已按策略预填下方字段，可覆写；引用同一策略的计划互不影响。
+                  </span>
+                ) : null}
               </Field>
             ) : null}
             {mode !== "job" ? (

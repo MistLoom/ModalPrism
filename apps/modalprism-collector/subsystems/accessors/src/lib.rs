@@ -9,7 +9,7 @@ mod types;
 pub use error::AccessError;
 pub use redact::{redact_envelope, redact_headers, redact_names};
 pub use types::{
-    AccessContext, AccessHints, AccessRequest, Accessor, AccessorCapabilities, CaptureNetwork,
-    EgressGateway, HttpRequest, HttpResponse, PaidCall, PaidCapability, PaidGateway, PaidResponse,
-    Session, SessionPool, Staging, config_error,
+    AccessContext, AccessHints, AccessRequest, Accessor, AccessorCapabilities, BatchHandler,
+    CaptureNetwork, CollectingBatches, EgressGateway, HttpRequest, HttpResponse, PaidCall,
+    PaidCapability, PaidGateway, PaidResponse, Session, SessionPool, Staging, config_error,
 };

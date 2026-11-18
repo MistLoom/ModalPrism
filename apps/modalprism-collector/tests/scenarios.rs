@@ -689,6 +689,7 @@ async fn a9_parse_negative_paths() {
         binds(),
         modalprism_collector::BootOpts {
             disable_parse_guest: true,
+            ..modalprism_collector::BootOpts::default()
         },
     )
     .await
@@ -948,6 +949,9 @@ async fn p1_collection_plan_crud_and_job() {
     let paused: Value = response.json().await.unwrap();
     assert_eq!(status, 200, "{paused}");
     assert_eq!(paused["status"], json!("paused"), "{paused}");
+    // 切片 2 行为变更：暂停不再把 enabled 改成 false，而是写独立 paused 字段。
+    assert_eq!(paused["enabled"], json!(true), "暂停不能改 enabled: {paused}");
+    assert_eq!(paused["paused"], json!(true), "{paused}");
 
     let resume_etag = paused["etag"].as_str().unwrap().to_string();
     let response = boot

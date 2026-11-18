@@ -47,6 +47,7 @@ import type {
   SourceGroup,
   SourcePayload,
   SourceTypeRecord,
+  Strategy,
   SystemStatus,
   Task,
   WizardDoc,
@@ -242,6 +243,13 @@ export const listPlans = (params: { limit?: number; cursor?: string; status?: st
   const { projectId, ...rest } = params;
   return call<ListResponse<Plan>>("GET", `/collection/plans${query(rest)}`, undefined, { projectId });
 };
+export const listStrategies = () => call<ListResponse<Strategy>>("GET", "/collection/strategies");
+export const createStrategy = (input: Record<string, unknown>) =>
+  call<Strategy>("POST", "/collection/strategies", input);
+export const updateStrategy = (id: string, patch: Record<string, unknown>) =>
+  call<Strategy>("PATCH", `/collection/strategies/${encodeURIComponent(id)}`, patch);
+export const deleteStrategy = (id: string) =>
+  call<{ id: string; deleted: boolean }>("DELETE", `/collection/strategies/${encodeURIComponent(id)}`);
 export const createPlan = (input: Record<string, unknown>) =>
   call<Plan>("POST", "/collection/plans", input);
 export const deletePlan = (id: string) =>

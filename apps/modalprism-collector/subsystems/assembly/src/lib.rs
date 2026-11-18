@@ -327,6 +327,42 @@ impl Handler for TaskHandler {
         success.follows = open_follows(&self.strata, fetched.follows, fetched.max_fetches).await;
         Ok(success)
     }
+
+    /// 批式执行：每页信封适配后立即经 runner 提交（apply + 游标），不整任务攒批。
+    /// 失败语义与 `execute` 一致：错误映射为作业事件，已提交批不回滚。
+    async fn execute_batched(
+        &self,
+        task: &strata_model::AccessTask,
+        cursor: Option<Value>,
+        sink: &(dyn planner::BatchCommit + Send + Sync),
+    ) -> Result<planner::TaskSuccess, planner::Classified> {
+        let resource = if task.reason == TaskReason::Follow {
+            let key = match &task.locator {
+                Locator::Url { url } => format!("url:{url}"),
+                _ => String::new(),
+            };
+            if key.is_empty() {
+                None
+            } else {
+                self.strata.resolve(&key).await.ok().flatten()
+            }
+        } else {
+            None
+        };
+        let outcome = execute::fetch_batched(&self.state, task, cursor, resource, sink).await;
+        match outcome {
+            Ok(fetched) => {
+                let mut success = fetched.success;
+                success.follows =
+                    open_follows(&self.strata, fetched.follows, fetched.max_fetches).await;
+                Ok(success)
+            }
+            Err(error) => {
+                emit_job_error(&self.state.events, task, &error);
+                Err(error)
+            }
+        }
+    }
 }
 
 /// 把执行错误映射成作业事件：取消/超时 → `job.cancelled`，其余 → `job.failed`。

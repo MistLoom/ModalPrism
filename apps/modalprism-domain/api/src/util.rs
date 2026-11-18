@@ -228,6 +228,17 @@ pub fn optional_object(
     }
 }
 
+pub fn optional_array(
+    body: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<Vec<Value>>, ApiError> {
+    match body.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(value)) => Ok(Some(value.clone())),
+        _ => Err(ApiError::validation(key, "type", "必须是数组")),
+    }
+}
+
 pub fn uri(body: &Map<String, Value>, key: &str) -> Result<url::Url, ApiError> {
     let value = non_empty(body, key)?;
     let url = url::Url::parse(&value)
