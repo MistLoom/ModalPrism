@@ -34,6 +34,11 @@ fn config_dir(dir: &Path) {
         "accessors/http.yaml",
         "id: accessor/http\nkind: accessor\nname: HTTP\nimplementation: builtin:http\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
     );
+    write(
+        dir,
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: Demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
 }
 
 fn binds() -> Binds {
@@ -103,14 +108,26 @@ async fn boot() -> Boot {
 }
 
 /// 建一个带单信源目标的计划，返回 (slug, etag)。
+/// 单一语义：targets/trigger 由策略承载——先实例化策略，再建纯状态计划。
 async fn seed_plan(boot: &Boot, slug: &str, source_slug: &str) -> Value {
+    let strategy = boot
+        .tool(
+            "strategy.new",
+            json!({
+                "name": "验收策略",
+                "targets": [format!("source/{source_slug}")],
+                "trigger": {"kind": "recurring", "interval": "1h"},
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("strategy.new: {error}"));
+    let strategy_slug = strategy["slug"].as_str().expect("策略应带 slug").to_string();
     boot.tool(
         "plan.new",
         json!({
             "id": slug,
             "name": "验收计划",
-            "targets": [format!("source/{source_slug}")],
-            "trigger": {"kind": "recurring", "interval": "1h"},
+            "strategy": strategy_slug,
         }),
     )
     .await
@@ -230,12 +247,25 @@ async fn plan_get_exposes_progress_and_cursors() {
 async fn url_plan_from_search_runs_inline_without_sources() {
     let boot = boot().await;
     // oneShot 计划：只有 URL 目标（来自检索记录的形态），无信源目标。
+    // 单一语义：oneShot 节律由专用策略承载，计划只引用并携带 URL 状态数据。
+    let strategy = boot
+        .tool(
+            "strategy.new",
+            json!({
+                "name": "一次性采集策略",
+                "trigger": {"kind": "oneShot", "fireAt": "immediate"},
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("strategy.new: {error}"));
+    let strategy_slug = strategy["slug"].as_str().expect("策略应带 slug").to_string();
     let plan = boot
         .tool(
             "plan.new",
             json!({
                 "id": "url-plan",
                 "name": "URL 采集计划",
+                "strategy": strategy_slug,
                 "urls": ["https://example.com/a", "https://example.com/b"],
             }),
         )
@@ -264,21 +294,23 @@ async fn url_plan_from_search_runs_inline_without_sources() {
 
 #[tokio::test]
 async fn unknown_pipeline_adapter_is_rejected_on_new() {
+    // 单一语义：pipeline 由策略承载，未知组件在策略创建时被整库校验拒绝。
     let boot = boot().await;
     boot.seed_source("pipe-feed", "https://example.com/feed").await;
     let error = boot
         .tool(
-            "plan.new",
+            "strategy.new",
             json!({
                 "name": "坏管道",
                 "targets": ["source/pipe-feed"],
-                "pipeline": [{"run": ["content-processor/text-filter"]}],
+                "trigger": {"kind": "recurring", "interval": "1h"},
+                "pipeline": [{"run": ["renderer/fancy"]}],
             }),
         )
         .await
-        .expect_err("未知适配器的管道必须在 new 时拒绝");
+        .expect_err("未知组件的策略必须在 new 时拒绝");
     let message = error["error"]["message"].as_str().unwrap_or_default();
-    assert!(message.contains("适配器"), "实际: {message}");
+    assert!(message.contains("未知适配器"), "实际: {message}");
     boot.running.shutdown().await.unwrap();
 }
 

@@ -13,12 +13,16 @@ pub const FAILURE_THRESHOLD: u32 = 5;
 pub fn plans_of(snapshot: &Snapshot, data_dir: &std::path::Path) -> Vec<SourcePlan> {
     let mut plans = Vec::new();
     let mut covered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    // 主路径：遍历一等计划，逐 target 把信源静态声明与计划节律/限制 join 成 SourcePlan。
+    // 主路径：遍历一等计划，逐 target 把信源静态声明与所引策略的节律/限制 join 成 SourcePlan。
+    // 单一语义：targets 与行为字段（节律/额度/停止策略）全部由策略声明，计划只引用策略。
     for (plan_id, plan_module) in &snapshot.modules {
         if plan_module.get("kind").and_then(Value::as_str) != Some("plan") {
             continue;
         }
-        let targets = plan_module
+        let Some(strategy) = resolve_strategy(snapshot, plan_module) else {
+            continue;
+        };
+        let targets = strategy
             .get("targets")
             .and_then(Value::as_array)
             .cloned()
@@ -31,7 +35,7 @@ pub fn plans_of(snapshot: &Snapshot, data_dir: &std::path::Path) -> Vec<SourcePl
             if source_module.get("kind").and_then(Value::as_str) != Some("source") {
                 continue;
             }
-            if let Some(plan) = join_plan(snapshot, plan_id, plan_module, target, source_module, data_dir) {
+            if let Some(plan) = join_plan(snapshot, plan_id, plan_module, strategy, target, source_module, data_dir) {
                 plans.push(plan);
             }
         }
@@ -101,9 +105,9 @@ fn slug_of(id: &str) -> &str {
     id.split('/').next_back().unwrap_or(id)
 }
 
-/// 解析计划引用的策略：计划自身的 trigger/quota/stopPolicy 等字段是对策略的
-/// 字段级覆写，未覆写的维度回落策略定义。无 strategy 引用时返回 None，
-/// 调用方按计划自带行为定义处理。
+/// 解析计划引用的策略：策略是节律/额度/停止策略等行为字段的唯一定义点，
+/// 计划只引用策略并携带状态（enabled/paused）。无引用视为声明不完整，
+/// 由 config 校验拦截；运行时对缺失引用的计划跳过调度。
 fn resolve_strategy<'a>(
     snapshot: &'a Snapshot,
     plan_module: &'a Value,
@@ -121,77 +125,51 @@ fn resolve_strategy<'a>(
     Some(strategy)
 }
 
-/// 计划对策略的字段级覆写：对象维度逐键合并（计划键优先），非对象维度整体覆盖。
-fn override_of(strategy: Option<&Value>, plan_module: &Value, key: &str) -> Value {
-    let plan_value = plan_module.get(key);
-    match (strategy, plan_value) {
-        (_, Some(Value::Object(plan_map))) => {
-            let mut merged = strategy
-                .and_then(|s| s.get(key))
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            for (key, value) in plan_map {
-                merged.insert(key.clone(), value.clone());
-            }
-            Value::Object(merged)
-        }
-        (_, Some(value)) => value.clone(),
-        (Some(strategy), None) => strategy.get(key).cloned().unwrap_or(Value::Null),
-        (None, None) => Value::Null,
-    }
-}
-
-/// 从一等计划与信源 join 出一个 SourcePlan：节律/限制取自计划，取数形态取自信源。
+/// 从一等计划与信源 join 出一个 SourcePlan：行为字段（节律/额度/停止策略）取自
+/// 所引策略（唯一定义点），计划只贡献引用与状态（enabled/paused），取数形态取自信源。
 fn join_plan(
     snapshot: &Snapshot,
     plan_id: &str,
     plan_module: &Value,
+    strategy: &Value,
     source_id: &str,
     source_module: &Value,
     data_dir: &std::path::Path,
 ) -> Option<SourcePlan> {
-    let strategy = resolve_strategy(snapshot, plan_module);
-    // 节律解析：计划自带 trigger 是覆写；否则回落策略定义；两者皆无则不参与调度。
-    let trigger = plan_module
-        .get("trigger")
-        .filter(|value| !value.is_null())
-        .or_else(|| strategy.and_then(|s| s.get("trigger")).filter(|v| !v.is_null()))?;
+    // 节律/额度/停止策略全部由策略承载；策略未定义节律则不参与调度。
+    let Some(trigger) = strategy.get("trigger").filter(|value| !value.is_null()) else {
+        return None;
+    };
     let cadence = normalize_cadence(trigger);
-    let quota = override_of(strategy, plan_module, "quota");
+    let quota = strategy.get("quota").cloned().unwrap_or(Value::Null);
     let one_shot = trigger.get("kind").and_then(Value::as_str) == Some("oneShot");
     let source_enabled = source_enabled(source_module);
     let plan_enabled = plan_module
         .get("enabled")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    // 计划级主动中断（切片 2）：paused 与 enabled 是两个可持久化字段；
+    // 计划级主动中断：paused 与 enabled 是两个可持久化字段；
     // 派发闸门同时看两者，暂停期间不派发新任务、已开始任务做完即停。
     let plan_paused = plan_module
         .get("paused")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let queue_override = override_of(strategy, plan_module, "queue")
-        .as_str()
+    let queue_override = strategy
+        .get("queue")
+        .filter(|value| !value.is_null())
+        .and_then(Value::as_str)
         .map(str::to_string);
-    let stop_policy = override_of(strategy, plan_module, "stopPolicy");
-    let storage = match (
-        plan_module.get("storage"),
-        strategy.and_then(|s| s.get("storage")),
-    ) {
-        (Some(plan_storage), _) => plan_storage,
-        (None, Some(strategy_storage)) => strategy_storage,
-        (None, None) => &Value::Null,
-    };
+    let stop_policy = strategy.get("stopPolicy").cloned().unwrap_or(Value::Null);
+    let storage = strategy.get("storage").cloned().unwrap_or(Value::Null);
     // 策略身份：`strategy/<slug>@<内容哈希>`；内容变化即翻版本，run 可按此追溯
-    // 「当时生效的策略」。无引用的计划不携带该标记。
-    let strategy_tag = strategy.map(|doc| {
-        let id = doc
+    // 「当时生效的策略」。
+    let strategy_tag = {
+        let id = strategy
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or("strategy/unknown");
-        format!("{id}@{}", &content_hash(&serde_json::to_vec(doc).unwrap_or_default())[..8])
-    });
+        format!("{id}@{}", &content_hash(&serde_json::to_vec(strategy).unwrap_or_default())[..8])
+    };
     build_plan(
         snapshot,
         source_id,
@@ -204,9 +182,9 @@ fn join_plan(
         plan_paused,
         one_shot,
         queue_override.as_deref(),
-        plan_pipeline(plan_module, source_module),
-        storage,
-        strategy_tag,
+        plan_pipeline(strategy, source_module),
+        &storage,
+        Some(strategy_tag),
         data_dir,
     )
 }
@@ -871,12 +849,20 @@ mod tests {
             }),
         );
         modules.insert(
+            "strategy/fast".into(),
+            json!({"kind": "strategy", "targets": ["source/demo"], "trigger": {"kind": "recurring", "interval": "1h"}}),
+        );
+        modules.insert(
+            "strategy/slow".into(),
+            json!({"kind": "strategy", "targets": ["source/demo"], "trigger": {"kind": "recurring", "interval": "6h"}}),
+        );
+        modules.insert(
             "plan/fast".into(),
-            json!({"kind": "plan", "targets": ["source/demo"], "trigger": {"kind": "recurring", "interval": "1h"}}),
+            json!({"kind": "plan", "strategy": "strategy/fast"}),
         );
         modules.insert(
             "plan/slow".into(),
-            json!({"kind": "plan", "targets": ["source/demo"], "trigger": {"kind": "recurring", "interval": "6h"}}),
+            json!({"kind": "plan", "strategy": "strategy/slow"}),
         );
         let snapshot = config::Snapshot {
             generation: 1,
@@ -1067,13 +1053,20 @@ mod pipeline_flow_tests {
             }),
         );
         modules.insert(
-            "plan/override".into(),
+            "strategy/demo".into(),
             json!({
-                "kind": "plan",
+                "kind": "strategy",
                 "targets": ["source/demo"],
                 "trigger": {"kind": "recurring", "interval": "1h"},
                 "pipeline": [{"run": ["adapter/smart-content"]}],
                 "vectorize": true
+            }),
+        );
+        modules.insert(
+            "plan/override".into(),
+            json!({
+                "kind": "plan",
+                "strategy": "strategy/demo"
             }),
         );
         let snapshot = config::Snapshot {
@@ -1144,26 +1137,17 @@ mod pipeline_flow_tests {
             json!({
                 "id": "strategy/shared",
                 "kind": "strategy",
+                "targets": ["source/a"],
                 "trigger": {"kind": "recurring", "interval": "1h"},
                 "quota": {"perRunItems": 10}
             }),
         );
-        // 计划 A：引用策略并覆写单轮额度；计划 B：原样引用。
-        modules.insert(
-            "plan/with-override".into(),
-            json!({
-                "kind": "plan",
-                "targets": ["source/a"],
-                "strategy": "strategy/shared",
-                "quota": {"perRunItems": 5}
-            }),
-        );
+        // 计划是策略在项目里的状态实例：只携带引用，不覆写行为字段。
         modules.insert(
             "plan/plain".into(),
             json!({
                 "kind": "plan",
-                "targets": ["source/b"],
-                "strategy": "shared"
+                "strategy": "strategy/shared"
             }),
         );
         let snapshot = config::Snapshot {
@@ -1173,25 +1157,17 @@ mod pipeline_flow_tests {
             origins: BTreeMap::new(),
         };
         let plans = plans_of(&snapshot, &data_dir);
-        assert_eq!(plans.len(), 2, "两个计划应各自成一条 SourcePlan");
-        let overridden = plans
-            .iter()
-            .find(|plan| plan.plan_id.as_deref() == Some("plan/with-override"))
-            .expect("计划 A 应存在");
+        assert_eq!(plans.len(), 1, "纯引用计划应恰成一条 SourcePlan");
         let plain = plans
             .iter()
             .find(|plan| plan.plan_id.as_deref() == Some("plan/plain"))
-            .expect("计划 B 应存在");
-        // 复用：两条计划带同一策略身份；节律取自策略（计划未覆写 trigger）。
-        let tag_a = overridden.strategy.as_deref().expect("计划 A 应携带策略身份");
-        let tag_b = plain.strategy.as_deref().expect("计划 B 应携带策略身份");
+            .expect("计划应存在");
+        // 复用：计划携带策略身份；节律/额度取自策略（计划不覆写行为字段）。
+        let tag = plain.strategy.as_deref().expect("计划应携带策略身份");
         assert!(
-            tag_a.starts_with("strategy/shared@") && tag_a == tag_b,
-            "两条计划应携带同一策略版本: {tag_a} vs {tag_b}"
+            tag.starts_with("strategy/shared@"),
+            "计划应携带策略版本: {tag}"
         );
-        assert_eq!(overridden.interval, plain.interval);
-        // 覆写：计划 A 的单轮额度取计划值，计划 B 回落策略值。
-        assert_eq!(overridden.per_run_items, Some(5));
         assert_eq!(plain.per_run_items, Some(10));
         // 版本：策略内容变化必须翻版本标记。
         let mut changed_modules = modules.clone();
@@ -1200,6 +1176,7 @@ mod pipeline_flow_tests {
             json!({
                 "id": "strategy/shared",
                 "kind": "strategy",
+                "targets": ["source/a"],
                 "trigger": {"kind": "recurring", "interval": "2h"},
                 "quota": {"perRunItems": 10}
             }),
@@ -1214,7 +1191,7 @@ mod pipeline_flow_tests {
         let changed_plain = changed_plans
             .iter()
             .find(|plan| plan.plan_id.as_deref() == Some("plan/plain"))
-            .expect("变更后的计划 B 应存在");
+            .expect("变更后的计划应存在");
         assert_ne!(
             plain.strategy.as_deref(),
             changed_plain.strategy.as_deref(),
@@ -1223,7 +1200,7 @@ mod pipeline_flow_tests {
         assert_eq!(
             changed_plain.interval,
             Duration::from_secs(2 * 3_600),
-            "计划未覆写节律时跟随新策略"
+            "计划不携带行为字段时跟随新策略"
         );
     }
 }

@@ -180,36 +180,25 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         id: "plan.new",
-        summary: "新建采集计划，可声明 pipeline 与 vectorize",
+        summary: "新建采集计划（策略的状态实例：引用策略并携带状态）",
         write: true,
         params: &[
             ToolParam { name: "name", kind: "string", required: false, summary: "计划名称" },
-            ToolParam { name: "targets", kind: "array", required: true, summary: "目标信源" },
-            ToolParam { name: "trigger", kind: "object", required: false, summary: "触发器；缺省每 1 小时" },
-            ToolParam { name: "pipeline", kind: "array", required: false, summary: "计划级适配器流水线覆盖" },
-            ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "采集后写向量索引（缺省 false）" },
-            ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
-            ToolParam { name: "stopPolicy", kind: "object", required: false, summary: "停止条件" },
-            ToolParam { name: "deliveryTargets", kind: "array", required: false, summary: "投递目标" },
-            ToolParam { name: "deliveryEnabled", kind: "boolean", required: false, summary: "是否启用投递" },
+            ToolParam { name: "strategy", kind: "string", required: true, summary: "引用的策略（有计划必有策略）" },
+            ToolParam { name: "enabled", kind: "boolean", required: false, summary: "创建后是否立即启用采集" },
             ToolParam { name: "description", kind: "string", required: false, summary: "说明" },
         ],
     },
     ToolSpec {
         id: "plan.set",
-        summary: "修改采集计划（trigger、pipeline、vectorize 与进度相关字段）",
+        summary: "修改采集计划的状态与元数据（策略引用、启停、一次性 URL 数据）",
         write: true,
         params: &[
             ToolParam { name: "planId", kind: "string", required: true, summary: "计划标识" },
-            ToolParam { name: "trigger", kind: "object", required: false, summary: "触发器" },
-            ToolParam { name: "pipeline", kind: "array", required: false, summary: "计划级适配器流水线覆盖" },
-            ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "采集后写向量索引" },
-            ToolParam { name: "targets", kind: "array", required: false, summary: "目标信源" },
-            ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
-            ToolParam { name: "stopPolicy", kind: "object", required: false, summary: "停止条件" },
-            ToolParam { name: "deliveryTargets", kind: "array", required: false, summary: "投递目标" },
-            ToolParam { name: "deliveryEnabled", kind: "boolean", required: false, summary: "是否启用投递" },
-            ToolParam { name: "enabled", kind: "boolean", required: false, summary: "启停" },
+            ToolParam { name: "strategy", kind: "string", required: false, summary: "改引其他策略（有计划必有策略）" },
+            ToolParam { name: "enabled", kind: "boolean", required: false, summary: "启停采集" },
+            ToolParam { name: "urls", kind: "array", required: false, summary: "一次性 URL 目标（整体替换）" },
+            ToolParam { name: "appendUrls", kind: "array", required: false, summary: "追加一次性 URL 目标" },
             ToolParam { name: "name", kind: "string", required: false, summary: "计划名称" },
             ToolParam { name: "description", kind: "string", required: false, summary: "说明" },
         ],
@@ -255,7 +244,12 @@ pub const TOOLS: &[ToolSpec] = &[
         write: true,
         params: &[
             ToolParam { name: "name", kind: "string", required: false, summary: "策略名称" },
+            ToolParam { name: "targets", kind: "array", required: false, summary: "目标信源" },
             ToolParam { name: "trigger", kind: "object", required: true, summary: "节律定义（kind: recurring/oneShot）" },
+            ToolParam { name: "pipeline", kind: "array", required: false, summary: "适配器流水线" },
+            ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "采集后写向量索引" },
+            ToolParam { name: "deliveryTargets", kind: "array", required: false, summary: "投递目标" },
+            ToolParam { name: "deliveryEnabled", kind: "boolean", required: false, summary: "是否启用投递" },
             ToolParam { name: "queue", kind: "string", required: false, summary: "队列覆盖" },
             ToolParam { name: "priority", kind: "number", required: false, summary: "优先级" },
             ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
@@ -270,7 +264,12 @@ pub const TOOLS: &[ToolSpec] = &[
         write: true,
         params: &[
             ToolParam { name: "strategyId", kind: "string", required: true, summary: "策略标识" },
+            ToolParam { name: "targets", kind: "array", required: false, summary: "目标信源" },
             ToolParam { name: "trigger", kind: "object", required: false, summary: "节律定义" },
+            ToolParam { name: "pipeline", kind: "array", required: false, summary: "适配器流水线" },
+            ToolParam { name: "vectorize", kind: "boolean", required: false, summary: "采集后写向量索引" },
+            ToolParam { name: "deliveryTargets", kind: "array", required: false, summary: "投递目标" },
+            ToolParam { name: "deliveryEnabled", kind: "boolean", required: false, summary: "是否启用投递" },
             ToolParam { name: "quota", kind: "object", required: false, summary: "额度" },
             ToolParam { name: "stopPolicy", kind: "object", required: false, summary: "停止条件" },
             ToolParam { name: "queue", kind: "string", required: false, summary: "队列覆盖" },
@@ -604,11 +603,12 @@ pub const AGENT: &[Ability] = &[
         methods: &[
             "catalog", "fetch", "ls", "once", "parse", "plan.get", "plan.ls", "plan.new",
             "plan.pause", "plan.resume", "plan.run", "plan.set", "probe", "read", "save",
-            "search",
+            "search", "strategy.get", "strategy.ls", "strategy.new", "strategy.remove",
+            "strategy.set",
         ],
         read_only: &[
             "catalog", "fetch", "ls", "parse", "plan.get", "plan.ls", "probe", "read",
-            "search",
+            "search", "strategy.get", "strategy.ls",
         ],
     },
 ];
@@ -728,7 +728,7 @@ pub const AGENT_MCP: &[Exposure] = &[
         id: "tool",
         methods: &[
             "catalog", "fetch", "ls", "parse", "plan.get", "plan.ls", "probe", "read",
-            "search",
+            "search", "strategy.get", "strategy.ls",
         ],
     },
 ];
@@ -746,6 +746,7 @@ pub const AGENT_MCP_WRITES: &[Exposure] = &[
         id: "tool",
         methods: &[
             "once", "plan.new", "plan.pause", "plan.resume", "plan.run", "plan.set", "save",
+            "strategy.new", "strategy.remove", "strategy.set",
         ],
     },
 ];
@@ -873,15 +874,25 @@ mod tests {
         }
     }
 
-    /// 验收：once 与 plan.new/plan.set 都能承载 pipeline 与 vectorize 字段。
+    /// 验收：once 与策略动词承载 pipeline 与 vectorize；计划动词不得再声明行为字段。
     #[test]
     fn pipeline_and_vectorize_are_carried_by_the_accepted_verbs() {
-        for verb in ["once", "plan.new", "plan.set"] {
+        for verb in ["once", "strategy.new", "strategy.set"] {
             let spec = tool(verb).expect("动词应存在");
             for field in ["pipeline", "vectorize"] {
                 assert!(
                     spec.params.iter().any(|param| param.name == field),
                     "{verb} 缺少 {field} 字段"
+                );
+            }
+        }
+        // 单一语义：行为字段上收策略，计划动词不再宣传任何覆写入口。
+        for verb in ["plan.new", "plan.set"] {
+            let spec = tool(verb).expect("动词应存在");
+            for field in ["pipeline", "vectorize", "trigger", "quota", "stopPolicy", "targets"] {
+                assert!(
+                    !spec.params.iter().any(|param| param.name == field),
+                    "{verb} 不应声明行为字段 {field}"
                 );
             }
         }

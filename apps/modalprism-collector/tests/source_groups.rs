@@ -28,6 +28,11 @@ fn config_dir(dir: &Path) {
         "system.yaml",
         "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  gateway:\n    blob_backend: dir\n",
     );
+    write(
+        dir,
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: Demo\ntrigger:\n  kind: recurring\n  interval: 4h\n",
+    );
 }
 
 fn binds() -> Binds {
@@ -208,7 +213,7 @@ async fn factory_reset_keeps_builtin_groups_and_filing() {
     write(
         config.path(),
         "plans/example.yaml",
-        "id: plan/example\nkind: plan\nname: 示例计划\nenabled: false\nproject: proj_default\ntargets:\n  - source/google-ai-blog\ntrigger:\n  interval: 4h\n  kind: recurring\n",
+        "id: plan/example\nkind: plan\nname: 示例计划\nenabled: false\nproject: proj_default\nstrategy: strategy/demo\n",
     );
     let running = modalprism_collector::boot(data.path(), config.path(), binds())
         .await

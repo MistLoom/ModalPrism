@@ -14,6 +14,8 @@ pub enum DocKind {
     Source,
     /// 采集计划：一等实体，引用一个或多个信源，携带节律(trigger)与采集限制/停止策略。
     Plan,
+    /// 采集策略：节律/队列/额度/停止策略的唯一定义点，被计划引用（有计划必有策略）。
+    Strategy,
     Type,
     Defaults,
 }
@@ -158,6 +160,7 @@ pub fn allows_write(kind: DocKind, scope: Scope, defaults_for: Option<DocKind>) 
         DocKind::Adapter => scope == Scope::Shared,
         DocKind::AdapterBinding => scope == Scope::Shared,
         DocKind::Plan => false,
+        DocKind::Strategy => false,
         DocKind::Type => false,
     }
 }
@@ -269,7 +272,18 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "enabled",
             "labels",
             "project",
-            "extends",
+            "strategy",
+            "paused",
+            "urls",
+        ],
+        DocKind::Strategy => &[
+            "id",
+            "kind",
+            "name",
+            "description",
+            "enabled",
+            "labels",
+            "project",
             "targets",
             "trigger",
             "queue",
@@ -278,9 +292,9 @@ pub fn top_level_keys(kind: DocKind) -> &'static [&'static str] {
             "stopPolicy",
             "pipeline",
             "vectorize",
-            "paused",
-            "urls",
             "storage",
+            "deliveryTargets",
+            "deliveryEnabled",
         ],
         DocKind::Type => &[
             "id",

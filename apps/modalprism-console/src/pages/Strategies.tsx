@@ -3,8 +3,15 @@ import { useCallback, useEffect, useState } from "react";
 import { IconPlus, IconRefresh, IconTrash } from "../components/icons";
 import { RowSubject } from "../components/ListRow";
 import { Card, Empty, Field, Loading, Modal, Problem, useUi } from "../components/ui";
-import { createStrategy, deleteStrategy, listStrategies, updateStrategy } from "../lib/api";
-import type { Strategy } from "../lib/types";
+import {
+  createStrategy,
+  deleteStrategy,
+  listDeliveryTargets,
+  listSources,
+  listStrategies,
+  updateStrategy,
+} from "../lib/api";
+import type { DeliveryTarget, DeliveryTargetGroup, Source, Strategy } from "../lib/types";
 
 interface Draft {
   id: string;
@@ -12,11 +19,16 @@ interface Draft {
   description: string;
   kind: "recurring" | "oneShot";
   interval: string;
+  /** 目标信源：行为的唯一定义点归策略，计划只引用。 */
+  targets: string[];
   perRunItems: string;
   totalItems: string;
   maxAge: string;
   onBudgetExhausted: string;
   onFailureThreshold: string;
+  /** 计划维度的投递目标，键为 `kind:id`。 */
+  deliveryTargets: string[];
+  deliveryEnabled: boolean;
 }
 
 const EMPTY: Draft = {
@@ -25,11 +37,14 @@ const EMPTY: Draft = {
   description: "",
   kind: "recurring",
   interval: "",
+  targets: [],
   perRunItems: "",
   totalItems: "",
   maxAge: "",
   onBudgetExhausted: "",
   onFailureThreshold: "",
+  deliveryTargets: [],
+  deliveryEnabled: true,
 };
 
 // 由草稿构造策略文档（只含已填字段；编辑时整份替换，清空即移除）。
@@ -45,11 +60,18 @@ function buildDoc(draft: Draft): Record<string, unknown> {
   if (draft.onFailureThreshold.trim()) stopPolicy.onFailureThreshold = Number(draft.onFailureThreshold);
   const doc: Record<string, unknown> = {
     name: draft.name || "采集策略",
+    targets: draft.targets,
     trigger,
   };
   if (draft.description.trim()) doc.description = draft.description.trim();
   if (Object.keys(quota).length) doc.quota = quota;
   if (Object.keys(stopPolicy).length) doc.stopPolicy = stopPolicy;
+  // 表单键为 `kind:id`，落盘前拆回 `{kind, id}` 对象（与后端 schema 对齐）。
+  doc.deliveryTargets = draft.deliveryTargets.map((key) => {
+    const at = key.indexOf(":");
+    return { kind: key.slice(0, at), id: key.slice(at + 1) };
+  });
+  doc.deliveryEnabled = draft.deliveryEnabled;
   return doc;
 }
 
@@ -86,13 +108,23 @@ export function StrategiesPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Strategy | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [deliveryCatalog, setDeliveryCatalog] = useState<DeliveryTarget[]>([]);
+  const [deliveryGroups, setDeliveryGroups] = useState<DeliveryTargetGroup[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const page = await listStrategies();
+      const [page, sourcePage, delivery] = await Promise.all([
+        listStrategies(),
+        listSources({ limit: 200 }),
+        listDeliveryTargets(),
+      ]);
       setStrategies(page.items);
+      setSources(sourcePage.items);
+      setDeliveryCatalog(delivery.items);
+      setDeliveryGroups(delivery.groups);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -120,11 +152,14 @@ export function StrategiesPage() {
       description: strategy.description ?? "",
       kind: strategy.trigger?.kind === "oneShot" ? "oneShot" : "recurring",
       interval: strategy.trigger?.interval ?? "",
+      targets: strategy.targets ?? [],
       perRunItems: quota.perRunItems != null ? String(quota.perRunItems) : "",
       totalItems: quota.totalItems != null ? String(quota.totalItems) : "",
       maxAge: quota.maxAge ?? "",
       onBudgetExhausted: stop.onBudgetExhausted ?? "",
       onFailureThreshold: stop.onFailureThreshold != null ? String(stop.onFailureThreshold) : "",
+      deliveryTargets: (strategy.deliveryTargets ?? []).map((item) => `${item.kind}:${item.id}`),
+      deliveryEnabled: strategy.deliveryEnabled ?? true,
     });
     setOpen(true);
   };
@@ -132,6 +167,10 @@ export function StrategiesPage() {
   const submit = async () => {
     if (!draft.kind || (draft.kind === "recurring" && !draft.interval.trim())) {
       notify("warn", "周期策略需要填写间隔（如 2h）");
+      return;
+    }
+    if (draft.kind === "recurring" && draft.targets.length === 0) {
+      notify("warn", "周期策略至少要有一个目标信源（策略是目标的唯一定义点）");
       return;
     }
     setBusy("create");
@@ -172,7 +211,7 @@ export function StrategiesPage() {
     <div className="page">
       <Card
         title="采集策略"
-        sub="可复用的节律、额度与停止策略定义；计划引用策略并可字段级覆写，同一策略被多个计划复用互不影响。"
+        sub="采集行为的唯一定义点：目标信源、节律、额度与投递都在这里声明；计划引用策略并作为其状态实例运行。"
         action={
           <div className="row" style={{ gap: 8 }}>
             <button type="button" className="btn btn-sm" onClick={() => void load()} disabled={loading}>
@@ -291,6 +330,29 @@ export function StrategiesPage() {
                 ) : null}
               </div>
             </Field>
+            <Field label="目标信源（周期策略至少一个；采集目标归策略承载）">
+              <div className="stack" style={{ gap: 4, maxHeight: 220, overflow: "auto" }}>
+                {sources.map((source) => (
+                  <label key={source.id} className="row" style={{ gap: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={draft.targets.includes(source.id)}
+                      onChange={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          targets: current.targets.includes(source.id)
+                            ? current.targets.filter((item) => item !== source.id)
+                            : [...current.targets, source.id],
+                        }))
+                      }
+                    />
+                    <span>{source.name ?? source.id}</span>
+                    <span className="badge neutral">{source.sourceType}</span>
+                  </label>
+                ))}
+                {sources.length === 0 ? <span className="small muted">暂无可用信源，请先在信源页创建。</span> : null}
+              </div>
+            </Field>
             <Field label="数量上限（留空表示不限制）">
               <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                 <input className="input" style={{ maxWidth: 140 }} value={draft.perRunItems} placeholder="单次上限" onChange={(event) => setDraft({ ...draft, perRunItems: event.target.value })} />
@@ -306,6 +368,56 @@ export function StrategiesPage() {
                   <option value="skip">预算耗尽：跳过</option>
                 </select>
                 <input className="input" style={{ maxWidth: 160 }} value={draft.onFailureThreshold} placeholder="连续失败阈值" onChange={(event) => setDraft({ ...draft, onFailureThreshold: event.target.value })} />
+              </div>
+            </Field>
+            <Field label="投递目标（可多选，留空表示不自动投递）">
+              <div className="stack" style={{ gap: 8 }}>
+                {deliveryGroups.map((group) => {
+                  const items = deliveryCatalog.filter((item) => item.kind === group.kind);
+                  if (!items.length) return null;
+                  return (
+                    <div key={group.kind} className="stack" style={{ gap: 4 }}>
+                      <span className="small muted" title={group.note}>
+                        {group.label}
+                      </span>
+                      <div className="row wrap" style={{ gap: 12 }}>
+                        {items.map((item) => {
+                          const key = `${item.kind}:${item.id}`;
+                          return (
+                            <label key={key} className="row" style={{ gap: 5 }}>
+                              <input
+                                type="checkbox"
+                                checked={draft.deliveryTargets.includes(key)}
+                                onChange={() =>
+                                  setDraft({
+                                    ...draft,
+                                    deliveryTargets: draft.deliveryTargets.includes(key)
+                                      ? draft.deliveryTargets.filter((value) => value !== key)
+                                      : [...draft.deliveryTargets, key],
+                                  })
+                                }
+                              />
+                              <span className="small">{item.name ?? item.id}</span>
+                              {item.enabled === false ? <span className="badge neutral">已停用</span> : null}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                {deliveryCatalog.length === 0 ? (
+                  <span className="small muted">暂无可用目标：模型在系统设置登记，外部 API 与通知渠道在内容投递页维护。</span>
+                ) : null}
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={draft.deliveryEnabled}
+                    disabled={!draft.deliveryTargets.length}
+                    onChange={(event) => setDraft({ ...draft, deliveryEnabled: event.target.checked })}
+                  />
+                  <span>启用自动投递</span>
+                </label>
               </div>
             </Field>
             <Field label="说明">

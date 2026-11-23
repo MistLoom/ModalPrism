@@ -3,14 +3,4 @@ kind: plan
 name: crates.io 注册表 · 万级采集验证
 enabled: false
 project: proj_default
-quota:
-  maxAge: 3650d
-  perRunItems: 500
-stopPolicy:
-  onBudgetExhausted: skip
-  onFailureThreshold: 3
-targets:
-  - source/crates-io-index
-trigger:
-  interval: 1d
-  kind: recurring
+strategy: registry-verification

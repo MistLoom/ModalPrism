@@ -20,23 +20,14 @@ import {
 } from "../lib/api";
 import { relative, stamp } from "../lib/format";
 import { navigate, useRoute } from "../lib/router";
-import type { DeliveryTarget, DeliveryTargetGroup, Plan, Source, SourceTypeRecord, Strategy } from "../lib/types";
+import type { DeliveryTarget, Plan, Source, SourceTypeRecord, Strategy } from "../lib/types";
 
 interface Draft {
   name: string;
+  /** 一次性作业（job 模式）的信源选择；recurring 计划的目标由策略承载。 */
   targets: string[];
-  // 引用的策略（裸 slug）；空串表示不使用策略。选择后表单字段按策略预填，可覆写。
+  // 引用的策略（裸 slug）。单一语义：节律/额度/目标等行为字段全部由策略承载。
   strategy: string;
-  kind: "recurring" | "oneShot";
-  interval: string;
-  perRunItems: string;
-  totalItems: string;
-  maxAge: string;
-  onBudgetExhausted: string;
-  onFailureThreshold: string;
-  /** 计划维度的投递目标，键为 `kind:id`。 */
-  deliveryTargets: string[];
-  deliveryEnabled: boolean;
   /** 创建/保存后是否立即进入调度；默认关闭，避免误触即开始采集。 */
   enabled: boolean;
 }
@@ -45,36 +36,11 @@ const EMPTY: Draft = {
   name: "",
   targets: [],
   strategy: "",
-  kind: "recurring",
-  interval: "",
-  perRunItems: "",
-  totalItems: "",
-  maxAge: "",
-  onBudgetExhausted: "",
-  onFailureThreshold: "",
-  deliveryTargets: [],
-  deliveryEnabled: true,
   enabled: false,
 };
 
 // 信源 id 统一成带前缀形式：PATCH 不经过 extract_targets 归一，需前端补全。
 const srcId = (id: string) => (id.startsWith("source/") ? id : `source/${id}`);
-
-// 由草稿构造额度对象（只含已填字段；编辑时整份替换，清空即移除）。
-function buildQuota(draft: Draft): Record<string, unknown> {
-  const quota: Record<string, unknown> = {};
-  if (draft.perRunItems.trim()) quota.perRunItems = Number(draft.perRunItems);
-  if (draft.totalItems.trim()) quota.totalItems = Number(draft.totalItems);
-  if (draft.maxAge.trim()) quota.maxAge = draft.maxAge.trim();
-  return quota;
-}
-
-function buildStopPolicy(draft: Draft): Record<string, unknown> {
-  const stopPolicy: Record<string, unknown> = {};
-  if (draft.onBudgetExhausted) stopPolicy.onBudgetExhausted = draft.onBudgetExhausted;
-  if (draft.onFailureThreshold.trim()) stopPolicy.onFailureThreshold = Number(draft.onFailureThreshold);
-  return stopPolicy;
-}
 
 export function PlansPage() {
   const { notify } = useUi();
@@ -96,7 +62,6 @@ export function PlansPage() {
   const [pageSize, setPageSize] = useState(20);
   // 投递目标目录：计划表单里直接选，底层存成监听该计划的自动投递规则。
   const [deliveryTargets, setDeliveryTargets] = useState<DeliveryTarget[]>([]);
-  const [deliveryGroups, setDeliveryGroups] = useState<DeliveryTargetGroup[]>([]);
   // 策略目录：新建/编辑时选择引用，表单字段按所选策略预填，可覆写。
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   // 信源页「关联计划」跳转：#plans?target=source/xxx 按信源过滤。
@@ -120,22 +85,6 @@ export function PlansPage() {
     for (const source of sources) map.set(source.id, source.sourceType);
     return (id: string) => map.get(id) ?? "";
   }, [sources]);
-
-  // 按类型套用创建期默认剧本（v3 R17）：来自注册表 planDefaults，仅用于新建时预填。
-  const defaultsOf = (typeId: string): Partial<Draft> => {
-    const record = typeRecords.find((item) => item.id === typeId);
-    if (!record) return {};
-    const trigger = record.planDefaults.trigger as Record<string, unknown> | null | undefined;
-    const quota = record.planDefaults.quota ?? {};
-    const stop = record.planDefaults.stopPolicy ?? {};
-    return {
-      interval: typeof trigger?.interval === "string" ? trigger.interval : "",
-      perRunItems: quota.perRunItems != null ? String(quota.perRunItems) : "",
-      maxAge: typeof quota.maxAge === "string" ? quota.maxAge : "",
-      onBudgetExhausted: typeof stop.onBudgetExhausted === "string" ? stop.onBudgetExhausted : "",
-      onFailureThreshold: stop.onFailureThreshold != null ? String(stop.onFailureThreshold) : "",
-    };
-  };
 
   // 计划行类型：取首个目标的信源类型（经 targets join，不冗余存储）。
   const planTypeLabel = (plan: Plan): string | null => {
@@ -167,9 +116,8 @@ export function PlansPage() {
       setSources(sourcePage.items);
       setTypeRecords(typePage.items);
       setDeliveryTargets(catalog.items);
-      setDeliveryGroups(catalog.groups);
       // 策略目录缺失（旧后端）不阻塞计划页：仅下拉不可用。
-      if (strategyPage) setStrategies(strategyPage.items);
+      if (strategyPage) setStrategies(strategyPage.items ?? []);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -185,92 +133,76 @@ export function PlansPage() {
     setDraft((current) => {
       const adding = !current.targets.includes(id);
       const targets = adding ? [...current.targets, id] : current.targets.filter((item) => item !== id);
-      // 选第一个目标时按其信源类型套默认剧本；用户随后可改。
-      if (adding && current.targets.length === 0) {
-        return { ...current, ...defaultsOf(sourceTypeOf(id)), targets };
-      }
+      // 单一语义：节律/额度只来自策略基座，选目标不再内联预填行为字段。
       return { ...current, targets };
     });
 
   // 表单里的投递目标：`kind:id` → `{kind,id}`，空数组表示不投递。
-  const deliveryPayload = () =>
-    draft.deliveryTargets.map((value) => {
-      const at = value.indexOf(":");
-      return { kind: value.slice(0, at), id: value.slice(at + 1) };
-    });
-
-  // 选择策略：节律/额度/停止策略按所选策略预填，用户仍可覆写；选回"不使用"即恢复空白。
-  const pickStrategy = (slug: string) => {
-    const hit = strategies.find((item) => item.slug === slug);
-    if (!hit) {
-      setDraft((current) => ({ ...current, strategy: "", interval: "", perRunItems: "", totalItems: "", maxAge: "", onBudgetExhausted: "", onFailureThreshold: "" }));
-      return;
-    }
-    const quota = hit.quota ?? {};
-    const stop = (hit.stopPolicy ?? {}) as { onBudgetExhausted?: string; onFailureThreshold?: number };
-    setDraft((current) => ({
-      ...current,
-      strategy: hit.slug,
-      interval: hit.trigger?.interval ?? current.interval,
-      perRunItems: quota.perRunItems != null ? String(quota.perRunItems) : current.perRunItems,
-      totalItems: quota.totalItems != null ? String(quota.totalItems) : current.totalItems,
-      maxAge: quota.maxAge ?? current.maxAge,
-      onBudgetExhausted: stop.onBudgetExhausted ?? current.onBudgetExhausted,
-      onFailureThreshold: stop.onFailureThreshold != null ? String(stop.onFailureThreshold) : current.onFailureThreshold,
-    }));
+  
+  const start = (nextMode: "plan" | "job") => {
+    setMode(nextMode);
+    setEditing(null);
+    setDraft({ ...EMPTY });
+    setOpen(true);
   };
 
+  const startEdit = (plan: Plan) => {
+    setMode("edit");
+    setEditing(plan);
+    setDraft({
+      name: plan.name ?? "",
+      targets: [],
+      strategy: plan.strategy ? plan.strategy.replace(/^strategy\//, "") : "",
+      enabled: plan.enabled ?? plan.status !== "paused",
+    });
+    setOpen(true);
+  };
+
+  // 单一语义：策略选择即完成行为配置，计划不预填也不覆写行为字段。
+  const pickStrategy = (slug: string) => setDraft((current) => ({ ...current, strategy: slug }));
+
   const submit = async () => {
-    if (draft.targets.length === 0) {
-      notify("warn", "至少选择一个信源");
-      return;
-    }
-    setBusy("create");
-    try {
-      if (mode === "job") {
+    if (mode === "job") {
+      if (draft.targets.length === 0) {
+        notify("warn", "至少选择一个信源");
+        return;
+      }
+      setBusy("create");
+      try {
         const result = await createCollectionJob({ targets: draft.targets, name: draft.name || "一次性采集作业" });
         notify(
           result.failed.length ? "warn" : "ok",
           `批量作业：已启动 ${result.dispatched.length} 个`,
           result.failed.length ? `${result.failed.length} 个信源启动失败。` : undefined,
         );
+        setOpen(false);
+        setDraft(EMPTY);
+        setEditing(null);
+        await load();
+      } catch (caught) {
+        notify("bad", "作业创建失败", caught instanceof Error ? caught.message : undefined);
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    // 单一语义：计划是策略的状态实例，创建/更新只提交引用与状态字段。
+    if (!draft.strategy) {
+      notify("warn", "计划必须引用策略（有计划必有策略）：请先选择或创建策略");
+      return;
+    }
+    setBusy("create");
+    try {
+      if (mode === "edit" && editing) {
+        await updatePlan(
+          editing.id,
+          { name: draft.name || "采集计划", strategy: draft.strategy, enabled: draft.enabled },
+          editing.etag,
+        );
+        notify("ok", "计划已更新");
       } else {
-        const trigger: Record<string, unknown> = { kind: draft.kind };
-        if (draft.kind === "recurring") trigger.interval = draft.interval || "1h";
-        else trigger.fireAt = "immediate";
-        const quota = buildQuota(draft);
-        const stopPolicy = buildStopPolicy(draft);
-        if (mode === "edit" && editing) {
-          // 编辑整份替换 quota/stopPolicy：清空字段即从计划中移除该限制。
-          const patch: Record<string, unknown> = {
-            name: draft.name || "采集计划",
-            targets: draft.targets.map(srcId),
-            trigger,
-            quota,
-            stopPolicy,
-            // 空串表示取消策略引用，改回计划自带行为定义。
-            strategy: draft.strategy,
-            enabled: draft.enabled,
-            deliveryTargets: deliveryPayload(),
-            deliveryEnabled: draft.deliveryEnabled,
-          };
-          await updatePlan(editing.id, patch, editing.etag);
-          notify("ok", "计划已更新");
-        } else {
-          const input: Record<string, unknown> = {
-            name: draft.name || "采集计划",
-            targets: draft.targets,
-            trigger,
-            enabled: draft.enabled,
-            deliveryTargets: deliveryPayload(),
-            deliveryEnabled: draft.deliveryEnabled,
-          };
-          if (Object.keys(quota).length) input.quota = quota;
-          if (Object.keys(stopPolicy).length) input.stopPolicy = stopPolicy;
-          if (draft.strategy) input.strategy = draft.strategy;
-          await createPlan(input);
-          notify("ok", draft.enabled ? "计划已创建并启用" : "计划已创建（未启用采集）");
-        }
+        await createPlan({ name: draft.name || "采集计划", strategy: draft.strategy, enabled: draft.enabled });
+        notify("ok", draft.enabled ? "计划已创建并启用" : "计划已创建（未启用采集）");
       }
       setOpen(false);
       setDraft(EMPTY);
@@ -279,42 +211,12 @@ export function PlansPage() {
     } catch (caught) {
       notify(
         "bad",
-        mode === "job" ? "作业创建失败" : mode === "edit" ? "更新失败" : "创建失败",
+        mode === "edit" ? "更新失败" : "创建失败",
         caught instanceof Error ? caught.message : undefined,
       );
     } finally {
       setBusy(null);
     }
-  };
-
-  const start = (nextMode: "plan" | "job") => {
-    setMode(nextMode);
-    setEditing(null);
-    setDraft({ ...EMPTY, kind: nextMode === "job" ? "oneShot" : "recurring" });
-    setOpen(true);
-  };
-
-  const startEdit = (plan: Plan) => {
-    const quota = plan.quota;
-    const stop = plan.stopPolicy as { onBudgetExhausted?: string; onFailureThreshold?: number } | null | undefined;
-    setMode("edit");
-    setEditing(plan);
-    setDraft({
-      name: plan.name ?? "",
-      targets: plan.targets ?? [],
-      strategy: plan.strategy ? plan.strategy.replace(/^strategy\//, "") : "",
-      kind: plan.trigger?.kind === "oneShot" ? "oneShot" : "recurring",
-      interval: plan.trigger?.interval ?? "2h",
-      perRunItems: quota?.perRunItems ? String(quota.perRunItems) : "",
-      totalItems: quota?.totalItems ? String(quota.totalItems) : "",
-      maxAge: quota?.maxAge ?? "",
-      onBudgetExhausted: stop?.onBudgetExhausted ?? "",
-      onFailureThreshold: stop?.onFailureThreshold ? String(stop.onFailureThreshold) : "",
-      deliveryTargets: (plan.deliveryTargets ?? []).map((item) => `${item.kind}:${item.id}`),
-      deliveryEnabled: plan.deliveryEnabled ?? true,
-      enabled: plan.enabled ?? plan.status !== "paused",
-    });
-    setOpen(true);
   };
 
   const act = async (plan: Plan, action: "pause" | "resume" | "delete") => {
@@ -640,128 +542,47 @@ export function PlansPage() {
               </label>
             ) : null}
             {mode !== "job" ? (
-              <Field label="触发">
-                <div className="row" style={{ gap: 12 }}>
-                  <label className="row" style={{ gap: 4 }}>
-                    <input type="radio" name="kind" checked={draft.kind === "recurring"} onChange={() => setDraft({ ...draft, kind: "recurring" })} />
-                    周期
-                  </label>
-                  <label className="row" style={{ gap: 4 }}>
-                    <input type="radio" name="kind" checked={draft.kind === "oneShot"} onChange={() => setDraft({ ...draft, kind: "oneShot" })} />
-                    一次性
-                  </label>
-                  {draft.kind === "recurring" ? (
-                    <input className="input" style={{ maxWidth: 120 }} value={draft.interval} placeholder="2h" onChange={(event) => setDraft({ ...draft, interval: event.target.value })} />
-                  ) : null}
-                </div>
-              </Field>
-            ) : null}
-            {mode !== "job" ? (
-              <Field label="策略（可复用的节律与额度定义）">
+              <Field label="策略（节律与额度的唯一定义点，必选）">
                 <select
                   className="input"
                   value={draft.strategy}
                   onChange={(event) => pickStrategy(event.target.value)}
                   disabled={strategies.length === 0}
                 >
-                  <option value="">不使用策略{strategies.length === 0 ? "（暂无可用策略）" : ""}</option>
+                  <option value="" disabled>
+                    {strategies.length === 0 ? "暂无可用策略，请先建策略" : "请选择策略"}
+                  </option>
                   {strategies.map((item) => (
                     <option key={item.slug} value={item.slug}>
                       {item.name ?? item.slug}
                     </option>
                   ))}
                 </select>
-                {draft.strategy ? (
+                {strategies.length === 0 ? (
+                  <span className="small muted">
+                    有计划必有策略：请先在策略页创建一份策略，再回到这里建计划。
+                  </span>
+                ) : (
                   <span className="small muted">
                     已按策略预填下方字段，可覆写；引用同一策略的计划互不影响。
                   </span>
-                ) : null}
+                )}
               </Field>
             ) : null}
-            {mode !== "job" ? (
-              <>
-                <Field label="数量上限（留空表示不限制）">
-                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                    <input className="input" style={{ maxWidth: 140 }} value={draft.perRunItems} placeholder="单次上限" onChange={(event) => setDraft({ ...draft, perRunItems: event.target.value })} />
-                    <input className="input" style={{ maxWidth: 140 }} value={draft.totalItems} placeholder="累计上限" onChange={(event) => setDraft({ ...draft, totalItems: event.target.value })} />
-                    <input className="input" style={{ maxWidth: 150 }} value={draft.maxAge} placeholder="时效（如 365d）" onChange={(event) => setDraft({ ...draft, maxAge: event.target.value })} />
-                  </div>
-                </Field>
-                <Field label="停止策略">
-                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                    <select className="input" style={{ maxWidth: 180 }} value={draft.onBudgetExhausted} onChange={(event) => setDraft({ ...draft, onBudgetExhausted: event.target.value })}>
-                      <option value="">预算耗尽：默认</option>
-                      <option value="pause">预算耗尽：暂停</option>
-                      <option value="skip">预算耗尽：跳过</option>
-                    </select>
-                    <input className="input" style={{ maxWidth: 160 }} value={draft.onFailureThreshold} placeholder="连续失败阈值" onChange={(event) => setDraft({ ...draft, onFailureThreshold: event.target.value })} />
-                  </div>
-                </Field>
-              </>
-            ) : null}
-            <Field label="目标信源">
-              <div className="stack" style={{ gap: 4, maxHeight: 220, overflow: "auto" }}>
-                {sources.map((source) => (
-                  <label key={source.id} className="row" style={{ gap: 6 }}>
-                    <input type="checkbox" checked={draft.targets.includes(source.id)} onChange={() => toggleTarget(source.id)} />
-                    <span>{source.name ?? source.id}</span>
-                    <span className="badge neutral">{typeLabelOf(source.sourceType)}</span>
-                  </label>
-                ))}
-              </div>
-            </Field>
-            {mode !== "job" ? (
-              <Field label="投递目标（可多选，留空表示不自动投递）">
-                <div className="stack" style={{ gap: 8 }}>
-                  {deliveryGroups.map((group) => {
-                    const items = deliveryTargets.filter((item) => item.kind === group.kind);
-                    if (!items.length) return null;
-                    return (
-                      <div key={group.kind} className="stack" style={{ gap: 4 }}>
-                        <span className="small muted" title={group.note}>
-                          {group.label}
-                        </span>
-                        <div className="row wrap" style={{ gap: 12 }}>
-                          {items.map((item) => {
-                            const key = `${item.kind}:${item.id}`;
-                            return (
-                              <label key={key} className="row" style={{ gap: 5 }}>
-                                <input
-                                  type="checkbox"
-                                  checked={draft.deliveryTargets.includes(key)}
-                                  onChange={() =>
-                                    setDraft({
-                                      ...draft,
-                                      deliveryTargets: draft.deliveryTargets.includes(key)
-                                        ? draft.deliveryTargets.filter((value) => value !== key)
-                                        : [...draft.deliveryTargets, key],
-                                    })
-                                  }
-                                />
-                                <span className="small">{item.name ?? item.id}</span>
-                                {item.enabled === false ? <span className="badge neutral">已停用</span> : null}
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {deliveryTargets.length === 0 ? (
-                    <span className="small muted">暂无可用目标：模型在系统设置登记，外部 API 与通知渠道在内容投递页维护。</span>
-                  ) : null}
-                  <label className="switch">
-                    <input
-                      type="checkbox"
-                      checked={draft.deliveryEnabled}
-                      disabled={!draft.deliveryTargets.length}
-                      onChange={(event) => setDraft({ ...draft, deliveryEnabled: event.target.checked })}
-                    />
-                    <span>启用自动投递</span>
-                  </label>
+            {mode === "job" ? (
+              <Field label="目标信源">
+                <div className="stack" style={{ gap: 4, maxHeight: 220, overflow: "auto" }}>
+                  {sources.map((source) => (
+                    <label key={source.id} className="row" style={{ gap: 6 }}>
+                      <input type="checkbox" checked={draft.targets.includes(source.id)} onChange={() => toggleTarget(source.id)} />
+                      <span>{source.name ?? source.id}</span>
+                      <span className="badge neutral">{typeLabelOf(source.sourceType)}</span>
+                    </label>
+                  ))}
                 </div>
               </Field>
             ) : null}
+
           </div>
         </Modal>
       ) : null}

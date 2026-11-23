@@ -5,22 +5,4 @@ name: 官方渠道 · 采集计划
 # 初始示例统一关闭采集：先核对地址与适配器，再在计划页启用。
 enabled: false
 project: proj_default
-quota:
-  maxAge: 365d
-  perRunItems: 8
-stopPolicy:
-  onBudgetExhausted: skip
-  onFailureThreshold: 3
-targets:
-  - source/openai-news
-  - source/deepseek-updates
-  - source/google-deepmind
-  - source/google-research
-  - source/hugging-face
-  - source/mistral
-  - source/nvidia-blog
-  - source/microsoft-research
-  - source/aws-machine-learning
-trigger:
-  interval: 2h
-  kind: recurring
+strategy: official-channels

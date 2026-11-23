@@ -16,7 +16,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use crate::author;
-use crate::error::Error;
+use crate::error::{Diagnostic, Diagnostics, Error};
 use crate::load::{LoadOptions, validate};
 use crate::source_type;
 
@@ -134,10 +134,31 @@ fn adapter_stem(adapter: &str) -> String {
         .to_string()
 }
 
-/// 由信源的 `schedule` + `admission.initialBackfill` 合成一份等价采集计划文档。
-/// 节律逐字搬进 `trigger`，回填额度搬进 `quota`，其余信源字段（access/pipeline/paid/admission
+/// 由信源的 `schedule` + `admission.initialBackfill` 合成采集策略与等价计划文档。
+/// 节律/回填额度搬进策略（行为的唯一定义点），计划只保留策略引用与
+/// `schedule.priority` 覆写；其余信源字段（access/pipeline/paid/admission
 /// 的 allowUrlPrefixes 等）留在信源。规划器兼容路径据同一份信源合成同 id 计划，取值一致。
 fn synthesize_plan(entry: &crate::author::Entry) -> Option<Value> {
+    // 仅作存在性判定：节律/额度的实际内容已搬进策略文档（见 synthesize_strategy）。
+    let _has_schedule = entry.doc.get("schedule")?.as_object()?.get("interval")?;
+    let name = entry
+        .doc
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(&entry.slug)
+        .to_string();
+    let mut plan = Map::new();
+    plan.insert("id".into(), json!(format!("plan/{}", entry.slug)));
+    plan.insert("kind".into(), json!("plan"));
+    plan.insert("name".into(), json!(format!("{name} · 采集计划")));
+    // 单一语义：迁移生成的计划同样引用策略，行为字段与目标全部由策略基座承载。
+    plan.insert("strategy".into(), json!(format!("strategy/{}", entry.slug)));
+    Some(Value::Object(plan))
+}
+
+/// 与 [`synthesize_plan`] 配套：从信源 `schedule` + `admission.initialBackfill`
+/// 合成策略文档（trigger 逐字搬运，回填额度进 quota），作为迁移后计划的行为基座。
+fn synthesize_strategy(entry: &crate::author::Entry) -> Option<Value> {
     let schedule = entry.doc.get("schedule")?.as_object()?;
     let mut trigger = Map::new();
     trigger.insert("kind".into(), json!("recurring"));
@@ -153,18 +174,21 @@ fn synthesize_plan(entry: &crate::author::Entry) -> Option<Value> {
             trigger.insert(key.to_string(), value.clone());
         }
     }
-    let mut plan = Map::new();
-    plan.insert("id".into(), json!(format!("plan/{}", entry.slug)));
-    plan.insert("kind".into(), json!("plan"));
     let name = entry
         .doc
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or(&entry.slug)
         .to_string();
-    plan.insert("name".into(), json!(format!("{name} · 采集计划")));
-    plan.insert("targets".into(), json!([format!("source/{}", entry.slug)]));
-    plan.insert("trigger".into(), Value::Object(trigger));
+    let mut strategy = Map::new();
+    strategy.insert("id".into(), json!(format!("strategy/{}", entry.slug)));
+    strategy.insert("kind".into(), json!("strategy"));
+    strategy.insert("name".into(), json!(format!("{name} · 采集策略")));
+    strategy.insert("targets".into(), json!([format!("source/{}", entry.slug)]));
+    strategy.insert("trigger".into(), Value::Object(trigger));
+    if let Some(priority) = entry.doc.pointer("/schedule/priority") {
+        strategy.insert("priority".into(), priority.clone());
+    }
     if let Some(backfill) = entry
         .doc
         .pointer("/admission/initialBackfill")
@@ -178,13 +202,10 @@ fn synthesize_plan(entry: &crate::author::Entry) -> Option<Value> {
             quota.insert("maxAge".into(), max_age.clone());
         }
         if !quota.is_empty() {
-            plan.insert("quota".into(), Value::Object(quota));
+            strategy.insert("quota".into(), Value::Object(quota));
         }
     }
-    if let Some(priority) = entry.doc.pointer("/schedule/priority") {
-        plan.insert("priority".into(), priority.clone());
-    }
-    Some(Value::Object(plan))
+    Some(Value::Object(strategy))
 }
 
 /// 把信源里的 `schedule` 与 `admission.initialBackfill` 摘除，其余原样保留。
@@ -212,14 +233,26 @@ pub fn migrate_schedules_to_plans(dir: &Path, options: &LoadOptions) -> Result<u
         let Some(plan_doc) = synthesize_plan(entry) else {
             continue;
         };
-        let plan_file = format!("plans/{}.yaml", entry.slug);
-        writes.push(AtomicWrite::write(plan_file, author::to_yaml(&plan_doc)));
+        // 单一语义：迁移同时生成策略声明（行为基座）与引用它的计划，
+        // 合计三份写入；任何一份缺失都让迁移不完整。
+        let strategy_file = format!("strategies/{}.yaml", entry.slug);
+        let strategy_doc = synthesize_strategy(entry)
+            .ok_or_else(|| Error::Invalid(Diagnostics(vec![Diagnostic {
+                file: entry.file.clone(),
+                line: 0,
+                message: format!("信源 {} 的 schedule 无法合成为策略", entry.slug),
+            }])))?;
+        writes.push(AtomicWrite::write(strategy_file, author::to_yaml(&strategy_doc)));
+        writes.push(AtomicWrite::write(
+            format!("plans/{}.yaml", entry.slug),
+            author::to_yaml(&plan_doc),
+        ));
         writes.push(AtomicWrite::write(
             entry.file.clone(),
             author::to_yaml(&strip_schedule_fields(&entry.doc)),
         ));
     }
-    let moved = writes.len() / 2;
+    let moved = writes.len() / 3;
     if writes.is_empty() {
         return Ok(0);
     }

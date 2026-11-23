@@ -258,6 +258,9 @@ export interface Strategy {
   } | null;
   stopPolicy?: Record<string, unknown> | null;
   storage?: Record<string, unknown> | null;
+  targets?: string[] | null;
+  deliveryTargets?: DeliveryTarget[] | null;
+  deliveryEnabled?: boolean | null;
   doc?: Record<string, unknown> | null;
 }
 

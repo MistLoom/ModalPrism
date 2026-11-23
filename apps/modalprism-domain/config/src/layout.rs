@@ -81,6 +81,11 @@ pub const AREAS: &[Area] = &[
         role: Role::Declaration(DocKind::Plan),
     },
     Area {
+        name: "strategies",
+        purpose: "采集策略（计划引用的行为基座，唯一定义点）",
+        role: Role::Declaration(DocKind::Strategy),
+    },
+    Area {
         name: "types",
         purpose: "内容类型声明",
         role: Role::Declaration(DocKind::Type),

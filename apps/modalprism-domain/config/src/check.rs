@@ -84,6 +84,7 @@ pub fn check_modules(
             "adapter" => check_adapter(id, module, &mut diags),
             "binding" => check_binding(id, module, modules, &mut diags),
             "plan" => check_plan(id, module, modules, &mut diags),
+            "strategy" => check_strategy(id, module, modules, &mut diags),
             "preset" | "profile" | "type" => {}
             _ => diags.push(bare(format!("未知 kind: {kind}"))),
         }
@@ -168,31 +169,78 @@ fn check_source(
 // 采集节律已迁出信源，改由计划的 trigger 承载；信源若仍写 schedule 也不再校验其形态。
 // 保留此说明以对照旧 `check_schedule` 的去留。
 
-/// 采集计划：targets 必须都存在且是信源；trigger 形态合法（recurring 带节律，oneShot 允许一次性）。
+/// 采集计划：纯状态实例。strategy 必填（有计划必有策略）；行为字段与 targets
+/// 全部由所引策略声明，计划上一律不得出现（顶层键白名单已拦截）。
+/// 计划自身的状态数据仅 `urls`（一次性作业捕获的 URL，属状态不属设置）。
 fn check_plan(
     id: &str,
     module: &Value,
     modules: &BTreeMap<String, Value>,
     diags: &mut Vec<Diagnostic>,
 ) {
-    let targets = string_array(module.get("targets"));
-    // 切片 2：只有 URL 目标的计划（`mp plan new --from-search` 产物）允许 targets 为空。
+    // 单一语义：计划必须引用策略；节律/额度等行为字段的定义点只有策略一处。
+    let Some(reference) = module
+        .get("strategy")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        diags.push(of(id, "计划缺少 strategy 引用（有计划必有策略）"));
+        return;
+    };
+    let strategy_id = if reference.contains('/') {
+        reference.to_string()
+    } else {
+        format!("strategy/{reference}")
+    };
+    let strategy = match modules.get(&strategy_id) {
+        Some(item) if item.get("kind").and_then(Value::as_str) == Some("strategy") => item,
+        Some(_) => {
+            diags.push(of(id, format!("计划 strategy 引用不是策略: {strategy_id}")));
+            return;
+        }
+        None => {
+            diags.push(of(id, format!("计划引用不存在的策略: {strategy_id}")));
+            return;
+        }
+    };
+    // targets 由策略承载；仅当计划带 urls（一次性数据）时豁免空 targets 提示。
     let has_urls = module
         .get("urls")
         .and_then(Value::as_array)
         .is_some_and(|urls| !urls.is_empty());
-    if targets.is_empty() && !has_urls {
-        diags.push(of(id, "计划缺少 targets"));
+    if !has_urls {
+        check_strategy_targets(id, strategy, modules, diags);
     }
-    for target in &targets {
-        match modules.get(target) {
+}
+
+/// 策略的目标校验：targets 必须都存在且是信源。
+fn check_strategy_targets(
+    id: &str,
+    strategy: &Value,
+    modules: &BTreeMap<String, Value>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    for target in string_array(strategy.get("targets")) {
+        match modules.get(&target) {
             Some(source) if source.get("kind").and_then(Value::as_str) == Some("source") => {}
-            Some(_) => diags.push(of(id, format!("计划 target 不是信源: {target}"))),
-            None => diags.push(of(id, format!("计划引用不存在的信源: {target}"))),
+            Some(_) => diags.push(of(id, format!("策略 target 不是信源: {target}"))),
+            None => diags.push(of(id, format!("策略引用不存在的信源: {target}"))),
         }
     }
+}
+
+/// 采集策略：行为的唯一定义点。校验 trigger 形态（与计划同一套规则）与 targets。
+fn check_strategy(
+    id: &str,
+    module: &Value,
+    modules: &BTreeMap<String, Value>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    check_strategy_targets(id, module, modules, diags);
+    check_pipeline(id, module, diags);
     let Some(trigger) = module.get("trigger") else {
-        diags.push(of(id, "计划缺少 trigger"));
+        diags.push(of(id, "策略缺少 trigger"));
         return;
     };
     match trigger.get("kind").and_then(Value::as_str) {
@@ -205,17 +253,11 @@ fn check_plan(
                     }
                 }
             } else if trigger.get("interval").is_none() {
-                diags.push(of(id, "recurring 计划 trigger 缺少 interval"));
+                diags.push(of(id, "recurring 策略 trigger 缺少 interval"));
             }
         }
         Some(other) => diags.push(of(id, format!("未知 trigger.kind: {other}"))),
     }
-    if let Some(vectorize) = module.get("vectorize") {
-        if !vectorize.is_boolean() {
-            diags.push(of(id, "vectorize 只能是布尔"));
-        }
-    }
-    check_pipeline(id, module, diags);
 }
 
 /// 计划级 pipeline 校验：项形与信源 pipeline 一致；组件必须可解析。

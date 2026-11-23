@@ -1,0 +1,15 @@
+id: strategy/registry-verification
+kind: strategy
+name: 注册表万级采集验证
+description: 注册表类信源的低频大额度采集，供万级条目验证计划引用。
+targets:
+  - source/crates-io-index
+trigger:
+  kind: recurring
+  interval: 1d
+quota:
+  perRunItems: 500
+  maxAge: 3650d
+stopPolicy:
+  onBudgetExhausted: skip
+  onFailureThreshold: 3

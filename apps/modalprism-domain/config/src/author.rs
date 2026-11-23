@@ -607,12 +607,18 @@ fn strategy_row(entry: &Entry) -> Value {
         "name": name_of(doc, &entry.slug),
         "description": doc.get("description").cloned().unwrap_or(Value::Null),
         "enabled": enabled_of(doc),
+        "targets": doc.get("targets").cloned().unwrap_or(Value::Null),
         "trigger": doc.get("trigger").cloned().unwrap_or(Value::Null),
         "queue": doc.get("queue").cloned().unwrap_or(Value::Null),
         "priority": doc.get("priority").cloned().unwrap_or(Value::Null),
         "quota": doc.get("quota").cloned().unwrap_or(Value::Null),
         "stopPolicy": doc.get("stopPolicy").cloned().unwrap_or(Value::Null),
         "storage": doc.get("storage").cloned().unwrap_or(Value::Null),
+        // 纯化模型：行为与投递字段由策略承载，行视图逐字段透出供 join。
+        "pipeline": doc.get("pipeline").cloned().unwrap_or(Value::Null),
+        "vectorize": doc.get("vectorize").cloned().unwrap_or(Value::Null),
+        "deliveryTargets": doc.get("deliveryTargets").cloned().unwrap_or(Value::Null),
+        "deliveryEnabled": doc.get("deliveryEnabled").cloned().unwrap_or(Value::Null),
         "doc": doc,
     })
 }
@@ -627,6 +633,7 @@ fn plan_row(entry: &Entry) -> Value {
         "name": name_of(doc, &entry.slug),
         "description": doc.get("description").cloned().unwrap_or(Value::Null),
         "enabled": enabled_of(doc),
+        "strategy": doc.get("strategy").cloned().unwrap_or(Value::Null),
         "targets": doc.get("targets").cloned().unwrap_or_else(|| json!([])),
         "trigger": doc.get("trigger").cloned().unwrap_or(Value::Null),
         "queue": doc.get("queue").cloned().unwrap_or(Value::Null),

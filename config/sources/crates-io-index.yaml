@@ -25,7 +25,8 @@ pipeline:
     spec:
       adapter/json-list:
         items: /crates
-        urlTemplate: "{repository}"
+        title: name
+        urlTemplate: "{raw:repository}"
 project: proj_default
 shared: true
 sourceType: api

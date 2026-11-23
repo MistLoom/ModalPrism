@@ -1,0 +1,25 @@
+id: strategy/media-and-community
+kind: strategy
+name: 媒体与社区 · 常规节律
+description: 媒体与社区类信源的常规采集节律，多信源共用一个计划时整组生效。
+targets:
+  - source/techcrunch-ai
+  - source/the-verge-ai
+  - source/mit-technology-review-ai
+  - source/the-decoder
+  - source/ars-technica-ai
+  - source/simon-willison
+  - source/latent-space
+  - source/import-ai
+  - source/mimo-blog
+  - source/berkeley-ai-research
+  - source/github-ai
+trigger:
+  kind: recurring
+  interval: 4h
+quota:
+  perRunItems: 6
+  maxAge: 180d
+stopPolicy:
+  onBudgetExhausted: skip
+  onFailureThreshold: 5

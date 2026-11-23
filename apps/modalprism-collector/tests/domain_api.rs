@@ -30,6 +30,11 @@ fn config_dir(dir: &Path) {
         "system.yaml",
         "id: system\nkind: system\nname: ModalPrism\npolicy:\n  preset: standard\nstrata:\n  gateway:\n    blob_backend: dir\n",
     );
+    write(
+        dir,
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: Demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
 }
 
 fn binds() -> Binds {
@@ -345,14 +350,28 @@ async fn domain_api_is_the_only_product_surface() {
     )
     .await;
 
+    // 投递目标随策略声明走：先建带投递目标的策略，再实例化计划。
     let response = http
-        .post(format!("{base}/api/v1/collection/plans"))
+        .post(format!("{base}/api/v1/collection/strategies"))
         .json(&json!({
-            "name": "投递计划",
+            "name": "投递策略",
             "targets": ["source/demo-feed"],
             "trigger": {"kind": "recurring", "interval": "2h"},
             "deliveryTargets": [{"kind": "endpoint", "id": endpoint_id}],
             "deliveryEnabled": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let strategy: Value = response.json().await.unwrap();
+    eprintln!("DEBUG strategy response: {strategy}");
+    let strategy_slug = strategy["slug"].as_str().unwrap().to_string();
+
+    let response = http
+        .post(format!("{base}/api/v1/collection/plans"))
+        .json(&json!({
+            "name": "投递计划",
+            "strategy": strategy_slug,
         }))
         .send()
         .await
@@ -375,9 +394,9 @@ async fn domain_api_is_the_only_product_surface() {
         .and_then(|value| value.to_str().ok())
         .unwrap()
         .to_string();
+    // 投递目标随策略声明走：在策略上清除投递目标，引用计划的规则随之清理。
     let cleared: Value = http
-        .patch(format!("{base}/api/v1/collection/plans/{plan_id}"))
-        .header("if-match", plan_etag)
+        .patch(format!("{base}/api/v1/collection/strategies/{strategy_slug}"))
         .json(&json!({"deliveryTargets": []}))
         .send()
         .await
@@ -385,7 +404,7 @@ async fn domain_api_is_the_only_product_surface() {
         .json()
         .await
         .unwrap();
-    assert_eq!(cleared["deliveryTargets"], json!(null));
+    assert_eq!(cleared["deliveryTargets"], json!([]));
     let rules: Value = http
         .get(format!("{base}/api/v1/delivery/rules"))
         .send()
@@ -851,12 +870,55 @@ async fn tool_plan_set_carries_plan_id_and_etag_without_unknown_field_rejection(
     )
     .await;
 
+    // 运行时建信源与策略：recurring 策略必须配置 targets 才能实例化计划。
+    let templates = ops_call(&running, "catalog_admin", "templates", json!({})).await;
+    let accessor = templates
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["slug"] == json!("accessor-http")))
+        .cloned()
+        .expect("缺少 accessor-http 模板");
+    ops_call(
+        &running,
+        "catalog_admin",
+        "create",
+        json!({"kind": "accessor", "slug": "demo-http", "doc": accessor["doc"]}),
+    )
+    .await;
+    ops_call(
+        &running,
+        "catalog_admin",
+        "create",
+        json!({
+            "kind": "source",
+            "slug": "demo-feed",
+            "doc": {
+                "name": "示例信源",
+                "access": {"accessor": "accessor/demo-http", "locator": {"url": "https://example.com/feed"}},
+                "pipeline": [],
+                "schedule": {"interval": "6h"},
+                "admission": {}
+            }
+        }),
+    )
+    .await;
+    let response = http
+        .post(format!("{base}/api/v1/collection/strategies"))
+        .json(&json!({
+            "name": "示例策略",
+            "targets": ["source/demo-feed"],
+            "trigger": {"kind": "recurring", "interval": "1h"},
+        }))
+        .send()
+        .await
+        .unwrap();
+    let strategy: Value = response.json().await.unwrap();
+    let strategy_slug = strategy["slug"].as_str().unwrap().to_string();
+
+    // 单一语义：计划是策略的状态实例，只携带引用与状态字段。
     let response = tool("plan.new")
         .json(&json!({
             "name": "待修改计划",
-            "targets": ["source/set-feed"],
-            "trigger": {"kind": "recurring", "interval": "2h"},
-            "vectorize": false,
+            "strategy": strategy_slug
         }))
         .send()
         .await
@@ -869,16 +931,13 @@ async fn tool_plan_set_carries_plan_id_and_etag_without_unknown_field_rejection(
     assert_eq!(plan["vectorize"], json!(false), "缺省 vectorize 应为 false");
     assert_eq!(plan["pipeline"], json!([]), "缺省 pipeline 应为空列表");
 
-    // 工具面完整参数：planId + etag + 计划字段，必须通过而非报未知字段。
-    // 切片 2 行为变更：new/set 会校验管道——引用的适配器必须在配置清单里，
-    // 未声明适配器（如内容处理器占位 id）在写入前被拒绝。
+    // 工具面完整参数：planId + etag + 状态字段，必须通过而非报未知字段。
+    // 行为字段（pipeline/vectorize 等）已上收策略，出现在计划上会被拒绝。
     let response = tool("plan.set")
         .json(&json!({
             "planId": plan_id,
             "etag": etag,
             "name": "已修改计划",
-            "vectorize": true,
-            "pipeline": [{"run": ["adapter/smart-discover"]}],
         }))
         .send()
         .await
@@ -887,13 +946,7 @@ async fn tool_plan_set_carries_plan_id_and_etag_without_unknown_field_rejection(
     let updated: Value = response.json().await.unwrap();
     assert!(status.is_success(), "{status} {updated}");
     assert_eq!(updated["name"], "已修改计划", "{updated}");
-    assert_eq!(updated["vectorize"], json!(true));
-    assert_eq!(
-        updated["pipeline"][0]["run"][0],
-        json!("adapter/smart-discover")
-    );
 
-    // 不兼容的管道：引用未声明适配器，写入前拒绝。
     let response = tool("plan.set")
         .json(&json!({
             "planId": plan_id,
@@ -904,7 +957,7 @@ async fn tool_plan_set_carries_plan_id_and_etag_without_unknown_field_rejection(
         .unwrap();
     assert!(
         !response.status().is_success(),
-        "未知适配器的管道必须被拒绝"
+        "行为字段已上收策略，计划上必须被拒绝"
     );
 
     running.shutdown().await.unwrap();

@@ -150,6 +150,13 @@ fn fixture(id: &str, name: &str) -> (&'static str, String) {
                 r#"{{"items":[{{"url":"https://mimo.xiaomi.com/blog/post","title":"{name}","summary":"摘要","publishedAt":"2026-09-27"}}]}}"#
             ),
         ),
+        "source/crates-io-index" => (
+            "application/json",
+            format!(
+                r#"{{"crates":[{{"name":"{name}","repository":"https://github.com/example/{slug}"}}]}}"#,
+                slug = id.trim_start_matches("source/").replace('-', "_")
+            ),
+        ),
         "source/status-search" => (
             "application/json",
             r#"{"tweets":[{"id_str":"100","full_text":"Hello &amp; world","tweet_created_at":"Wed Oct 01 01:00:00 +0000 2026","user":{"screen_name":"example"}}]}"#.into(),

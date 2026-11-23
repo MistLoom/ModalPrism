@@ -58,8 +58,11 @@ pub fn provider() -> Arc<dyn AbilityProvider> {
                     "plan.resume" => logic::plan_resume::run(args).await,
                     "plan.run" => logic::plan_run::run(args).await,
                     "plan.set" => logic::plan_set::run(args).await,
-                    "strategy.ls" | "strategy.get" | "strategy.new" | "strategy.set"
-                    | "strategy.remove" => forward(verb, args).await,
+                    "strategy.ls" => logic::strategy_ls::run(args).await,
+                    "strategy.get" => logic::strategy_get::run(args).await,
+                    "strategy.new" => logic::strategy_new::run(args).await,
+                    "strategy.set" => logic::strategy_set::run(args).await,
+                    "strategy.remove" => logic::strategy_remove::run(args).await,
                     other => Err(ability_support::Error::not_found(other)),
                 }
             })

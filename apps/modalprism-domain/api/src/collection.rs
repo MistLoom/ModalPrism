@@ -92,7 +92,20 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
         .collect();
     for plan in list["plans"].as_array().cloned().unwrap_or_default() {
         let slug = plan["slug"].as_str().unwrap_or_default().to_string();
-        let targets: Vec<String> = plan["targets"]
+        // 单一语义：targets 与行为字段由所引策略承载，计划只携带引用与状态。
+        let strategy_doc = plan["strategy"]
+            .as_str()
+            .map(|reference| reference.trim_start_matches("strategy/"))
+            .and_then(|slug| {
+                list["strategies"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|item| item["slug"].as_str() == Some(slug))
+            })
+            .unwrap_or(Value::Null);
+        let targets: Vec<String> = strategy_doc["targets"]
             .as_array()
             .cloned()
             .unwrap_or_default()
@@ -135,15 +148,16 @@ pub(crate) async fn plan_rows(state: &AppState) -> Result<Vec<Value>, ApiError> 
             "description": plan["description"],
             "project": project,
             "targets": targets,
-            "trigger": plan["trigger"],
-            "queue": plan["queue"],
-            "priority": plan["priority"],
-            "quota": plan["quota"],
-            "stopPolicy": plan["stopPolicy"],
-            // 计划级管道与向量化声明：plan.ls / plan.get 的宣传面承诺透出。
+            "strategy": plan["strategy"],
+            "trigger": strategy_doc["trigger"],
+            "queue": strategy_doc["queue"],
+            "priority": strategy_doc["priority"],
+            "quota": strategy_doc["quota"],
+            "stopPolicy": strategy_doc["stopPolicy"],
+            // 管道与向量化声明：plan.ls / plan.get 的宣传面承诺透出。
             // 未声明 pipeline 时按缺省语义回空数组（沿用信源默认路径），vectorize 缺省 false。
-            "pipeline": plan["doc"]["pipeline"].as_array().cloned().unwrap_or_default(),
-            "vectorize": plan["doc"]["vectorize"].as_bool().unwrap_or(false),
+            "pipeline": strategy_doc["pipeline"].as_array().cloned().unwrap_or_default(),
+            "vectorize": strategy_doc["vectorize"].as_bool().unwrap_or(false),
             "enabled": enabled,
             "paused": paused,
             "status": status,
@@ -249,6 +263,36 @@ pub(crate) async fn plan_row_owned(
         return Err(ApiError::not_found(format!("采集计划 {plan_id}")));
     }
     Ok(plan)
+}
+
+/// 作业计划的行为基座：幂等确保一次性作业策略存在（有计划必有策略）。
+/// 作业的一次性语义由计划覆写 trigger 承载，不构成第二套行为定义。
+fn ensure_oneshot_audit_strategy(state: &AppState) -> Result<(), ApiError> {
+    let marker = state.config_dir.join("strategies/oneshot-audit.yaml");
+    if marker.exists() {
+        return Ok(());
+    }
+    // 幂等：并发首次建作业时可能同时触达 create，落盘成功（或文件已存在）即视为就绪。
+    match config::create(
+        &state.config_dir,
+        &config::LoadOptions::from_process(),
+        &config::Draft {
+            kind: "strategy".into(),
+            slug: "oneshot-audit".into(),
+            doc: json!({
+                "name": "一次性采集作业",
+                "description": "批量采集作业计划的行为基座：作业派发即时任务，仅留痕审计。",
+                "trigger": {"kind": "oneShot", "fireAt": "immediate"},
+            }),
+        },
+    ) {
+        Ok(_) => {}
+        // 并发/重复创建：文件已存在则视为就绪。
+        Err(error) if marker.exists() => {}
+        Err(error) => return Err(ApiError::from(error)),
+    }
+    state.services.config_reload()?;
+    Ok(())
 }
 
 /// 计划只能引用归属当前项目的信源：共享信源只放开读，不参与他项目的调度。
@@ -408,38 +452,33 @@ fn validate_storage(storage: Option<&Value>) -> Result<(), ApiError> {
 
 /// 可复用的新建计划逻辑：HTTP `POST /collection/plans` 与工具面 `plan.new` 共用，
 /// 返回计划行值（信封由调用方包）。
+///
+/// 单一语义：计划是策略在项目里的**有状态实例**——只携带引用与状态
+/// （enabled/paused/一次性 URL 数据），行为与目标全部由所引策略声明。
 pub(crate) async fn create_plan_value(
     state: &AppState,
     project_id: &str,
     body: &Value,
 ) -> Result<Value, ApiError> {
     let map = util::object(body)?;
-    util::unknown(
-        map,
-        &[
-            "id",
-            "name",
-            "description",
-            "targets",
-            "sourceIds",
-            "urls",
-            "fromSearch",
-            "strategy",
-            "trigger",
-            "queue",
-            "priority",
-            "quota",
-            "stopPolicy",
-            "enabled",
-            "deliveryTargets",
-            "deliveryEnabled",
-            "pipeline",
-            "vectorize",
-            "storage",
-        ],
-    )?;
-    let targets = extract_targets(map);
-    // URL 目标（切片 2）：`mp plan new --from-search` 的产物——oneShot 计划可以只有
+    util::unknown(map, &["id", "name", "description", "strategy", "enabled", "urls", "fromSearch"])?;
+    // 单一语义：有计划必有策略。节律/额度等行为字段的定义点只有策略一处。
+    let strategy = match map
+        .get("strategy")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(slug) => slug.to_string(),
+        None => {
+            return Err(ApiError::validation(
+                "strategy",
+                "required",
+                "计划必须引用策略（有计划必有策略）：请先创建策略或传入 strategy",
+            ))
+        }
+    };
+    // URL 目标（切片 2）：`mp plan new --from-search` 的产物——一次性计划可以只有
     // URL 目标，运行时逐条走 once 的统一摄入路径；不引入浏览器自动化。
     let urls = match map.get("urls") {
         Some(value) if value.is_array() => {
@@ -488,50 +527,64 @@ pub(crate) async fn create_plan_value(
         _ => Vec::new(),
     };
     let urls: Vec<String> = urls.into_iter().chain(from_search_urls).collect();
-    if targets.is_empty() && urls.is_empty() {
-        return Err(ApiError::validation(
-            "targets",
-            "required",
-            "计划至少要有一个信源或 URL 目标",
-        ));
-    }    // 归属校验：跨项目引用会被写进计划，必须在落盘前拒绝。
-    ensure_targets_owned(state, project_id, &targets).await?;
-    validate_pipeline(state, map.get("pipeline"))?;
-    validate_storage(map.get("storage"))?;
-    let trigger = map
-        .get("trigger")
-        .filter(|value| !value.is_null())
+    // 归属与存在性校验：策略必须存在；recurring 策略在同一项目内至多实例化一个计划
+    // （重复实例化会重复采集）。oneshot-audit 作业实例不受此限（每次运行各留痕一个）。
+    let list = config::list(&state.config_dir)?;
+    let strategy_doc = list["strategies"]
+        .as_array()
         .cloned()
-        .unwrap_or_else(|| {
-            if targets.is_empty() {
-                // 只有 URL 目标的计划没有信源节律可言：一次性，跑完即止。
-                json!({"kind": "oneShot", "fireAt": "immediate"})
-            } else {
-                json!({"kind": "recurring", "interval": "1h"})
+        .unwrap_or_default()
+        .into_iter()
+        .find(|item| {
+            item["slug"].as_str() == Some(strategy.as_str())
+                || item["id"].as_str() == Some(format!("strategy/{}", strategy).as_str())
+        })
+        .ok_or_else(|| {
+            ApiError::validation("strategy", "notFound", format!("策略 {strategy} 不存在"))
+        })?;
+    let recurring = strategy_doc["trigger"]["kind"].as_str() != Some("oneShot");
+    // 单一语义：recurring 策略必须有目标信源，否则计划会静默产出 0 条 SourcePlan。
+    if recurring
+        && strategy_doc
+            .get("targets")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0)
+            == 0
+    {
+        return Err(ApiError::validation(
+            "strategy",
+            "invalid",
+            format!("recurring 策略 {strategy} 缺少 targets，请先在策略上配置目标信源"),
+        ));
+    }
+    if recurring {
+        for plan in list["plans"].as_array().cloned().unwrap_or_default() {
+            let same_strategy = plan["strategy"].as_str()
+                .map(|value| {
+                    value.trim_start_matches("strategy/") == strategy.as_str()
+                })
+                .unwrap_or(false);
+            if same_strategy && plan["project"].as_str() == Some(project_id) {
+                return Err(ApiError::validation(
+                    "strategy",
+                    "conflict",
+                    format!("策略 {strategy} 已在本项目实例化为计划 {}", plan["id"]),
+                ));
             }
-        });
-    let slug = derive_plan_slug(map, &targets);
+        }
+    }
+    let slug = derive_plan_slug(map, &[]);
     let mut doc = json!({
         "id": format!("plan/{slug}"),
         "kind": "plan",
         "name": map.get("name").cloned().unwrap_or(json!("采集计划")),
         "project": project_id,
-        "targets": targets,
-        "trigger": trigger,
+        // 引用形态统一：无论入参是裸 slug 还是带前缀引用，落盘一律 `strategy/<slug>`。
+        "strategy": format!("strategy/{}", strategy.trim_start_matches("strategy/")),
     });
     if let Some(object) = doc.as_object_mut() {
-        for key in [
-            "description",
-            "queue",
-            "priority",
-            "quota",
-            "stopPolicy",
-            "enabled",
-            "pipeline",
-            "vectorize",
-            "storage",
-            "strategy",
-        ] {
+        for key in ["description", "enabled"] {
             if let Some(value) = map.get(key) {
                 object.insert(key.to_string(), value.clone());
             }
@@ -550,12 +603,13 @@ pub(crate) async fn create_plan_value(
         },
     )?;
     state.services.config_reload()?;
+    // 投递目标随策略声明走：计划实例化时按所引策略的投递配置同步规则。
     crate::delivery::sync_plan_rule(
         state,
         &slug,
         map.get("name").and_then(Value::as_str).unwrap_or("采集计划"),
-        map.get("deliveryTargets"),
-        map.get("deliveryEnabled").and_then(Value::as_bool),
+        strategy_doc.get("deliveryTargets"),
+        strategy_doc.get("deliveryEnabled").and_then(Value::as_bool),
     )
     .await?;
     crate::observe::append_audit(
@@ -618,7 +672,9 @@ pub(crate) fn strategy_row_owned(state: &AppState, strategy_id: &str) -> Result<
 }
 
 async fn list_strategies(State(state): State<Shared>) -> Result<Response, ApiError> {
-    Ok(util::ok(&json!(strategy_rows(&state)?)))
+    // 与其它列表端点同形：`{ items: [...] }`，前端按 ListResponse 解析。
+    let items = strategy_rows(&state)?;
+    Ok(util::ok(&json!({ "items": items, "total": items.len() })))
 }
 
 async fn get_strategy(
@@ -641,6 +697,7 @@ pub(crate) async fn create_strategy_value(
             "id",
             "name",
             "description",
+            "targets",
             "trigger",
             "queue",
             "priority",
@@ -648,9 +705,23 @@ pub(crate) async fn create_strategy_value(
             "stopPolicy",
             "storage",
             "enabled",
+            "pipeline",
+            "vectorize",
+            "deliveryTargets",
+            "deliveryEnabled",
         ],
     )?;
     validate_storage(map.get("storage"))?;
+    validate_pipeline(state, map.get("pipeline"))?;
+    // 归属校验：策略 targets 引用的信源必须属于本策略所在项目（项目隔离不下放计划）。
+    if let Some(targets) = map.get("targets").and_then(Value::as_array) {
+        let owned: Vec<String> = targets
+            .iter()
+            .filter_map(Value::as_str)
+            .map(util::source_slug)
+            .collect();
+        ensure_targets_owned(state, project_id, &owned).await?;
+    }
     let trigger = map
         .get("trigger")
         .filter(|value| !value.is_null())
@@ -678,12 +749,17 @@ pub(crate) async fn create_strategy_value(
     if let Some(object) = doc.as_object_mut() {
         for key in [
             "description",
+            "targets",
             "queue",
             "priority",
             "quota",
             "stopPolicy",
             "storage",
             "enabled",
+            "pipeline",
+            "vectorize",
+            "deliveryTargets",
+            "deliveryEnabled",
         ] {
             if let Some(value) = map.get(key) {
                 object.insert(key.to_string(), value.clone());
@@ -733,6 +809,7 @@ pub(crate) async fn update_strategy_value(
         &[
             "name",
             "description",
+            "targets",
             "trigger",
             "queue",
             "priority",
@@ -740,9 +817,14 @@ pub(crate) async fn update_strategy_value(
             "stopPolicy",
             "storage",
             "enabled",
+            "deliveryTargets",
+            "deliveryEnabled",
+            "pipeline",
+            "vectorize",
         ],
     )?;
     validate_storage(map.get("storage"))?;
+    validate_pipeline(state, map.get("pipeline"))?;
     let entry = config::entries(&state.config_dir, "strategy")?
         .into_iter()
         .find(|entry| entry.slug == strategy_id)
@@ -762,17 +844,41 @@ pub(crate) async fn update_strategy_value(
     for key in [
         "name",
         "description",
+        "targets",
         "queue",
         "priority",
         "quota",
         "stopPolicy",
         "storage",
         "enabled",
+        "deliveryTargets",
+        "deliveryEnabled",
+        "pipeline",
+        "vectorize",
     ] {
         if let Some(value) = map.get(key) {
             doc.insert(key.into(), value.clone());
         }
     }
+    // 归属校验：改 targets 时引用的信源必须属于策略所在项目（项目隔离不下放计划）。
+    if map.get("targets").is_some() {
+        let owned: Vec<String> = doc
+            .get("targets")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| value.as_str().map(util::source_slug))
+            .collect();
+        let strategy_project = doc
+            .get("project")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        ensure_targets_owned(state, &strategy_project, &owned).await?;
+    }
+    let delivery_targets = map.get("deliveryTargets").cloned();
+    let delivery_enabled = map.get("deliveryEnabled").and_then(Value::as_bool);
     config::update(
         &state.config_dir,
         &config::LoadOptions::from_process(),
@@ -783,6 +889,29 @@ pub(crate) async fn update_strategy_value(
         },
     )?;
     state.services.config_reload()?;
+    // 投递目标随策略声明走：策略变化后，为所有引用它的计划重新同步投递规则。
+    if delivery_targets.is_some() || delivery_enabled.is_some() {
+        let plans = config::list(&state.config_dir)?["plans"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for plan in plans {
+            let reference = plan["strategy"].as_str().unwrap_or_default();
+            if reference.trim_start_matches("strategy/") != strategy_id {
+                continue;
+            }
+            let plan_id = plan["slug"].as_str().unwrap_or_default();
+            let plan_name = plan["name"].as_str().unwrap_or_default();
+            crate::delivery::sync_plan_rule(
+                state,
+                plan_id,
+                plan_name,
+                delivery_targets.as_ref(),
+                delivery_enabled,
+            )
+            .await?;
+        }
+    }
     crate::observe::append_audit(
         state,
         "collection.strategy.update",
@@ -878,14 +1007,16 @@ async fn create_job(
         ));
     }
     ensure_targets_owned(&state, project.id(), &targets).await?;
+    // 单一语义：作业计划同样引用策略（有计划必有策略），一次性语义由专用策略
+    // `strategy/oneshot-audit`（trigger.kind = oneShot）承载，计划上不写任何行为字段。
+    ensure_oneshot_audit_strategy(&state)?;
     let slug = derive_plan_slug(map, &targets);
     let doc = json!({
         "id": format!("plan/{slug}"),
         "kind": "plan",
         "name": map.get("name").cloned().unwrap_or(json!("一次性采集作业")),
         "project": project.id(),
-        "targets": targets,
-        "trigger": {"kind": "oneShot", "fireAt": "immediate"},
+        "strategy": "strategy/oneshot-audit",
         // 作业计划仅留痕审计：即时 task_create 已派发，禁用可避免调度轮次二次派发同一 oneShot。
         "enabled": false,
     });
@@ -980,142 +1111,92 @@ pub(crate) async fn update_plan_value(
     body: &Value,
 ) -> Result<Value, ApiError> {
     let map = util::object(body)?;
+    // 单一语义：计划是纯状态实例，可改的只有状态与元数据（策略引用、enabled、
+    // 一次性 URL 数据、名称/说明）；行为字段全部在策略上。
     util::unknown(
         map,
-        &[
-            "strategy",
-            "trigger",
-            "schedule",
-            "quota",
-            "stopPolicy",
-            "priority",
-            "queue",
-            "enabled",
-            "targets",
-            "urls",
-            "appendUrls",
-            "name",
-            "description",
-            "deliveryTargets",
-            "deliveryEnabled",
-            "pipeline",
-            "vectorize",
-            "storage",
-        ],
+        &["strategy", "enabled", "urls", "appendUrls", "name", "description"],
     )?;
-    validate_storage(map.get("storage"))?;
     let plan = plan_row_owned(state, plan_id, project_id).await?;
     match etag {
         Some(value) => util::if_match_value(value, plan["etag"].as_str().unwrap_or(""))?,
         None => {}
     }
-    // 改目标也要走归属校验：不能把他项目信源拉进自己的计划。
-    // 这里同时把目标归一成模块形态：清单对外回裸 slug，原样落盘会匹配不到信源、计划静默不采。
-    let patched_targets = match map.get("targets") {
-        Some(_) => {
-            let targets = extract_targets(map);
-            if targets.is_empty() {
-                return Err(ApiError::validation(
-                    "targets",
-                    "required",
-                    "计划至少要有一个信源",
-                ));
-            }
-            ensure_targets_owned(state, project_id, &targets).await?;
-            Some(targets)
-        }
-        None => None,
-    };
-    validate_pipeline(state, map.get("pipeline"))?;
     let entry = config::entries(&state.config_dir, "plan")?
         .into_iter()
         .find(|entry| entry.slug == plan_id)
         .ok_or_else(|| ApiError::not_found(format!("采集计划 {plan_id}")))?;
     let mut doc = entry.doc.as_object().cloned().unwrap_or_default();
-    // 兼容前端仍在编辑的 `schedule`：把 intervalMs/mode 翻译成计划的 trigger（节律已归计划）。
-    if let Some(schedule) = util::optional_object(map, "schedule")? {
-        let mut next = doc
-            .get("trigger")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        let mode = schedule
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("fixed");
-        if mode == "push" {
-            next.insert("kind".into(), json!("oneShot"));
-        } else {
-            next.insert("kind".into(), json!("recurring"));
-            if let Some(interval_ms) = schedule.get("intervalMs").and_then(Value::as_i64) {
-                next.insert("interval".into(), json!(util::duration_text(interval_ms)));
-            }
-            if let Some(floor) = schedule.get("minimumIntervalMs").and_then(Value::as_i64) {
-                next.insert("floor".into(), json!(util::duration_text(floor)));
-            }
-        }
-        doc.insert("trigger".into(), Value::Object(next));
-    }
-    // trigger 至少要有 kind；recurring 缺 interval 时回落到系统默认间隔。
-    if let Some(trigger) = util::optional_object(map, "trigger")? {
-        let mut next = doc
-            .get("trigger")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        for (key, value) in trigger {
-            next.insert(key, value);
-        }
-        next.entry(String::from("kind"))
-            .or_insert_with(|| json!("recurring"));
-        if next.get("kind").and_then(Value::as_str) == Some("recurring")
-            && next.get("interval").is_none()
-        {
-            let default_interval = crate::settings::value(state, "collection.defaultIntervalMs")
-                .await?
-                .as_i64()
-                .unwrap_or(1_800_000);
-            let minimum = crate::settings::value(state, "collection.minimumIntervalMs")
-                .await?
-                .as_i64()
-                .unwrap_or(60_000)
-                .max(1_000);
-            let requested_floor = next
-                .get("minimumIntervalMs")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            let floor = minimum.max(requested_floor);
-            if default_interval < floor {
-                return Err(ApiError::validation(
-                    "trigger.interval",
-                    "outOfRange",
-                    format!("间隔不能低于系统最小间隔 {floor}ms"),
-                ));
-            }
-            next.insert(
-                "interval".into(),
-                json!(util::duration_text(default_interval)),
-            );
-        }
-        doc.insert("trigger".into(), Value::Object(next));
-    }
-    for key in [
-        "name",
-        "description",
-        "quota",
-        "stopPolicy",
-        "priority",
-        "queue",
-        "enabled",
-        "pipeline",
-        "vectorize",
-        "urls",
-        "storage",
-        "strategy",
-    ] {
+    for key in ["name", "description", "enabled"] {
         if let Some(value) = map.get(key) {
             doc.insert(key.into(), value.clone());
         }
+    }
+    // 改引策略：新策略必须存在；recurring 策略在同一项目内至多一个实例（排除自身）。
+    let mut changed_strategy: Option<(Value, bool)> = None;
+    if let Some(reference) = map
+        .get("strategy")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        // 规范化为裸 slug：与 author 行的 slug/id 双形态对齐，避免前缀形态错位。
+        let strategy_slug = reference.trim_start_matches("strategy/").to_string();
+        let strategy_id = format!("strategy/{strategy_slug}");
+        let list = config::list(&state.config_dir)?;
+        let strategy_doc = list["strategies"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|item| {
+                item["slug"].as_str() == Some(strategy_slug.as_str())
+                    || item["id"].as_str() == Some(strategy_id.as_str())
+            })
+            .ok_or_else(|| {
+                ApiError::validation(
+                    "strategy",
+                    "notFound",
+                    format!("策略 {strategy_id} 不存在"),
+                )
+            })?;
+        // 单一语义：改引策略即更换行为基座；投递目标随新策略重新同步（见更新后）。
+        let recurring = strategy_doc["trigger"]["kind"].as_str() != Some("oneShot");
+        // recurring 策略必须有目标信源，否则计划会静默产出 0 条 SourcePlan。
+        if recurring
+            && strategy_doc
+                .get("targets")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0)
+                == 0
+        {
+            return Err(ApiError::validation(
+                "strategy",
+                "invalid",
+                format!("recurring 策略 {strategy_id} 缺少 targets，请先在策略上配置目标信源"),
+            ));
+        }
+        for other in list["plans"].as_array().cloned().unwrap_or_default() {
+            let other_id = other["id"].as_str().unwrap_or_default();
+            // 自排除：比对剥离 `plan/` 前缀后的裸 slug。
+            if other_id.trim_start_matches("plan/") == plan_id {
+                continue;
+            }
+            let same_strategy = other["strategy"]
+                .as_str()
+                .map(|value| value.trim_start_matches("strategy/") == strategy_slug.as_str())
+                .unwrap_or(false);
+            if same_strategy && other["project"].as_str() == Some(project_id) {
+                return Err(ApiError::validation(
+                    "strategy",
+                    "conflict",
+                    format!("策略 {strategy_id} 已在本项目实例化为计划 {other_id}"),
+                ));
+            }
+        }
+        doc.insert("strategy".into(), json!(strategy_id));
+        changed_strategy = Some((strategy_doc, recurring));
     }
     // URL 目标追加（`mp search --into <计划>` / `plan.set appendUrls`）：去重、保序。
     if let Some(append) = util::optional_array(map, "appendUrls")? {
@@ -1151,9 +1232,11 @@ pub(crate) async fn update_plan_value(
         }
         doc.insert("urls".into(), json!(urls));
     }
-    if let Some(targets) = patched_targets {
-        doc.insert("targets".into(), json!(targets));
-    }
+    let plan_name = doc
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("采集计划")
+        .to_string();
     config::update(
         &state.config_dir,
         &config::LoadOptions::from_process(),
@@ -1164,20 +1247,23 @@ pub(crate) async fn update_plan_value(
         },
     )?;
     state.services.config_reload()?;
-    crate::delivery::sync_plan_rule(
-        state,
-        plan_id,
-        plan["name"].as_str().unwrap_or(""),
-        map.get("deliveryTargets"),
-        map.get("deliveryEnabled").and_then(Value::as_bool),
-    )
-    .await?;
+    // 改引策略后，投递规则随新策略的投递配置重新同步。
+    if let Some((strategy_doc, _recurring)) = changed_strategy {
+        crate::delivery::sync_plan_rule(
+            state,
+            plan_id,
+            &plan_name,
+            strategy_doc.get("deliveryTargets"),
+            strategy_doc.get("deliveryEnabled").and_then(Value::as_bool),
+        )
+        .await?;
+    }
     crate::observe::append_audit(
         state,
         "collection.plan.update",
         "succeeded",
         "调整采集计划",
-        json!({"planId": plan_id, "trigger": map.get("trigger")}),
+        json!({"planId": plan_id, "strategy": map.get("strategy")}),
         None,
     )
     .await?;
@@ -1233,10 +1319,23 @@ pub(crate) async fn plan_get_value(state: &AppState, project_id: &str, plan_id: 
     plan["cursors"] = Value::Array(cursors);
     // M-05：计划级存储根与分类规则可查询。effectiveRoot 相对路径相对进程工作目录解析，
     // 与执行侧落盘解析一致；classifyRule 是约定目录的固定说明串。
+    // 单一语义：storage 由策略承载，经计划引用的策略解析。
     if let Ok(entries) = config::entries(&state.config_dir, "plan") {
         let slug = plan["id"].as_str().unwrap_or_default().trim_start_matches("plan/");
         if let Some(entry) = entries.into_iter().find(|entry| entry.slug == slug) {
-            let storage = entry.doc.get("storage").cloned().unwrap_or(Value::Null);
+            let strategy_entries = config::entries(&state.config_dir, "strategy")
+                .unwrap_or_default();
+            let strategy_slug = entry
+                .doc
+                .get("strategy")
+                .and_then(Value::as_str)
+                .map(|value| value.trim_start_matches("strategy/").to_string())
+                .unwrap_or_default();
+            let storage = strategy_entries
+                .into_iter()
+                .find(|item| item.slug == strategy_slug)
+                .and_then(|item| item.doc.get("storage").cloned())
+                .unwrap_or(Value::Null);
             let root = storage
                 .get("root")
                 .and_then(Value::as_str)

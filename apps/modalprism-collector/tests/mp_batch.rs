@@ -37,6 +37,11 @@ fn config_dir(dir: &Path) {
     );
     write(
         dir,
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: Demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
+    write(
+        dir,
         "accessors/http.yaml",
         "id: accessor/http\nkind: accessor\nname: HTTP\nimplementation: builtin:http\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
     );
@@ -267,14 +272,27 @@ async fn seed(boot: &Boot, base_url: &str) -> String {
         .await
         .unwrap_or_else(|error| panic!("建信源: {error}"));
 
+    // 单一语义：信源存在后，先实例化策略（targets/trigger/quota 的唯一定义点），再建计划。
+    let strategy = boot
+        .tool(
+            "strategy.new",
+            json!({
+                "name": "万级验收策略",
+                "targets": ["source/fake-api"],
+                "trigger": {"kind": "recurring", "interval": "1h"},
+                "quota": {"perRunItems": 20000, "maxAge": "3650d"},
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("strategy.new: {error}"));
+    let strategy_slug = strategy["slug"].as_str().unwrap().to_string();
+
     boot.tool(
         "plan.new",
         json!({
             "id": "batch-accept",
             "name": "万级验收计划",
-            "targets": ["source/fake-api"],
-            "trigger": {"kind": "recurring", "interval": "1h"},
-            "quota": {"maxAge": "3650d", "perRunItems": 20000},
+            "strategy": strategy_slug,
         }),
     )
     .await
@@ -415,14 +433,27 @@ async fn storage_root_classify_writes_readable_tree() {
         .await
         .unwrap_or_else(|error| panic!("建信源: {error}"));
 
+    // 单一语义：存储根进策略（行为的唯一定义点），计划只引用。
+    let strategy = boot
+        .tool(
+            "strategy.new",
+            json!({
+                "name": "存储根策略",
+                "targets": ["source/fake-api"],
+                "trigger": {"kind": "recurring", "interval": "1h"},
+                "storage": {"root": root.to_string_lossy(), "classify": true},
+            }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("strategy.new: {error}"));
+    let strategy_slug = strategy["slug"].as_str().unwrap().to_string();
+
     boot.tool(
         "plan.new",
         json!({
             "id": "storage-plan",
             "name": "存储根验收计划",
-            "targets": ["source/fake-api"],
-            "trigger": {"kind": "recurring", "interval": "1h"},
-            "storage": {"root": root.to_string_lossy(), "classify": true},
+            "strategy": strategy_slug,
         }),
     )
     .await

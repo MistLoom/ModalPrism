@@ -628,7 +628,7 @@ mod tests {
             slugs, listed,
             "内置信源清单应与 config/sources 目录一一对应；新增信源需同步 BUILTIN_SOURCES"
         );
-        // 自带计划只留 2-3 个示例，全部默认关闭；信源不再带 schedule，未被示例
+        // 自带计划只留 2-4 个示例，全部默认关闭；信源不再带 schedule，未被示例
         // 计划覆盖的信源不参与调度，需用户自建计划。
         let plans = crate::author::entries(&dir, "plan").expect("读取内置计划");
         assert!(
@@ -636,7 +636,26 @@ mod tests {
             "自带计划只保留 2-4 个示例，实际 {} 个",
             plans.len()
         );
-        let mut covered: std::collections::BTreeMap<&str, Vec<&str>> =
+        // 单一语义：targets 由策略承载，计划只保留引用；目标集合经策略 join。
+        let strategies = crate::author::entries(&dir, "strategy").expect("读取内置策略");
+        let strategy_targets: std::collections::BTreeMap<&str, Vec<String>> = strategies
+            .iter()
+            .map(|entry| {
+                (
+                    entry.slug.as_str(),
+                    entry
+                        .doc["targets"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                )
+            })
+            .collect();
+        let mut covered: std::collections::BTreeMap<String, Vec<String>> =
             std::collections::BTreeMap::new();
         for plan in &plans {
             assert_eq!(
@@ -645,21 +664,28 @@ mod tests {
                 "{} 应默认关闭",
                 plan.slug
             );
-            let targets = plan.doc["targets"]
-                .as_array()
-                .unwrap_or_else(|| panic!("{} 缺少 targets", plan.slug));
-            assert!(!targets.is_empty(), "{} 没有采集目标", plan.slug);
+            let strategy_slug = plan.doc["strategy"]
+                .as_str()
+                .unwrap_or_default()
+                .trim_start_matches("strategy/");
+            assert!(
+                strategy_targets.contains_key(strategy_slug),
+                "{} 引用了不存在的策略 {strategy_slug}",
+                plan.slug
+            );
+            let targets = strategy_targets[strategy_slug].clone();
+            assert!(!targets.is_empty(), "{} 的策略没有采集目标", plan.slug);
             for target in targets {
-                let slug = target
-                    .as_str()
-                    .unwrap_or_default()
-                    .trim_start_matches("source/");
+                let slug = target.trim_start_matches("source/");
                 assert!(
                     entries.iter().any(|entry| entry.slug == slug),
                     "{} 的计划引用了不存在的信源 {slug}",
                     plan.slug
                 );
-                covered.entry(slug).or_default().push(plan.slug.as_str());
+                covered
+                    .entry(slug.to_string())
+                    .or_default()
+                    .push(plan.slug.clone());
             }
         }
         for entry in entries {

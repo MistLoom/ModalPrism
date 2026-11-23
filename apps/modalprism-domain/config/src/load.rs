@@ -899,6 +899,7 @@ fn kind_name(kind: DocKind) -> &'static str {
         DocKind::AdapterBinding => "binding",
         DocKind::Source => "source",
         DocKind::Plan => "plan",
+        DocKind::Strategy => "strategy",
         DocKind::Type => "type",
         DocKind::Defaults => "defaults",
     }

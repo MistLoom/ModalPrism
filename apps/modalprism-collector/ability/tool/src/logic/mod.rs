@@ -27,3 +27,13 @@ pub mod plan_resume;
 pub mod plan_run;
 #[path = "plan_set.rs"]
 pub mod plan_set;
+#[path = "strategy_ls.rs"]
+pub mod strategy_ls;
+#[path = "strategy_get.rs"]
+pub mod strategy_get;
+#[path = "strategy_new.rs"]
+pub mod strategy_new;
+#[path = "strategy_set.rs"]
+pub mod strategy_set;
+#[path = "strategy_remove.rs"]
+pub mod strategy_remove;

@@ -1,0 +1,23 @@
+id: strategy/official-channels
+kind: strategy
+name: 官方渠道 · 常规节律
+description: 官方渠道类信源的常规采集节律，一个计划承载多信源时对整组生效。
+targets:
+  - source/openai-news
+  - source/deepseek-updates
+  - source/google-deepmind
+  - source/google-research
+  - source/hugging-face
+  - source/mistral
+  - source/nvidia-blog
+  - source/microsoft-research
+  - source/aws-machine-learning
+trigger:
+  kind: recurring
+  interval: 2h
+quota:
+  perRunItems: 8
+  maxAge: 365d
+stopPolicy:
+  onBudgetExhausted: skip
+  onFailureThreshold: 3

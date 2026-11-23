@@ -37,6 +37,11 @@ fn config_dir(dir: &Path) {
     // API 建信源走 rss + feed-items：整库校验要求二者作为模块存在，且访问器为重启门控，须在启动时落盘。
     write(
         dir,
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: Demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
+    write(
+        dir,
         "accessors/rss.yaml",
         "id: accessor/rss\nkind: accessor\nname: rss\nimplementation: builtin:rss\nlimits:\n  timeout: 45s\n  concurrency: 4\n  retry:\n    attempts: 2\n    backoff: exponential\n    base: 1s\n    max: 30s\negress:\n  profile: direct\n",
     );
@@ -351,6 +356,19 @@ async fn a1_project_isolation_and_sharing() {
     assert_eq!(response.status(), 404, "他项目对共享信源只读，删除应 404");
 
     // 计划同样按项目隔离：默认项目的计划不出现在私有项目，且跨项目不可改、不可引用。
+    // recurring 策略必须配置 targets 才能实例化计划，故运行时建策略再引用。
+    let (isolation_status, isolation_strategy) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/strategies", boot.base),
+        &json!({
+            "name": "隔离策略",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"}
+        }),
+    )
+    .await;
+    assert_eq!(isolation_status, 200, "{isolation_strategy}");
+    let isolation_strategy_slug = isolation_strategy["slug"].as_str().unwrap().to_string();
     let response = boot
         .http
         .post(format!("{}/api/v1/collection/plans", boot.base))
@@ -358,8 +376,7 @@ async fn a1_project_isolation_and_sharing() {
         .header("idempotency-key", "a1-plan-isolation")
         .json(&json!({
             "name": "隔离计划",
-            "targets": [format!("source/{slug}")],
-            "trigger": {"kind": "recurring", "interval": "1h"}
+            "strategy": isolation_strategy_slug
         }))
         .send()
         .await
@@ -406,6 +423,7 @@ async fn a1_project_isolation_and_sharing() {
         .header("idempotency-key", "a1-plan-cross-project")
         .json(&json!({
             "name": "越权计划",
+            "strategy": "demo",
             "targets": [format!("source/{slug}")],
             "trigger": {"kind": "recurring", "interval": "1h"}
         }))
@@ -902,14 +920,27 @@ async fn p1_collection_plan_crud_and_job() {
     let boot = boot().await;
     let slug = seed_source(&boot.running, "计划信源").await;
 
+    // 单一语义：targets/trigger/quota 由策略承载，计划只引用。
+    let (status, strategy) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/strategies", boot.base),
+        &json!({
+            "name": "计划信源策略",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"},
+            "quota": {"perRunItems": 10, "totalItems": 100}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{strategy}");
+    let strategy_slug = strategy["slug"].as_str().unwrap().to_string();
+
     let (status, plan) = post_json(
         &boot.http,
         &format!("{}/api/v1/collection/plans", boot.base),
         &json!({
             "name": "计划信源 · 采集计划",
-            "targets": [format!("source/{slug}")],
-            "trigger": {"kind": "recurring", "interval": "1h"},
-            "quota": {"perRunItems": 10, "totalItems": 100}
+            "strategy": strategy_slug,
         }),
     )
     .await;
@@ -1010,15 +1041,27 @@ async fn p2_plan_quota_and_edit() {
     let boot = boot().await;
     let slug = seed_source(&boot.running, "额度信源").await;
 
+    let (status, strategy) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/strategies", boot.base),
+        &json!({
+            "name": "额度策略",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"},
+            "quota": {"perRunItems": 5, "totalItems": 50, "maxAge": "30d"},
+            "stopPolicy": {"onBudgetExhausted": "pause", "onFailureThreshold": 3}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{strategy}");
+    let strategy_slug = strategy["slug"].as_str().unwrap().to_string();
+
     let (status, plan) = post_json(
         &boot.http,
         &format!("{}/api/v1/collection/plans", boot.base),
         &json!({
             "name": "额度计划",
-            "targets": [format!("source/{slug}")],
-            "trigger": {"kind": "recurring", "interval": "1h"},
-            "quota": {"perRunItems": 5, "totalItems": 50, "maxAge": "30d"},
-            "stopPolicy": {"onBudgetExhausted": "pause", "onFailureThreshold": 3}
+            "strategy": strategy_slug,
         }),
     )
     .await;
@@ -1035,13 +1078,11 @@ async fn p2_plan_quota_and_edit() {
     );
     assert_eq!(plan["stopPolicy"]["onFailureThreshold"], json!(3), "{plan}");
 
-    // 编辑：改间隔、整份替换 quota（去掉 perRunItems/maxAge）、stopPolicy 改 skip、改名。
+    // 编辑：行为字段经策略修改（改间隔、整份替换 quota/stopPolicy），计划只改名称。
     let response = boot
         .http
-        .patch(format!("{}/api/v1/collection/plans/{plan_id}", boot.base))
-        .header("if-match", &etag)
+        .patch(format!("{}/api/v1/collection/strategies/{strategy_slug}", boot.base))
         .json(&json!({
-            "name": "额度计划·改",
             "trigger": {"kind": "recurring", "interval": "2h"},
             "quota": {"totalItems": 80},
             "stopPolicy": {"onBudgetExhausted": "skip"}
@@ -1052,7 +1093,7 @@ async fn p2_plan_quota_and_edit() {
     let status = response.status().as_u16();
     let edited: Value = response.json().await.unwrap();
     assert_eq!(status, 200, "{edited}");
-    assert_eq!(edited["name"], json!("额度计划·改"), "{edited}");
+    assert_eq!(edited["name"], json!("额度策略"), "{edited}");
     assert_eq!(edited["trigger"]["interval"], json!("2h"), "{edited}");
     assert_eq!(edited["quota"]["totalItems"], json!(80), "{edited}");
     assert!(
@@ -1081,14 +1122,26 @@ async fn p2_plan_quota_and_edit() {
 async fn p3_list_offset_and_total() {
     let boot = boot().await;
     let slug = seed_source(&boot.running, "分页信源").await;
+    // recurring 策略必须配置 targets 才能实例化计划，故运行时建策略再引用。
+    let (status, paged_strategy) = post_json(
+        &boot.http,
+        &format!("{}/api/v1/collection/strategies", boot.base),
+        &json!({
+            "name": "分页策略",
+            "targets": [format!("source/{slug}")],
+            "trigger": {"kind": "recurring", "interval": "1h"}
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{paged_strategy}");
+    let paged_strategy_slug = paged_strategy["slug"].as_str().unwrap().to_string();
     for name in ["分页计划A", "分页计划B", "分页计划C"] {
         let (status, created) = post_json(
             &boot.http,
             &format!("{}/api/v1/collection/plans", boot.base),
             &json!({
                 "name": name,
-                "targets": [format!("source/{slug}")],
-                "trigger": {"kind": "recurring", "interval": "1h"}
+                "strategy": paged_strategy_slug
             }),
         )
         .await;

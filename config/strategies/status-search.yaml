@@ -1,0 +1,9 @@
+id: strategy/status-search
+kind: strategy
+name: 状态搜索 · 查询节律
+description: 查询型信源按节律重跑同一查询的采集策略。
+targets:
+  - source/status-search
+trigger:
+  kind: recurring
+  interval: 30m

@@ -75,6 +75,12 @@ fn scaffold(dir: &Path) {
     write(dir, "system.yaml", &system_yaml(""));
     write(dir, "accessors/http.yaml", accessor_yaml());
     write(dir, "sources/demo.yaml", &source_yaml(""));
+    write(dir, "strategies/demo.yaml", &strategy_yaml());
+}
+
+/// 策略 fixture：节律/额度等行为字段与目标的唯一定义点，计划引用它。
+fn strategy_yaml() -> String {
+    "id: strategy/demo\nkind: strategy\nname: S\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\n".to_string()
 }
 
 fn options() -> LoadOptions {
@@ -139,7 +145,7 @@ fn plan_kind_loads_and_checks_target_existence() {
     write(
         dir.path(),
         "plans/demo.yaml",
-        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+        "id: plan/demo\nkind: plan\nname: P\nstrategy: strategy/demo\n",
     );
     let snapshot = validate(dir.path(), &options()).expect("计划应通过校验");
     assert!(snapshot.modules.contains_key("plan/demo"));
@@ -149,8 +155,13 @@ fn plan_kind_loads_and_checks_target_existence() {
     scaffold(bad.path());
     write(
         bad.path(),
+        "strategies/ghost.yaml",
+        "id: strategy/ghost\nkind: strategy\nname: G\ntargets:\n  - source/ghost\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+    );
+    write(
+        bad.path(),
         "plans/bad.yaml",
-        "id: plan/bad\nkind: plan\nname: P\ntargets:\n  - source/ghost\ntrigger:\n  kind: recurring\n  interval: 1h\n",
+        "id: plan/bad\nkind: plan\nname: P\nstrategy: strategy/ghost\n",
     );
     assert!(
         validate(bad.path(), &options()).is_err(),
@@ -793,21 +804,16 @@ fn strata_rustfs_backend_is_validated() {
     assert!(error.to_string().contains("download"), "{error}");
 }
 
-// —— 第一期第一步：计划级 pipeline / vectorize ——
+// —— 第一期第二步：策略级 pipeline / vectorize（计划为纯状态实例）——
 
 #[test]
-fn plan_pipeline_defaults_are_optional_and_vectorize_defaults_false() {
+fn strategy_pipeline_defaults_are_optional_and_vectorize_defaults_false() {
     let dir = tempfile::tempdir().unwrap();
     scaffold(dir.path());
     // 缺省：pipeline 缺省为空列表语义（沿用信源默认路径），vectorize 缺省 false。
-    write(
-        dir.path(),
-        "plans/demo.yaml",
-        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\n",
-    );
-    let snapshot = validate(dir.path(), &options()).expect("计划应通过校验");
+    let snapshot = validate(dir.path(), &options()).expect("策略应通过校验");
     assert_eq!(
-        snapshot.modules["plan/demo"].get("pipeline"),
+        snapshot.modules["strategy/demo"].get("pipeline"),
         None,
         "未声明 pipeline 时保持缺省"
     );
@@ -815,21 +821,21 @@ fn plan_pipeline_defaults_are_optional_and_vectorize_defaults_false() {
     // 空 pipeline 合法：沿用信源默认路径，不强迫复述整条默认路径。
     write(
         dir.path(),
-        "plans/empty.yaml",
-        "id: plan/empty\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline: []\nvectorize: false\n",
+        "strategies/empty.yaml",
+        "id: strategy/empty\nkind: strategy\nname: E\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline: []\nvectorize: false\n",
     );
     validate(dir.path(), &options()).expect("空 pipeline 应通过校验");
 }
 
 #[test]
-fn plan_pipeline_accepts_content_processor_and_rejects_unimplemented() {
-    // content-processor 已支持：计划级挂载应通过校验。
+fn strategy_pipeline_accepts_content_processor_and_rejects_unimplemented() {
+    // content-processor 已支持：策略级挂载应通过校验。
     let dir = tempfile::tempdir().unwrap();
     scaffold(dir.path());
     write(
         dir.path(),
-        "plans/demo.yaml",
-        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [content-processor/text-filter]\n",
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: S\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [content-processor/text-filter]\n",
     );
     validate(dir.path(), &options()).expect("content-processor 挂载应通过校验");
 
@@ -838,8 +844,8 @@ fn plan_pipeline_accepts_content_processor_and_rejects_unimplemented() {
     scaffold(dir.path());
     write(
         dir.path(),
-        "plans/demo.yaml",
-        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [factor/text-density]\n",
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: S\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [factor/text-density]\n",
     );
     validate(dir.path(), &options()).expect("factor 挂载应通过配置校验");
 
@@ -848,26 +854,27 @@ fn plan_pipeline_accepts_content_processor_and_rejects_unimplemented() {
     scaffold(dir.path());
     write(
         dir.path(),
-        "plans/demo.yaml",
-        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [renderer/fancy]\n",
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: S\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\npipeline:\n  - run: [renderer/fancy]\n",
     );
     let error = validate(dir.path(), &options()).unwrap_err();
     assert!(error.to_string().contains("未知组件"), "{error}");
 }
 
 #[test]
-fn plan_vectorize_must_be_boolean() {
+fn strategy_vectorize_must_be_boolean() {
     let dir = tempfile::tempdir().unwrap();
     scaffold(dir.path());
     write(
         dir.path(),
-        "plans/demo.yaml",
-        "id: plan/demo\nkind: plan\nname: P\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\nvectorize: yes-please\n",
+        "strategies/demo.yaml",
+        "id: strategy/demo\nkind: strategy\nname: S\ntargets:\n  - source/demo\ntrigger:\n  kind: recurring\n  interval: 1h\nvectorize: yes-please\n",
     );
     let error = validate(dir.path(), &options()).unwrap_err();
     let text = error.to_string();
     assert!(
-        text.contains("vectorize") && (text.contains("布尔") || text.contains("schema")),
+        text.contains("strategies/demo.yaml")
+            && (text.contains("布尔") || text.contains("schema")),
         "{text}"
     );
 }
