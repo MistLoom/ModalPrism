@@ -72,9 +72,11 @@ async fn overview(
         (0usize, 0usize, Vec::new())
     } else {
         let allowed = owned.as_slice();
-        let total = crate::content::item_count(&state, None, None, None, Some(allowed)).await?;
+        let total =
+            crate::content::item_count(&state, None, None, None, Some(allowed), None).await?;
         let tombstoned =
-            crate::content::item_count(&state, None, None, Some("tombstoned"), Some(allowed)).await?;
+            crate::content::item_count(&state, None, None, Some("tombstoned"), Some(allowed), None)
+                .await?;
         let kinds = crate::content::variant_counts(&state, Some(allowed)).await?;
         (total, tombstoned, kinds)
     };

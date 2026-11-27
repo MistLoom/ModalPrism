@@ -42,6 +42,10 @@ pub(crate) enum Pagination {
         #[serde(default)]
         start: u64,
         step: u64,
+        /// JSON Pointer。指向的数组短于 step 时，这一页就是上游的末页，游标清空。
+        /// 缺省时保持只按步长前进，兼容已有声明。
+        #[serde(default)]
+        items: String,
     },
     Cursor {
         param: String,
@@ -174,7 +178,12 @@ impl Accessor for ApiAccessor {
                     method: spec.method.clone(),
                     url: page_url,
                     headers: spec.headers.clone(),
-                    body: Bytes::from(spec.body.clone().unwrap_or_default()),
+                    body: render_body(
+                        spec.body.as_deref().unwrap_or(""),
+                        &spec.pagination,
+                        offset,
+                        token.as_deref(),
+                    ),
                     session: spec.session.clone(),
                     hints: request.hints.clone(),
                 },
@@ -235,6 +244,48 @@ impl Accessor for ApiAccessor {
     }
 }
 
+/// 把分页位置写进 POST/GET 正文。只替换约定占位符，其余字节保持原样。
+fn render_body(
+    template: &str,
+    pagination: &Option<Pagination>,
+    offset: Option<u64>,
+    token: Option<&str>,
+) -> Bytes {
+    let mut body = template.to_string();
+    if let Some(Pagination::Offset { start, step, .. }) = pagination {
+        let value = offset.unwrap_or(*start);
+        body = body.replace("{{offset}}", &value.to_string());
+        body = body.replace("{{limit}}", &step.to_string());
+    }
+    if let Some(token) = token {
+        body = body.replace("{{token}}", token);
+    }
+    Bytes::from(body)
+}
+
+/// `items` 为 JSON Pointer（以 `/` 开头）或 `tag:` 后的 XML 标签名。
+/// 本页条数短于步长时视为上游已到末页。
+fn page_short(body: &[u8], items: &str, step: u64) -> bool {
+    let count = if let Some(tag) = items.strip_prefix("tag:") {
+        count_open_tag(body, tag.trim())
+    } else {
+        serde_json::from_slice::<Value>(body)
+            .ok()
+            .and_then(|value| value.pointer(items).and_then(Value::as_array).map(Vec::len))
+            .unwrap_or(0)
+    };
+    (count as u64) < step
+}
+
+fn count_open_tag(body: &[u8], tag: &str) -> usize {
+    if tag.is_empty() {
+        return 0;
+    }
+    let text = String::from_utf8_lossy(body);
+    let needle = format!("<{tag}");
+    text.matches(&needle).count()
+}
+
 fn page_url(
     url: &str,
     pagination: &Option<Pagination>,
@@ -262,8 +313,11 @@ pub(crate) fn next_cursor(
     offset: Option<u64>,
 ) -> Value {
     match pagination {
-        Some(Pagination::Offset { start, step, .. }) => {
+        Some(Pagination::Offset { start, step, items, .. }) => {
             let current = offset.unwrap_or(*start);
+            if !items.is_empty() && page_short(body, items, *step) {
+                return Value::Null;
+            }
             json!({ "offset": current.saturating_add(*step) })
         }
         Some(Pagination::Cursor { pointer, .. }) => {

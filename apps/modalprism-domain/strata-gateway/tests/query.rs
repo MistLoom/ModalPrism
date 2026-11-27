@@ -5,9 +5,10 @@
 use std::collections::BTreeMap;
 
 use strata_gateway::{BlobBackend, Gateway, Options, Request};
+use serde_json::json;
 use strata_model::{
-    ApplyOpts, Body, ChangeSet, FacetKind, LineageInput, Op, Producer, QueryFrom, Search, Target,
-    WaitFor,
+    ApplyOpts, Body, ChangeSet, Expr, FacetKind, LineageInput, Op, Producer, QueryFrom, Search,
+    Target, WaitFor,
 };
 
 fn changeset(ops: Vec<Op>) -> ChangeSet {
@@ -146,4 +147,45 @@ async fn restore_brings_the_row_back() {
 
     assert_eq!(list(&gateway, false, None).await, 2);
     assert_eq!(list(&gateway, false, Some(needle())).await, 2);
+}
+
+#[tokio::test]
+async fn created_at_gt_keeps_only_strictly_later_rows() {
+    let (_dir, gateway) = open().await;
+    let rows = gateway
+        .query(Request::new(QueryFrom::Resources))
+        .await
+        .unwrap()
+        .rows;
+    assert_eq!(rows.len(), 2, "不带 since 时两条都在");
+    let created = rows[0].row["createdAt"].as_str().unwrap();
+    assert_eq!(rows[1].row["createdAt"].as_str(), Some(created));
+
+    let mut earlier = Request::new(QueryFrom::Resources);
+    earlier.filter = Some(
+        Expr::try_from(json!({"gt": ["createdAt", "1970-01-01T00:00:00Z"]})).unwrap(),
+    );
+    assert_eq!(
+        gateway.query(earlier).await.unwrap().rows.len(),
+        2,
+        "createdAt 晚于 since 的条目应出现"
+    );
+
+    let mut equal = Request::new(QueryFrom::Resources);
+    equal.filter = Some(Expr::try_from(json!({"gt": ["createdAt", created]})).unwrap());
+    assert_eq!(
+        gateway.query(equal).await.unwrap().rows.len(),
+        0,
+        "createdAt 等于 since 的条目不应出现"
+    );
+
+    let mut later = Request::new(QueryFrom::Resources);
+    later.filter = Some(
+        Expr::try_from(json!({"gt": ["createdAt", "9999-01-01T00:00:00Z"]})).unwrap(),
+    );
+    assert_eq!(
+        gateway.query(later).await.unwrap().rows.len(),
+        0,
+        "createdAt 早于 since 的条目不应出现"
+    );
 }

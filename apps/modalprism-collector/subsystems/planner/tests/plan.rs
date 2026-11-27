@@ -762,3 +762,49 @@ async fn paid_budget_counts_skips_and_resets_with_the_window() {
     assert!(restored.skip_reason.is_none());
     assert_eq!(restored.budget_used, 1);
 }
+
+#[tokio::test]
+async fn make_due_retries_a_misconfigured_source_once() {
+    let planner = Planner::new(MemoryQueue::new(), MemoryPersist::default());
+    let task = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap()
+        .remove(0);
+    let handler = Script {
+        hits: AtomicUsize::new(0),
+        error: Some(Classified {
+            class: ErrorClass::Config,
+            message: "非法身份键".into(),
+            retry_after: None,
+            retry_at: None,
+        }),
+        seen_cursor: std::sync::Mutex::new(None),
+    };
+    planner
+        .run(&plan(), task, &handler, &(), now(), now())
+        .await
+        .unwrap();
+    assert_eq!(
+        planner
+            .source_status("source/blog")
+            .await
+            .unwrap()
+            .health_status,
+        "misconfigured"
+    );
+    let stuck = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap();
+    assert!(stuck.is_empty());
+    planner
+        .make_due("source/blog", now())
+        .await
+        .unwrap();
+    let retried = planner
+        .tick(std::slice::from_ref(&plan()), &caps(), now())
+        .await
+        .unwrap();
+    assert_eq!(retried.len(), 1);
+}

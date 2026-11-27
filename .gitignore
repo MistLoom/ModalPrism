@@ -24,6 +24,9 @@ __pycache__/
 /config/sources/111.yaml
 /config/plans/111-*.yaml
 
+# 下游项目的二开扩展：分型提示、站点业务工具。不进入 ModalPrism 上游。
+/extensions/
+
 # 仅本地保留的文档、参考实现与笔记
 /docs
 /manual

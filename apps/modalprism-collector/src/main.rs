@@ -367,6 +367,7 @@ async fn cli_plan(rest: Vec<String>) -> Result<(), assembly::Error> {
     let mut config = PathBuf::from("config");
     let mut http = env::var("MODALPRISM_HTTP").ok().filter(|v| !v.trim().is_empty());
     let mut project = String::new();
+    let mut inline = false;
     let mut from_search: Option<String> = None;
     let mut into: Option<String> = None;
     let mut pretty = true;
@@ -380,6 +381,7 @@ async fn cli_plan(rest: Vec<String>) -> Result<(), assembly::Error> {
             "--config" => config = PathBuf::from(take_value(&mut args, &arg)?),
             "--http" => http = Some(take_value(&mut args, &arg)?),
             "--project" => project = take_value(&mut args, &arg)?,
+            "--inline" => inline = true,
             "--json" => pretty = false,
             "--from-search" => from_search = Some(take_value(&mut args, &arg)?),
             "--into" => into = Some(take_value(&mut args, &arg)?),
@@ -430,7 +432,7 @@ async fn cli_plan(rest: Vec<String>) -> Result<(), assembly::Error> {
                     // 追加到既有计划：等价 plan.set appendUrls。
                     payload.insert("planId".into(), json!(plan_id));
                     payload.insert("appendUrls".into(), json!(urls));
-                    return run_plan_tool("plan.set", payload, &data, &config, &http, &project, pretty).await;
+                    return run_plan_tool("plan.set", payload, &data, &config, &http, &project, pretty, inline).await;
                 }
                 payload.entry("name".to_string()).or_insert_with(|| {
                     json!(record
@@ -452,7 +454,7 @@ async fn cli_plan(rest: Vec<String>) -> Result<(), assembly::Error> {
         }
         other => unreachable!("已穷举 plan 动词: {other}"),
     }
-    run_plan_tool(verb, payload, &data, &config, &http, &project, pretty).await
+    run_plan_tool(verb, payload, &data, &config, &http, &project, pretty, inline).await
 }
 
 /// 计划动词的统一执行：附加或进程内，单次工具调用（含 plan.run 的前台一轮）。
@@ -464,9 +466,10 @@ async fn run_plan_tool(
     http: &Option<String>,
     project: &str,
     pretty: bool,
+    inline: bool,
 ) -> Result<(), assembly::Error> {
     let payload = Value::Object(payload);
-    match runtime(http).await {
+    match runtime(http, inline).await {
         Runtime::Attach(base) => {
             let result = http_tool_call(&base, project, verb, payload)
                 .await
@@ -531,6 +534,7 @@ fn plan_help() -> String {
   mp plan pause <planId>          # 主动中断：不派发新任务，已落盘数据与游标保留\n\
   mp plan resume <planId>         # 从上一已接受游标继续\n\
   mp plan run <planId>            # 立即跑一轮（别名 continue）；不重置游标\n\
+  --inline                         # 不附加到已在跑的 collector，用 --data/--config 另起进程\n\
 \n\
 别名: list=ls / create=new / update=set / continue=run\n\
 \n\
@@ -570,6 +574,7 @@ async fn cli_strategy(rest: Vec<String>) -> Result<(), assembly::Error> {
     let mut config = PathBuf::from("config");
     let mut http = env::var("MODALPRISM_HTTP").ok().filter(|v| !v.trim().is_empty());
     let mut project = String::new();
+    let mut inline = false;
     let mut pretty = true;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -580,6 +585,7 @@ async fn cli_strategy(rest: Vec<String>) -> Result<(), assembly::Error> {
             "--data" => data = PathBuf::from(take_value(&mut args, &arg)?),
             "--config" => config = PathBuf::from(take_value(&mut args, &arg)?),
             "--http" => http = Some(take_value(&mut args, &arg)?),
+            "--inline" => inline = true,
             "--project" => project = take_value(&mut args, &arg)?,
             "--json" => pretty = false,
             other if other.starts_with("--") => {
@@ -634,7 +640,7 @@ async fn cli_strategy(rest: Vec<String>) -> Result<(), assembly::Error> {
         }
         other => unreachable!("已穷举 strategy 动词: {other}"),
     }
-    run_plan_tool(verb, payload, &data, &config, &http, &project, pretty).await
+    run_plan_tool(verb, payload, &data, &config, &http, &project, pretty, inline).await
 }
 
 fn strategy_help() -> String {
@@ -670,6 +676,7 @@ async fn cli_mp(name: &str, rest: Vec<String>) -> Result<(), assembly::Error> {
     let mut data = PathBuf::from("var");
     let mut config = PathBuf::from("config");
     let mut http = env::var("MODALPRISM_HTTP").ok().filter(|v| !v.trim().is_empty());
+    let mut inline = false;
     let mut project = String::new();
     let mut save = false;
     let mut from_search: Option<String> = None;
@@ -685,6 +692,7 @@ async fn cli_mp(name: &str, rest: Vec<String>) -> Result<(), assembly::Error> {
             "--data" => data = PathBuf::from(take_value(&mut args, &arg)?),
             "--config" => config = PathBuf::from(take_value(&mut args, &arg)?),
             "--http" => http = Some(take_value(&mut args, &arg)?),
+            "--inline" => inline = true,
             "--project" => project = take_value(&mut args, &arg)?,
             "--json" => pretty = false,
             "--save" => save = true,
@@ -737,7 +745,7 @@ async fn cli_mp(name: &str, rest: Vec<String>) -> Result<(), assembly::Error> {
     }
 
     let payload = Value::Object(payload);
-    match runtime(&http).await {
+    match runtime(&http, inline).await {
         Runtime::Attach(base) => {
             let executor = Executor::Http(&base, &project);
             finish(execute(&executor, verb, &payload, &from_search, &into, save, &data).await, pretty)
@@ -773,7 +781,10 @@ enum Runtime {
 
 /// 附加规则：`--http` / `MODALPRISM_HTTP` 显式指定优先；否则默认地址上有
 /// collector 在跑就附加，避免与运行中的存储双开；都没有就进程内执行。
-async fn runtime(http: &Option<String>) -> Runtime {
+async fn runtime(http: &Option<String>, inline: bool) -> Runtime {
+    if inline {
+        return Runtime::Inline;
+    }
     if let Some(base) = http {
         return Runtime::Attach(base.clone());
     }

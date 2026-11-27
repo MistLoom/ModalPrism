@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -20,6 +20,9 @@ use crate::yaml;
 #[derive(Clone, Debug)]
 pub struct LoadOptions {
     pub overlay: Option<String>,
+    /// 额外配置根。其中的声明按同路径覆盖主目录，新路径追加。
+    /// `from_process` 从 `MP_OVERLAY_DIR` 读取，多个目录以 `;` 分隔。
+    pub extra_dirs: Vec<PathBuf>,
     pub env: EnvSource,
     pub secrets: BTreeMap<String, String>,
 }
@@ -28,6 +31,7 @@ impl Default for LoadOptions {
     fn default() -> Self {
         Self {
             overlay: None,
+            extra_dirs: Vec::new(),
             env: EnvSource::Fixed(BTreeMap::new()),
             secrets: BTreeMap::new(),
         }
@@ -38,9 +42,42 @@ impl LoadOptions {
     pub fn from_process() -> Self {
         Self {
             env: EnvSource::Process,
+            ..Self::from_vars(&std::env::vars().collect())
+        }
+    }
+
+    /// 进程环境的可测版本：环境名与叠加目录都从同一份变量表读出。
+    fn from_vars(vars: &BTreeMap<String, String>) -> Self {
+        Self {
+            overlay: non_empty_var(vars.get("MP_OVERLAY")),
+            extra_dirs: vars
+                .get("MP_OVERLAY_DIR")
+                .map(|raw| split_dirs(raw))
+                .unwrap_or_default(),
             ..Self::default()
         }
     }
+}
+
+fn non_empty_var(value: Option<&String>) -> Option<String> {
+    value
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+pub(crate) fn overlay_dirs_from_env() -> Vec<PathBuf> {
+    std::env::var("MP_OVERLAY_DIR")
+        .map(|raw| split_dirs(&raw))
+        .unwrap_or_default()
+}
+
+/// 多个配置根以 `;` 分隔；空白项视为未配置。
+fn split_dirs(raw: &str) -> Vec<PathBuf> {
+    raw.split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -53,7 +90,25 @@ struct Input {
     logical: String,
     actual: String,
     text: String,
-    overlay: bool,
+    layer: Layer,
+}
+
+/// 同一逻辑路径的合并次序：环境叠加在基线之上，外部配置根再叠加在环境之上。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layer {
+    Base,
+    Overlay,
+    External,
+}
+
+impl Layer {
+    fn index(self) -> usize {
+        match self {
+            Self::Base => 0,
+            Self::Overlay => 1,
+            Self::External => 2,
+        }
+    }
 }
 
 struct Parsed {
@@ -114,7 +169,24 @@ pub fn validate_with_warnings(
         EnvSource::Fixed(map) => map.clone(),
         EnvSource::Process => std::env::vars().collect(),
     };
-    let files = read_tree(dir, options.overlay.as_deref(), &mut warnings)?;
+    let mut files = read_tree(dir, options.overlay.as_deref(), Layer::Base, &mut warnings)?;
+    for extra in &options.extra_dirs {
+        if !extra.is_dir() {
+            diags.push(diag(&extra.display().to_string(), 0, "叠加目录不存在"));
+            continue;
+        }
+        let mut extra_files = read_tree(extra, None, Layer::External, &mut warnings)?;
+        // 空目录几乎总是路径配错（指向了父目录或尚未检出的配置根），不能静默降级。
+        if extra_files.is_empty() {
+            diags.push(diag(
+                &extra.display().to_string(),
+                0,
+                "叠加目录为空：其中没有可加载的声明",
+            ));
+            continue;
+        }
+        files.append(&mut extra_files);
+    }
     let schemas = read_schemas(dir, &mut diags);
     let docs = parse_docs(files, &mut diags);
     if !diags.is_empty() {
@@ -737,16 +809,12 @@ fn attach_schema(
 }
 
 fn parse_docs(files: Vec<Input>, diags: &mut Vec<Diagnostic>) -> Vec<Parsed> {
-    let mut grouped: BTreeMap<String, (Option<Node>, Option<Node>)> = BTreeMap::new();
+    let mut grouped: BTreeMap<String, [Option<Node>; 3]> = BTreeMap::new();
     for file in files {
         match yaml::parse(&file.actual, &file.text) {
             Ok(node) => {
                 let entry = grouped.entry(file.logical.clone()).or_default();
-                let slot = if file.overlay {
-                    &mut entry.1
-                } else {
-                    &mut entry.0
-                };
+                let slot = &mut entry[file.layer.index()];
                 if slot.is_some() {
                     diags.push(diag(
                         &file.actual,
@@ -761,27 +829,42 @@ fn parse_docs(files: Vec<Input>, diags: &mut Vec<Diagnostic>) -> Vec<Parsed> {
         }
     }
     let mut docs = Vec::new();
-    for (logical, (base, overlay)) in grouped {
+    for (logical, layers) in grouped {
         let is_system = logical == "system.yaml" || logical == "system.yml";
-        let node = match (base, overlay) {
-            (Some(base), Some(over)) if is_system => {
-                docs.push(Parsed {
+        let [base, overlay, external] = layers;
+        if is_system {
+            let system_overlay = match (overlay, external) {
+                (Some(over), Some(ext)) => match merge(over, ext.clone()) {
+                    Ok(merged) => Some(merged),
+                    Err(message) => {
+                        diags.push(diag(&ext.file, ext.line, message));
+                        continue;
+                    }
+                },
+                (Some(over), None) => Some(over),
+                (None, Some(ext)) => Some(ext),
+                (None, None) => None,
+            };
+            match base {
+                Some(node) => docs.push(Parsed {
                     logical,
-                    node: base,
-                    system_overlay: Some(over),
-                });
-                continue;
-            }
-            (Some(base), Some(over)) => match merge(base, over.clone()) {
-                Ok(merged) => merged,
-                Err(message) => {
-                    diags.push(diag(&over.file, over.line, message));
-                    continue;
+                    node,
+                    system_overlay,
+                }),
+                None => {
+                    if let Some(node) = system_overlay {
+                        docs.push(Parsed {
+                            logical,
+                            node,
+                            system_overlay: None,
+                        });
+                    }
                 }
-            },
-            (Some(base), None) => base,
-            (None, Some(over)) => over,
-            (None, None) => continue,
+            }
+            continue;
+        }
+        let Some(node) = fold_layers([base, overlay, external], diags) else {
+            continue;
         };
         docs.push(Parsed {
             logical,
@@ -790,6 +873,24 @@ fn parse_docs(files: Vec<Input>, diags: &mut Vec<Diagnostic>) -> Vec<Parsed> {
         });
     }
     docs
+}
+
+/// 按层序合并同一逻辑路径的声明；任一层合并失败即整份声明作废。
+fn fold_layers(layers: [Option<Node>; 3], diags: &mut Vec<Diagnostic>) -> Option<Node> {
+    let mut acc: Option<Node> = None;
+    for node in layers.into_iter().flatten() {
+        acc = Some(match acc {
+            None => node,
+            Some(base) => match merge(base, node.clone()) {
+                Ok(merged) => merged,
+                Err(message) => {
+                    diags.push(diag(&node.file, node.line, message));
+                    return None;
+                }
+            },
+        });
+    }
+    acc
 }
 
 fn check_top_level(node: &Node, kind: DocKind, diags: &mut Vec<Diagnostic>) {
@@ -1021,10 +1122,11 @@ fn diag(file: &str, line: u32, message: impl Into<String>) -> Diagnostic {
 fn read_tree(
     dir: &Path,
     overlay: Option<&str>,
+    layer: Layer,
     warnings: &mut Vec<Diagnostic>,
 ) -> Result<Vec<Input>, Error> {
     let mut out = Vec::new();
-    walk(dir, dir, overlay, &mut out, warnings)?;
+    walk(dir, dir, overlay, layer, &mut out, warnings)?;
     Ok(out)
 }
 
@@ -1032,9 +1134,11 @@ fn walk(
     root: &Path,
     dir: &Path,
     overlay: Option<&str>,
+    layer: Layer,
     out: &mut Vec<Input>,
     warnings: &mut Vec<Diagnostic>,
 ) -> Result<(), Error> {
+    let external = layer == Layer::External;
     let entries = fs::read_dir(dir).map_err(|source| Error::Read {
         path: dir.display().to_string(),
         source,
@@ -1052,6 +1156,7 @@ fn walk(
         }
         if path.is_dir() {
             let rel = rel_path(root, &path);
+            // 外部配置根是一份完整布局，`overlays/` 在其中同样不参与加载。
             if rel == "overlays" && overlay.is_none() {
                 continue;
             }
@@ -1059,7 +1164,7 @@ fn walk(
             if layout::is_ignored(&rel) {
                 continue;
             }
-            walk(root, &path, overlay, out, warnings)?;
+            walk(root, &path, overlay, layer, out, warnings)?;
             continue;
         }
         let rel = rel_path(root, &path);
@@ -1073,28 +1178,30 @@ fn walk(
         if is_ignored_path(&rel) {
             continue;
         }
-        if let Some(rest) = rel.strip_prefix("overlays/") {
-            let Some((env, tail)) = rest.split_once('/') else {
-                continue;
-            };
-            if Some(env) != overlay || !is_yaml(tail) {
+        if !external {
+            if let Some(rest) = rel.strip_prefix("overlays/") {
+                let Some((env, tail)) = rest.split_once('/') else {
+                    continue;
+                };
+                if Some(env) != overlay || !is_yaml(tail) {
+                    continue;
+                }
+                if kind_of(tail).is_err() {
+                    warnings.push(diag(&rel, 1, format!("未知的配置路径，已跳过: {tail}")));
+                    continue;
+                }
+                let text = fs::read_to_string(&path).map_err(|source| Error::Read {
+                    path: path.display().to_string(),
+                    source,
+                })?;
+                out.push(Input {
+                    logical: tail.to_string(),
+                    actual: rel,
+                    text,
+                    layer: Layer::Overlay,
+                });
                 continue;
             }
-            if kind_of(tail).is_err() {
-                warnings.push(diag(&rel, 1, format!("未知的配置路径，已跳过: {tail}")));
-                continue;
-            }
-            let text = fs::read_to_string(&path).map_err(|source| Error::Read {
-                path: path.display().to_string(),
-                source,
-            })?;
-            out.push(Input {
-                logical: tail.to_string(),
-                actual: rel,
-                text,
-                overlay: true,
-            });
-            continue;
         }
         if !is_yaml(&rel) {
             continue;
@@ -1111,7 +1218,7 @@ fn walk(
             logical: rel.clone(),
             actual: rel,
             text,
-            overlay: false,
+            layer,
         });
     }
     Ok(())
@@ -1175,4 +1282,44 @@ fn rel_path(root: &Path, path: &Path) -> String {
 
 fn is_yaml(path: &str) -> bool {
     path.ends_with(".yaml") || path.ends_with(".yml")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::LoadOptions;
+
+    fn vars(pairs: [(&str, &str); 2]) -> BTreeMap<String, String> {
+        pairs
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn process_vars_select_overlay_name_and_directory() {
+        let options = LoadOptions::from_vars(&BTreeMap::new());
+        assert!(options.overlay.is_none());
+        assert!(options.extra_dirs.is_empty());
+
+        // 空白与空串都视为未设置：否则非法环境名会直接让加载失败。
+        let options = LoadOptions::from_vars(&vars([("MP_OVERLAY", "  "), ("MP_OVERLAY_DIR", "")]));
+        assert!(options.overlay.is_none());
+        assert!(options.extra_dirs.is_empty());
+
+        let options = LoadOptions::from_vars(&vars([
+            ("MP_OVERLAY", " lab "),
+            ("MP_OVERLAY_DIR", " D:/outside ; D:/other "),
+        ]));
+        assert_eq!(options.overlay.as_deref(), Some("lab"));
+        let dirs: Vec<String> = options
+            .extra_dirs
+            .iter()
+            .map(|dir| dir.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(dirs.len(), 2, "{dirs:?}");
+        assert!(dirs[0].contains("outside"), "{dirs:?}");
+        assert!(dirs[1].contains("other"), "{dirs:?}");
+    }
 }

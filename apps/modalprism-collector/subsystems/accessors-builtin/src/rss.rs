@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use accessors::{AccessContext, AccessError, AccessRequest, Accessor, AccessorCapabilities};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::envelope::from_page;
 use crate::headers::{body_next, is_http, link_next, resolve_url};
@@ -81,7 +81,17 @@ impl Accessor for RssAccessor {
         ready(ctx, request.deadline)?;
         let spec = parse_spec(&request.spec)?;
         let http_spec = http_spec(&spec);
+        // 上一轮停在的下一页。没有游标时从 Feed 入口重读，用来接上新条目。
         let mut url = url_of(&request.locator)?;
+        if let Some(resume) = request
+            .cursor
+            .as_ref()
+            .and_then(|cursor| cursor.get("url"))
+            .and_then(Value::as_str)
+            .filter(|item| is_http(item))
+        {
+            url = resume.to_string();
+        }
         let mut seen = BTreeSet::new();
         let mut out = Vec::new();
         for _ in 0..spec.pages {
@@ -94,26 +104,29 @@ impl Accessor for RssAccessor {
             if !seen.insert(url.clone()) {
                 break;
             }
-            let page = fetch_page(&request, ctx, &http_spec, url.clone()).await?;
+            let mut page = fetch_page(&request, ctx, &http_spec, url.clone()).await?;
             let status = page.status;
             let headers = page.headers.clone();
             let body = page.body.clone();
             let final_url = page.final_url.clone();
+            let next = if (200..300).contains(&status) {
+                link_next(&headers)
+                    .or_else(|| body_next(&body))
+                    .and_then(|item| resolve_url(&final_url, &item))
+                    .filter(|item| is_http(item))
+            } else {
+                None
+            };
+            // 本轮页数用尽时把下一页留给下一次计划，避免每次都从入口重抓同一段。
+            page.cursor = next.clone().map(|item| json!({ "url": item }));
             out.push(from_page(
                 ctx,
                 &request.policy,
                 std::time::Instant::now(),
                 page,
             )?);
-            if !(200..300).contains(&status) {
-                break;
-            }
-            let next = link_next(&headers).or_else(|| body_next(&body));
             let Some(next) = next else { break };
-            let Some(resolved) = resolve_url(&final_url, &next).filter(|item| is_http(item)) else {
-                break;
-            };
-            url = resolved;
+            url = next;
         }
         if out.is_empty() {
             ready(ctx, request.deadline)?;

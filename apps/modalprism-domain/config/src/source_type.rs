@@ -131,7 +131,7 @@ const REGISTRY: [KindSpec; 6] = [
         allowed_accessors: Some(&["api", "paid-api"]),
         // paid-api 需要 `locator.endpoint` 与鉴权头，简易表单写不出。
         form_accessors: Some(&["api"]),
-        allowed_adapters: Some(&["json-list"]),
+        allowed_adapters: Some(&["json-list", "feed-items"]),
         forbid_paid: false,
         stagnation_cycles: None,
     },

@@ -243,7 +243,7 @@ Behavior change: `POST /collection/plans/{id}/pause` and `plan.pause` used to se
 
 ## Declaring sources and plans
 
-Sources are declarative entries under `config/sources/*.yaml` that state what to access and how to interpret it; cadence and item limits live in the matching plan. A shipped source:
+Sources are declarative entries under `config/sources/*.yaml` that state what to access and how to interpret it; cadence and item limits live in the matching plan. A downstream project keeps its own declarations in a second config root of the same layout and points `MP_OVERLAY_DIR` at it (several roots separated by `;`): files at the same path replace the shipped ones, new files are appended, and a missing or empty root fails the load. `MP_OVERLAY` selects `config/overlays/<env>/` as an additional layer, merged on top of the baseline and below any external root. A shipped source:
 
 ```yaml
 id: source/openai-news

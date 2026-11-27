@@ -249,7 +249,16 @@ fn media_ok(selector: &InputSelector, declared: &str, detected: Option<&str>) ->
         return true;
     };
     let expected = essence(expected);
-    essence(declared) == expected || detected.is_some_and(|item| essence(item) == expected)
+    media_compatible(&expected, &essence(declared))
+        || detected.is_some_and(|item| media_compatible(&expected, &essence(item)))
+}
+
+/// `application/json` 同时接受带 `+json` 后缀的结构化类型（例如 SPARQL results）。
+fn media_compatible(expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    expected == "application/json" && actual.ends_with("+json")
 }
 
 fn ensure_deterministic(registry: &Registry, id: &str) -> Result<(), AdapterError> {

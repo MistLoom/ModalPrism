@@ -204,7 +204,7 @@ async fn every_declared_source_maps_its_fixture() {
                 assert!(
                     discovery_keys(&output.changeset.ops)
                         .iter()
-                        .any(|key| key == "ext:100")
+                        .any(|key| key == "ext:id:100")
                 );
                 assert!(has_text(&output.changeset.ops, "Hello & world"));
                 assert!(output.follows.is_empty());
@@ -338,7 +338,282 @@ async fn json_list_reads_units_and_templates() {
             .any(|key| key == "url:https://example.com/posts/a/b"),
         "{keys:?}"
     );
-    assert!(keys.iter().any(|key| key == "ext:20261001"), "{keys:?}");
+    assert!(keys.iter().any(|key| key == "ext:id:20261001"), "{keys:?}");
+}
+
+#[tokio::test]
+async fn json_list_reads_sparql_bindings() {
+    let registry = Registry::builtins();
+    let body = r#"{"results":{"bindings":[{"item":{"value":"http://www.wikidata.org/entity/Q1"},"itemLabel":{"value":"AI winter 1974–1980"},"qid":{"value":"Q1"},"start":{"value":"1974-01-01T00:00:00Z"}}]}}"#;
+    let pipeline = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "items": "/results/bindings",
+            "url": "item.value",
+            "title": "itemLabel.value",
+            "publishedAt": "start.value",
+            "externalIdPath": "qid.value"
+        }}
+    }]);
+    let output = run(
+        &registry,
+        bare(body, "application/sparql-results+json", pipeline),
+    )
+    .await
+    .unwrap();
+    assert_eq!(titles(&output.changeset.ops), ["AI winter 1974–1980"]);
+    let keys = discovery_keys(&output.changeset.ops);
+    assert!(
+        keys.iter().any(|key| key == "ext:id:Q1"),
+        "{keys:?}"
+    );
+}
+
+#[tokio::test]
+async fn wikitable_keeps_rowspan_year_and_longer_link() {
+    let registry = Registry::builtins();
+    let html = r#"<table class="wikitable"><tr><th>Date</th><th>Development</th></tr>
+<tr><th rowspan="2">1956</th><td><a href="/wiki/John_McCarthy">John McCarthy</a> convened the <a href="/wiki/Dartmouth_workshop">Dartmouth workshop</a> to study artificial intelligence.</td></tr>
+<tr><td><a href="/wiki/Logic_Theorist">Logic Theorist</a> was presented as a reasoning program.</td></tr>
+</table>"#;
+    let pipeline = json!([{
+        "run": ["adapter/html-list"],
+        "spec": {"adapter/html-list": {"parseMode": "wikitable"}}
+    }]);
+    let mut request = bare(html, "text/html", pipeline);
+    request.locator = Locator::Url {
+        url: "https://en.wikipedia.org/wiki/Timeline_of_artificial_intelligence".into(),
+    };
+    let output = run(&registry, request).await.unwrap();
+    assert_eq!(
+        titles(&output.changeset.ops),
+        ["Dartmouth workshop", "Logic Theorist"]
+    );
+}
+
+#[tokio::test]
+async fn json_list_copies_extra_paths_and_literals() {
+    let registry = Registry::builtins();
+    let body = r#"[{"id":"Q1","name":"达特茅斯"}]"#;
+    let pipeline = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "itemsPath": "",
+            "urlTemplate": "https://www.wikidata.org/wiki/{raw:id}",
+            "title": "name",
+            "extra": {"official_id": "id", "type_key": "const:event"}
+        }}
+    }]);
+    let output = run(&registry, bare(body, "application/json", pipeline))
+        .await
+        .unwrap();
+    let extra = output.changeset.ops.iter().find_map(|op| match op {
+        Op::PutFacet {
+            kind: FacetKind::Struct,
+            body: Body::Struct { value },
+            ..
+        } => value.pointer("/hints/extra").and_then(Value::as_object),
+        _ => None,
+    });
+    let extra = extra.expect("extra");
+    assert_eq!(extra.get("official_id").and_then(Value::as_str), Some("Q1"));
+    assert_eq!(extra.get("type_key").and_then(Value::as_str), Some("event"));
+}
+
+#[tokio::test]
+async fn json_list_skips_absent_paths_and_non_scalars() {
+    let registry = Registry::builtins();
+    let body = r#"[{"id":"1","name":"条目","vendor":"acme","score":42,"meta":{"nested":"x"}}]"#;
+    let pipeline = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "itemsPath": "",
+            "urlTemplate": "https://example.com/{raw:id}",
+            "title": "name",
+            "extra": {"owner": "vendor", "absent": "score.missing", "nested": "meta"}
+        }}
+    }]);
+    let output = run(&registry, bare(body, "application/json", pipeline))
+        .await
+        .unwrap();
+    let extra = output
+        .changeset
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            Op::PutFacet {
+                kind: FacetKind::Struct,
+                body: Body::Struct { value },
+                ..
+            } => value
+                .pointer("/hints/extra")
+                .and_then(Value::as_object)
+                .cloned(),
+            _ => None,
+        })
+        .expect("extra");
+    // 只写入能取到标量的键：路径不存在与非标量子树都不投影。
+    assert_eq!(extra.len(), 1, "{extra:?}");
+    assert_eq!(extra["owner"], json!("acme"));
+}
+
+#[tokio::test]
+async fn json_list_without_extra_keeps_the_discovery_shape() {
+    let registry = Registry::builtins();
+    let body = r#"[{"id":"1","name":"条目"}]"#;
+    let pipeline = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "itemsPath": "",
+            "urlTemplate": "https://example.com/{raw:id}",
+            "title": "name"
+        }}
+    }]);
+    let output = run(&registry, bare(body, "application/json", pipeline))
+        .await
+        .unwrap();
+    // 未声明 extra 时不产生该键，既有载荷字节保持稳定。
+    let has_extra = output.changeset.ops.iter().any(|op| match op {
+        Op::PutFacet {
+            kind: FacetKind::Struct,
+            body: Body::Struct { value },
+            ..
+        } => value.pointer("/hints/extra").is_some(),
+        _ => false,
+    });
+    assert!(!has_extra);
+}
+
+#[tokio::test]
+async fn table_records_splits_each_row_into_a_discovery() {
+    let registry = Registry::builtins();
+    let body = r#"<table id="records">
+      <thead><tr><th>Name</th><th>Value</th><th>Unit</th><th>When</th><th>Link</th></tr></thead>
+      <tbody>
+        <tr><td>Alpha</td><td>1.5</td><td>unit</td><td>2026-01-02T03:04:05Z</td><td><a href="/a">src</a></td></tr>
+        <tr><td>Beta</td><td>2</td><td>unit</td><td>2026-01-03T00:00:00Z</td><td><a href="https://example.com/b">src</a></td></tr>
+      </tbody>
+    </table>"#;
+    let pipeline = json!([{
+        "run": ["adapter/table-records"],
+        "spec": {"adapter/table-records": {
+            "table": "table#records",
+            "columns": {
+                "name": "Name",
+                "amount": "Value",
+                "unit": "Unit",
+                "observed_at": "When",
+                "source_url": "Link"
+            },
+            "link": "source_url",
+            "title": "name",
+            "publishedAt": "observed_at"
+        }}
+    }]);
+    let output = run(&registry, bare(body, "text/html", pipeline))
+        .await
+        .unwrap();
+    assert_eq!(titles(&output.changeset.ops), ["Alpha", "Beta"]);
+    let hints: Vec<Value> = output
+        .changeset
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::PutFacet {
+                kind: FacetKind::Struct,
+                body: Body::Struct { value },
+                ..
+            } => value.get("hints").cloned(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(hints.len(), 2, "{hints:?}");
+    assert_eq!(hints[0]["extra"]["amount"], json!("1.5"));
+    assert_eq!(hints[0]["extra"]["unit"], json!("unit"));
+    assert_eq!(
+        hints[0]["extra"]["observed_at"],
+        json!("2026-01-02T03:04:05Z")
+    );
+    assert_eq!(
+        hints[0]["extra"]["source_url"],
+        json!("https://example.com/a")
+    );
+    assert_eq!(
+        hints[0].get("publishedAt").and_then(Value::as_str),
+        Some("2026-01-02T03:04:05Z")
+    );
+    let keys = discovery_keys(&output.changeset.ops);
+    assert!(
+        keys.iter().any(|key| key == "url:https://example.com/a"),
+        "{keys:?}"
+    );
+    assert!(
+        keys.iter().any(|key| key == "url:https://example.com/b"),
+        "{keys:?}"
+    );
+}
+
+#[tokio::test]
+async fn json_list_truncates_long_extra_values() {
+    let registry = Registry::builtins();
+    let long = "x".repeat(900);
+    let body = format!(r#"[{{"id":"Q1","name":"条目","note":"{long}"}}]"#);
+    let pipeline = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "itemsPath": "",
+            "urlTemplate": "https://example.com/{raw:id}",
+            "title": "name",
+            "extra": {"note": "note"}
+        }}
+    }]);
+    let output = run(&registry, bare(&body, "application/json", pipeline))
+        .await
+        .unwrap();
+    let note = output
+        .changeset
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            Op::PutFacet {
+                kind: FacetKind::Struct,
+                body: Body::Struct { value },
+                ..
+            } => value.pointer("/hints/extra/note").and_then(Value::as_str),
+            _ => None,
+        })
+        .expect("note");
+    assert_eq!(note.chars().count(), 512);
+}
+
+#[tokio::test]
+async fn json_list_rejects_reserved_or_malformed_extra() {
+    let registry = Registry::builtins();
+    let reserved = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "itemsPath": "",
+            "urlTemplate": "https://example.com/{raw:id}",
+            "title": "name",
+            "extra": {"title": "t"}
+        }}
+    }]);
+    // title 已有固定槽位，再经 extra 重复会让下游无从取值。
+    assert!(run(&registry, bare("[]", "application/json", reserved))
+        .await
+        .is_err());
+    let blank = json!([{
+        "run": ["adapter/json-list"],
+        "spec": {"adapter/json-list": {
+            "itemsPath": "",
+            "urlTemplate": "https://example.com/{raw:id}",
+            "title": "name",
+            "extra": {"note": "  "}
+        }}
+    }]);
+    assert!(run(&registry, bare("[]", "application/json", blank))
+        .await
+        .is_err());
 }
 
 #[tokio::test]

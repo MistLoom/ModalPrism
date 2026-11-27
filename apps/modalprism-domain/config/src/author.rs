@@ -517,8 +517,30 @@ pub struct Entry {
 
 /// 读出一类声明（`source`、`accessor` 或 `adapter`），按 slug 升序。
 ///
-/// 只读磁盘，不合并、不预设：界面要改的是自己写下的那份，而不是叠加后的结果。
+/// 只读磁盘，不合并预设。`MP_OVERLAY_DIR` 里的同名文件替换主目录那份，新文件追加。
 pub fn entries(dir: &Path, kind: &str) -> Result<Vec<Entry>, Error> {
+    entries_from(dir, kind, &crate::load::overlay_dirs_from_env())
+}
+
+fn entries_from(dir: &Path, kind: &str, extra_dirs: &[std::path::PathBuf]) -> Result<Vec<Entry>, Error> {
+    let mut out = read_entries(dir, kind)?;
+    for extra in extra_dirs {
+        if !extra.is_dir() {
+            continue;
+        }
+        for entry in read_entries(extra, kind)? {
+            if let Some(existing) = out.iter_mut().find(|item| item.slug == entry.slug) {
+                *existing = entry;
+            } else {
+                out.push(entry);
+            }
+        }
+    }
+    out.sort_by(|left, right| left.slug.cmp(&right.slug));
+    Ok(out)
+}
+
+fn read_entries(dir: &Path, kind: &str) -> Result<Vec<Entry>, Error> {
     let (folder, _) = folder_of(kind)?;
     let root = dir.join(folder);
     let Ok(read) = fs::read_dir(&root) else {
@@ -549,7 +571,6 @@ pub fn entries(dir: &Path, kind: &str) -> Result<Vec<Entry>, Error> {
             doc,
         });
     }
-    out.sort_by(|left, right| left.slug.cmp(&right.slug));
     Ok(out)
 }
 
@@ -947,6 +968,35 @@ fn to_saphyr(value: &Value) -> Yaml<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_dir_replaces_same_slug_and_appends_new_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let extra = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sources")).unwrap();
+        fs::create_dir_all(extra.path().join("sources")).unwrap();
+        fs::write(
+            dir.path().join("sources/demo.yaml"),
+            "id: source/demo\nkind: source\nname: Base\n",
+        )
+        .unwrap();
+        fs::write(
+            extra.path().join("sources/demo.yaml"),
+            "id: source/demo\nkind: source\nname: Over\n",
+        )
+        .unwrap();
+        fs::write(
+            extra.path().join("sources/extra.yaml"),
+            "id: source/extra\nkind: source\nname: Extra\n",
+        )
+        .unwrap();
+        let rows = entries_from(dir.path(), "source", &[extra.path().to_path_buf()]).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].slug, "demo");
+        assert_eq!(rows[0].doc["name"], json!("Over"));
+        assert_eq!(rows[1].slug, "extra");
+        assert_eq!(rows[1].doc["name"], json!("Extra"));
+    }
 
     #[test]
     fn yaml_roundtrip_keeps_strings() {

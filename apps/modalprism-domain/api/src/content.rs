@@ -74,6 +74,20 @@ struct ListQuery {
     /// `all` 取消项目隔离过滤（管理与迁移用）。
     #[serde(default)]
     scope: Option<String>,
+    /// RFC3339。只返回 `createdAt` 严格晚于该时刻的条目。
+    #[serde(default)]
+    since: Option<String>,
+}
+
+fn parse_since(raw: Option<&str>) -> Result<Option<String>, ApiError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() || strata_model::Timestamp::parse(raw).is_err() {
+        return Err(ApiError::validation("since", "format", "必须是 RFC3339"));
+    }
+    Ok(Some(raw.to_string()))
 }
 
 /// 筛选条件的公共构造：列表窗口与计数查询必须共享同一语义。
@@ -82,6 +96,7 @@ fn content_where(
     source_id: Option<&str>,
     status: Option<&str>,
     allowed_sources: Option<&[String]>,
+    since: Option<&str>,
 ) -> Option<Expr> {
     let mut predicates = Vec::new();
     if let Some(source) = source_id {
@@ -92,6 +107,9 @@ fn content_where(
     }
     if let Some(sources) = allowed_sources {
         predicates.push(json!({"in": ["sourceId", sources]}));
+    }
+    if let Some(since) = since {
+        predicates.push(json!({"gt": ["createdAt", since]}));
     }
     let mut map = serde_json::Map::new();
     if predicates.len() == 1 {
@@ -213,12 +231,13 @@ fn content_query(
     source_id: Option<&str>,
     status: Option<&str>,
     allowed_sources: Option<&[String]>,
+    since: Option<&str>,
     limit: usize,
 ) -> StrataQuery {
     let mut has_facets = Vec::new();
     let select = content_select();
 
-    let r#where = content_where(source_id, status, allowed_sources);
+    let r#where = content_where(source_id, status, allowed_sources, since);
 
     if let Some(text) = search {
         return StrataQuery {
@@ -274,11 +293,12 @@ fn content_count_query(
     source_id: Option<&str>,
     status: Option<&str>,
     allowed_sources: Option<&[String]>,
+    since: Option<&str>,
     kind: FacetKind,
     variant: Option<&str>,
 ) -> StrataQuery {
     let select = vec![SelectItem::Field("rid".into())];
-    let r#where = content_where(source_id, status, allowed_sources);
+    let r#where = content_where(source_id, status, allowed_sources, since);
     if let Some(text) = search {
         return StrataQuery {
             from: QueryFrom::Resources,
@@ -325,6 +345,7 @@ pub(crate) async fn item_count(
     source: Option<&str>,
     status: Option<&str>,
     allowed_sources: Option<&[String]>,
+    since: Option<&str>,
 ) -> Result<usize, ApiError> {
     let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for kind in [FacetKind::Struct, FacetKind::Raw] {
@@ -336,6 +357,7 @@ pub(crate) async fn item_count(
                 source,
                 status,
                 allowed_sources,
+                since,
                 kind,
                 None,
             ))
@@ -368,6 +390,7 @@ pub(crate) async fn variant_counts(
                 None,
                 None,
                 allowed_sources,
+                None,
                 FacetKind::Struct,
                 Some(variant),
             ))
@@ -571,6 +594,7 @@ pub(crate) async fn search_items_value(
         source.as_deref(),
         None,
         allowed.as_deref(),
+        None,
         limit,
     );
     let result = state
@@ -596,6 +620,7 @@ async fn list_items(
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let limit = util::limit(query.limit.as_deref())?;
+    let since = parse_since(query.since.as_deref())?;
     // 类型过滤：把类型解析为信源集合，再与项目可见集合取交；内容归属只能经信源派生。
     let type_ids = match query
         .source_type
@@ -647,7 +672,7 @@ async fn list_items(
         return Ok(util::ok(&page_total(vec![], None, 0)));
     }
     let filter = format!(
-        "content:{}:{}:{}:{}:{}",
+        "content:{}:{}:{}:{}:{}:{}",
         query.query.clone().unwrap_or_default(),
         query.source_id.clone().unwrap_or_default(),
         query.status.clone().unwrap_or_default(),
@@ -656,6 +681,7 @@ async fn list_items(
             .as_ref()
             .map(|v| v.join(","))
             .unwrap_or_default(),
+        since.clone().unwrap_or_default(),
     );
     let offset = util::page_offset(query.offset.as_deref(), query.cursor.as_deref(), &filter)?;
     let search = query
@@ -678,6 +704,7 @@ async fn list_items(
         source.as_deref(),
         status,
         allowed_sources.as_deref(),
+        since.as_deref(),
         limit + offset + 1,
     );
     let result = state
@@ -702,7 +729,15 @@ async fn list_items(
     } else {
         None
     };
-    let total = item_count(&state, search, source.as_deref(), status, allowed_sources.as_deref()).await?;
+    let total = item_count(
+        &state,
+        search,
+        source.as_deref(),
+        status,
+        allowed_sources.as_deref(),
+        since.as_deref(),
+    )
+    .await?;
     Ok(util::ok(&page_total(items, next, total)))
 }
 
@@ -1749,7 +1784,7 @@ pub async fn execute_replay(
     }
     let spec = StrataQuery {
         from: QueryFrom::Resources,
-        r#where: content_where(None, None, Some(&allowed)),
+        r#where: content_where(None, None, Some(&allowed), None),
         has_facets: Vec::new(),
         select: vec![
             SelectItem::Field("rid".into()),
@@ -1864,4 +1899,36 @@ pub async fn execute_replay(
         "skipped": skipped,
         "note": "按快照重放当前项目自有信源的结构化字段；未通过的项保留原版本。",
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_where, parse_since};
+    use serde_json::json;
+
+    #[test]
+    fn since_uses_created_at_gt_and_defaults_to_unfiltered() {
+        assert!(content_where(None, None, None, None).is_none());
+        let since = "2026-01-02T03:04:05Z";
+        let expr = content_where(None, None, None, Some(since)).unwrap();
+        assert_eq!(
+            serde_json::to_value(expr).unwrap(),
+            json!({"gt": ["createdAt", since]})
+        );
+    }
+
+    #[test]
+    fn since_rejects_a_non_rfc3339_value() {
+        let error = parse_since(Some("yesterday")).unwrap_err();
+        assert_eq!(error.code, "validationFailed");
+        assert_eq!(error.field_errors[0].field, "since");
+        assert_eq!(error.field_errors[0].code, "format");
+        assert!(parse_since(Some("")).is_err());
+        assert!(parse_since(Some("   ")).is_err());
+        assert!(parse_since(None).unwrap().is_none());
+        assert_eq!(
+            parse_since(Some(" 2026-01-02T03:04:05Z ")).unwrap().as_deref(),
+            Some("2026-01-02T03:04:05Z")
+        );
+    }
 }

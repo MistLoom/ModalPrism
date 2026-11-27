@@ -13,7 +13,7 @@ pub struct BuiltinAdapter {
 }
 
 /// 全部内置适配器的声明文本，与 `adapters::Registry::builtins` 的登记一一对应。
-pub fn builtin_adapters() -> [BuiltinAdapter; 10] {
+pub fn builtin_adapters() -> [BuiltinAdapter; 11] {
     [
         BuiltinAdapter {
             id: "adapter/feed-items",
@@ -54,6 +54,10 @@ pub fn builtin_adapters() -> [BuiltinAdapter; 10] {
         BuiltinAdapter {
             id: "adapter/smart-discover",
             source: include_str!("../../../../config/adapters/smart-discover.yaml"),
+        },
+        BuiltinAdapter {
+            id: "adapter/table-records",
+            source: include_str!("../../../../config/adapters/table-records.yaml"),
         },
     ]
 }

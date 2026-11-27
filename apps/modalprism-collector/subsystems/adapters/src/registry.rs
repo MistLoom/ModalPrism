@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::builtin::{
     BasicDetector, FeedFulltext, FeedItems, HtmlList, JsonLd, JsonList, LinkDiscovery, PageFields,
-    PrismDetector, Readability, SmartContent, SmartDiscover,
+    PrismDetector, Readability, SmartContent, SmartDiscover, TableRecords,
 };
 use crate::error::AdapterError;
 use crate::model::AdapterRole;
@@ -51,6 +51,9 @@ impl Registry {
             .expect("内置搜索适配器");
         registry
             .register_search(Arc::new(JsonList::new()))
+            .expect("内置搜索适配器");
+        registry
+            .register_search(Arc::new(TableRecords::new()))
             .expect("内置搜索适配器");
         registry
             .register_search(Arc::new(LinkDiscovery::new()))

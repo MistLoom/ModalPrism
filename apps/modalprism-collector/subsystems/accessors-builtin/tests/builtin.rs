@@ -284,6 +284,15 @@ async fn rss_follows_next_without_splitting_items() {
         .await
         .unwrap();
     assert_eq!(pages.len(), 2);
+    assert_eq!(
+        pages[1]
+            .cursor_candidate
+            .as_ref()
+            .and_then(|cursor| cursor.get("url"))
+            .and_then(|value| value.as_str()),
+        Some("https://example.com/feed?page=3"),
+        "页数用尽时游标停在尚未抓取的下一页"
+    );
     assert_eq!(pages[0].parts.len(), 1);
     assert_eq!(pages[0].parts[0].bytes.size(), feed.len() as u64);
     assert_eq!(egress.hits.load(Ordering::SeqCst), 2);
@@ -361,6 +370,86 @@ async fn api_pages_by_offset_cursor_and_link() {
     assert_eq!(pages.len(), 2);
     assert_eq!(pages[0].cursor_candidate.as_ref().unwrap()["token"], "tok");
     assert_eq!(egress.seen.lock().await.len(), 2);
+}
+
+#[tokio::test]
+async fn api_offset_writes_body_and_stops_on_short_page() {
+    let egress = Arc::new(ScriptEgress {
+        hits: AtomicUsize::new(0),
+        responses: Mutex::new(vec![
+            HttpResponse {
+                status: 200,
+                headers: vec![("Content-Type".into(), "application/json".into())],
+                body: Bytes::from_static(br#"{"results":{"bindings":[{},{}]}}"#),
+                final_url: "https://example.com/sparql".into(),
+            },
+            HttpResponse {
+                status: 200,
+                headers: vec![("Content-Type".into(), "application/json".into())],
+                body: Bytes::from_static(br#"{"results":{"bindings":[{}]}}"#),
+                final_url: "https://example.com/sparql?offset=2".into(),
+            },
+        ]),
+        seen: Mutex::new(Vec::new()),
+    });
+    let (context, _) = ctx(
+        egress.clone(),
+        Arc::new(ScriptPaid {
+            hits: AtomicUsize::new(0),
+            fail_budget: false,
+        }),
+    );
+    let accessor = by_id("api").unwrap();
+    let pages = accessor
+        .access(
+            request(
+                Locator::ApiEndpoint {
+                    endpoint: "https://example.com/sparql".into(),
+                },
+                json!({
+                    "method": "POST",
+                    "pages": 4,
+                    "body": "LIMIT {{limit}} OFFSET {{offset}}",
+                    "pagination": {"type": "offset", "param": "offset", "start": 0, "step": 2, "items": "/results/bindings"}
+                }),
+            ),
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(pages.len(), 2);
+    let seen = egress.seen.lock().await;
+    assert_eq!(seen[0].body.as_ref(), b"LIMIT 2 OFFSET 0");
+    assert_eq!(seen[1].body.as_ref(), b"LIMIT 2 OFFSET 2");
+    assert_eq!(pages[0].cursor_candidate.as_ref().unwrap()["offset"], 2);
+    assert!(pages[1].cursor_candidate.is_none());
+    drop(seen);
+
+    egress.responses.lock().await.clear();
+    egress.responses.lock().await.push(HttpResponse {
+        status: 200,
+        headers: Vec::new(),
+        body: Bytes::from_static(b"<feed><entry>only</entry></feed>"),
+        final_url: "https://example.com/atom?start=0".into(),
+    });
+    egress.seen.lock().await.clear();
+    let pages = accessor
+        .access(
+            request(
+                Locator::ApiEndpoint {
+                    endpoint: "https://example.com/atom".into(),
+                },
+                json!({
+                    "pages": 3,
+                    "pagination": {"type": "offset", "param": "start", "start": 0, "step": 2, "items": "tag:entry"}
+                }),
+            ),
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(pages.len(), 1);
+    assert!(pages[0].cursor_candidate.is_none());
 }
 
 #[tokio::test]

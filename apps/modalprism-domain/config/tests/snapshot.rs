@@ -88,6 +88,110 @@ fn options() -> LoadOptions {
 }
 
 #[test]
+fn extra_dir_overrides_same_path_and_adds_new_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    let extra = tempfile::tempdir().unwrap();
+    write(
+        extra.path(),
+        "sources/demo.yaml",
+        &source_yaml("").replace("name: Demo", "name: Over"),
+    );
+    write(
+        extra.path(),
+        "sources/extra.yaml",
+        &source_yaml("")
+            .replace("source/demo", "source/extra")
+            .replace("name: Demo", "name: Extra"),
+    );
+    let options = LoadOptions {
+        extra_dirs: vec![extra.path().to_path_buf()],
+        ..LoadOptions::default()
+    };
+    let snapshot = validate(dir.path(), &options).unwrap();
+    assert_eq!(snapshot.modules["source/demo"]["name"], json!("Over"));
+    assert_eq!(snapshot.modules["source/extra"]["name"], json!("Extra"));
+
+    let missing = LoadOptions {
+        extra_dirs: vec![dir.path().join("missing-overlay")],
+        ..LoadOptions::default()
+    };
+    let error = validate(dir.path(), &missing).unwrap_err();
+    assert!(error.to_string().contains("叠加目录不存在"), "{error}");
+
+    let empty = tempfile::tempdir().unwrap();
+    let options = LoadOptions {
+        extra_dirs: vec![empty.path().to_path_buf()],
+        ..LoadOptions::default()
+    };
+    let error = validate(dir.path(), &options).unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains(&empty.path().display().to_string()), "{text}");
+    assert!(text.contains("叠加目录为空"), "{text}");
+}
+
+#[test]
+fn unset_overlay_ignores_the_overlays_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "overlays/lab/sources/hidden.yaml",
+        &source_yaml("")
+            .replace("source/demo", "source/hidden")
+            .replace("name: Demo", "name: Hidden"),
+    );
+    let snapshot = validate(dir.path(), &options()).unwrap();
+    assert!(snapshot.modules.contains_key("source/demo"));
+    assert!(
+        !snapshot.modules.contains_key("source/hidden"),
+        "未指定 overlay 时不应读 overlays/"
+    );
+}
+
+#[test]
+fn overlay_and_extra_dir_compose_by_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffold(dir.path());
+    write(
+        dir.path(),
+        "sources/demo.yaml",
+        &source_yaml("labels:\n  keep: base\n"),
+    );
+    write(
+        dir.path(),
+        "overlays/lab/sources/demo.yaml",
+        "labels:\n  layer: overlay\n",
+    );
+    let outside = tempfile::tempdir().unwrap();
+    write(
+        outside.path(),
+        "sources/demo.yaml",
+        "name: Outside\nlabels:\n  layer: external\n",
+    );
+    write(
+        outside.path(),
+        "sources/extra.yaml",
+        &source_yaml("")
+            .replace("source/demo", "source/extra")
+            .replace("name: Demo", "name: Extra")
+            .replace("https://example.com/a", "https://example.com/extra"),
+    );
+    let options = LoadOptions {
+        overlay: Some("lab".into()),
+        extra_dirs: vec![outside.path().to_path_buf()],
+        ..LoadOptions::default()
+    };
+    let snapshot = validate(dir.path(), &options).expect("三层应能合并");
+    let demo = &snapshot.modules["source/demo"];
+    // 外部根是最后一层：覆盖同名字段，未声明的字段保留底层值。
+    assert_eq!(demo["name"], json!("Outside"));
+    assert_eq!(demo["labels"]["keep"], json!("base"));
+    assert_eq!(demo["labels"]["layer"], json!("external"));
+    assert_eq!(snapshot.modules["source/extra"]["name"], json!("Extra"));
+}
+
+#[test]
 fn retired_areas_are_registered_once() {
     // 退役名单是加载器跳过、出厂基线剔除、启动清理与测试断言的同一份事实。
     let paths = config::retired_paths();

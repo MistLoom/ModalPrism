@@ -507,7 +507,16 @@ impl Services {
         if let Some(source) = source {
             self.planner.make_due(source, Timestamp::now()).await?;
         }
-        let leased = self.planner_tick().await?;
+        // 指定信源时只把这一条交给 tick。否则 tick 会按全局容量租下别的到期信源，
+        // 调用方随后按 source 滤掉它们，租约占满且一条都不执行。
+        let mut plans = plans::plans_of(&self.config.applied(), self.data_dir());
+        if let Some(source) = source {
+            plans.retain(|plan| plan.source_id.as_str() == source);
+        }
+        let leased = self
+            .planner
+            .tick(&plans, &capacities(), Timestamp::now())
+            .await?;
         let picked: Vec<AccessTask> = match source {
             Some(source) => leased
                 .into_iter()

@@ -298,6 +298,15 @@ impl<Q: Queue, P: Persist> Planner<Q, P> {
             .entry(source.to_string())
             .or_insert_with(|| new_row(0, 0));
         row.next_at = Some(stamp(now)?);
+        // 自动节律碰到声明类失败会停在 misconfigured，直到声明代变化。
+        // 操作者显式要求立即执行时清掉这一次，让修好的实现能再跑；
+        // 声明仍然非法会在本轮再次标回。
+        if let Some(health) = db.health.get_mut(&format!("source/{source}")) {
+            if health.status == "misconfigured" {
+                health.status = "ok".into();
+                health.config = 0;
+            }
+        }
         save_db(&self.persist, &db).await
     }
 

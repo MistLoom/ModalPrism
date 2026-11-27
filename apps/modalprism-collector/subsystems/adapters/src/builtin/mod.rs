@@ -9,6 +9,7 @@ mod page;
 mod prism_detect;
 mod readability;
 mod smart;
+mod table;
 
 pub use detect::{BasicDetector, PartDetection, detection_body};
 pub use feed::{FeedFulltext, FeedItems};
@@ -19,3 +20,4 @@ pub use page::PageFields;
 pub use prism_detect::PrismDetector;
 pub use readability::Readability;
 pub use smart::{SmartContent, SmartDiscover};
+pub use table::TableRecords;

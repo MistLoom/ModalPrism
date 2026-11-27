@@ -127,7 +127,7 @@ impl SearchAdapter for HtmlList {
                 must_selector(item)?;
                 must_selector(link)?;
             }
-            "markdown" | "docusaurus_changelog" | "intercom_changelog" => {}
+            "markdown" | "docusaurus_changelog" | "intercom_changelog" | "wikitable" => {}
             _ => return Err(AdapterError::config("parseMode")),
         }
         parse_optional(&parsed.title)?;
@@ -160,6 +160,7 @@ impl SearchAdapter for HtmlList {
             "markdown" => markdown_items(&html, &base, &parsed, input),
             "docusaurus_changelog" => changelog_items(&html, &base, &parsed, input, false)?,
             "intercom_changelog" => changelog_items(&html, &base, &parsed, input, true)?,
+            "wikitable" => wikitable_items(&html, &base, input),
             _ => html_items(&html, &base, &parsed, input)?,
         };
         number_ranks(&mut items);
@@ -210,6 +211,9 @@ impl SearchAdapter for JsonList {
             if !offset_ok(&offset) {
                 return Err(AdapterError::config("publishedAtUtcOffset"));
             }
+        }
+        if let Some(extra) = spec.get("extra") {
+            validate_extra(extra)?;
         }
         detail_need(spec)?;
         Ok(())
@@ -328,10 +332,140 @@ fn html_items(
                     summary.as_deref(),
                     false,
                 ),
+                extra: Map::new(),
             },
         ));
     }
     Ok(items)
+}
+
+/// 年表：`th` 里的年份沿用到后面因 rowspan 省掉年份的行，事件取单元格里较长的站内链接。
+fn wikitable_items(html: &str, base: &str, input: &AdapterInput) -> Vec<Discovery> {
+    let document = Html::parse_document(html);
+    let Ok(row_sel) = Selector::parse("table.wikitable tr") else {
+        return Vec::new();
+    };
+    let Ok(cell_sel) = Selector::parse("th, td") else {
+        return Vec::new();
+    };
+    let Ok(link_sel) = Selector::parse("a[href]") else {
+        return Vec::new();
+    };
+    let mut year: Option<i32> = None;
+    let mut items = Vec::new();
+    let mut seen = Vec::new();
+    for row in document.select(&row_sel) {
+        let mut body = String::new();
+        let mut chosen: Option<(String, String)> = None;
+        for cell in row.select(&cell_sel) {
+            let text = collapse_ws(&cell.text().collect::<String>());
+            if cell.value().name() == "th" {
+                if let Some(found) = leading_year(&text) {
+                    year = Some(found);
+                }
+                continue;
+            }
+            body = text;
+            for anchor in cell.select(&link_sel) {
+                let Some(href) = anchor.value().attr("href") else {
+                    continue;
+                };
+                if !wiki_article_href(href) {
+                    continue;
+                }
+                let title = collapse_ws(&anchor.text().collect::<String>());
+                if title.chars().count() < 3 {
+                    continue;
+                }
+                let Some(url) = absolute_http(base, href) else {
+                    continue;
+                };
+                let replace = match &chosen {
+                    None => true,
+                    Some((_, current)) => title.chars().count() > current.chars().count(),
+                };
+                if replace {
+                    chosen = Some((url, title));
+                }
+            }
+        }
+        let (Some(year), Some((url, title))) = (year, chosen) else {
+            continue;
+        };
+        if body.chars().count() < 12 {
+            continue;
+        }
+        let Some(identity) = url_identity(&url) else {
+            continue;
+        };
+        let slug: String = title
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let slug = slug.trim_matches('-');
+        if slug.is_empty() {
+            continue;
+        }
+        let ext = format!("ext:{year}:{slug}");
+        if seen.iter().any(|item: &String| item == &ext) {
+            continue;
+        }
+        seen.push(ext.clone());
+        let published = parse_published(&format!("{year}-01-01"), None, None);
+        items.push(discovery(
+            input,
+            ItemFields {
+                url,
+                identity: vec![identity, ext],
+                title: Some(title),
+                published,
+                author: None,
+                summary: Some(body.chars().take(800).collect()),
+                summary_is_body: true,
+                follow: Follow::No,
+                extra: Map::new(),
+            },
+        ));
+    }
+    items
+}
+
+fn leading_year(text: &str) -> Option<i32> {
+    let digits: String = text
+        .chars()
+        .skip_while(|ch| !ch.is_ascii_digit())
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    if digits.len() != 4 {
+        return None;
+    }
+    let year: i32 = digits.parse().ok()?;
+    if (1800..=2100).contains(&year) {
+        Some(year)
+    } else {
+        None
+    }
+}
+
+fn wiki_article_href(href: &str) -> bool {
+    let href = href.trim();
+    if href.contains("action=edit") || href.contains("redlink=1") || href.starts_with('#') {
+        return false;
+    }
+    let path = href.split(['?', '#']).next().unwrap_or(href);
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    !name.starts_with("file:")
+        && !name.starts_with("category:")
+        && !name.starts_with("wikipedia:")
+        && !name.starts_with("help:")
+        && !name.starts_with("template:")
+        && !name.starts_with("special:")
 }
 
 fn markdown_items(text: &str, base: &str, spec: &HtmlSpec, input: &AdapterInput) -> Vec<Discovery> {
@@ -374,6 +508,7 @@ fn markdown_items(text: &str, base: &str, spec: &HtmlSpec, input: &AdapterInput)
                     None,
                     false,
                 ),
+                extra: Map::new(),
             },
         ));
     }
@@ -436,6 +571,7 @@ fn changelog_items(
                     None,
                     false,
                 ),
+                extra: Map::new(),
             },
         ));
     }
@@ -485,6 +621,7 @@ fn intercom_items(
                 summary: Some(body.clone()),
                 summary_is_body: true,
                 follow: Follow::No,
+                extra: Map::new(),
             },
         ));
     }
@@ -582,8 +719,7 @@ fn json_discovery(entry: &Value, input: &AdapterInput, spec: &Value) -> Option<D
     let mut identity = vec![url_identity(&url)?];
     if let Some(path) = optional_string(spec, "externalIdPath") {
         if let Some(raw) = scalar_at(entry, &path) {
-            if !raw.chars().any(char::is_whitespace) {
-                let key = format!("ext:{raw}");
+            if let Some(key) = external_identity(&raw) {
                 if key != identity[0] {
                     identity.push(key);
                 }
@@ -633,6 +769,7 @@ fn json_discovery(entry: &Value, input: &AdapterInput, spec: &Value) -> Option<D
             summary,
             summary_is_body,
             follow,
+            extra: extra_fields(entry, spec),
         },
     ))
 }
@@ -655,6 +792,7 @@ struct ItemFields {
     summary: Option<String>,
     summary_is_body: bool,
     follow: Follow,
+    extra: Map<String, Value>,
 }
 
 fn discovery(_input: &AdapterInput, fields: ItemFields) -> Discovery {
@@ -667,6 +805,7 @@ fn discovery(_input: &AdapterInput, fields: ItemFields) -> Discovery {
         summary,
         summary_is_body,
         follow,
+        extra,
     } = fields;
     let materialize = if summary_is_body && summary.is_some() {
         vec![FacetDraft {
@@ -688,7 +827,7 @@ fn discovery(_input: &AdapterInput, fields: ItemFields) -> Discovery {
             author,
             summary,
             rank: None,
-            extra: Default::default(),
+            extra,
         },
         span: None,
         follow,
@@ -750,6 +889,100 @@ fn path_list(spec: &Value, singular: &str, plural: &str) -> Vec<String> {
 
 fn first_text(entry: &Value, paths: &[String]) -> Option<String> {
     paths.iter().find_map(|path| scalar_at(entry, path))
+}
+
+/// `extra` 的值是点分路径；`const:` 前缀表示字面量，不从条目里取。
+///
+/// 只接受标量并截断超长值：`hints.extra` 进入 struct facet 的 body 并参与内容哈希，
+/// 它承载的是提示而非正文，正文级内容应走 text 或 blob facet。
+fn extra_fields(entry: &Value, spec: &Value) -> Map<String, Value> {
+    let mut out = Map::new();
+    let Some(object) = spec.get("extra").and_then(Value::as_object) else {
+        return out;
+    };
+    for (key, path) in object {
+        let Some(path) = path.as_str() else {
+            continue;
+        };
+        if let Some(literal) = path.strip_prefix("const:") {
+            let literal = literal.trim();
+            if !literal.is_empty() {
+                out.insert(key.clone(), Value::String(truncate(literal)));
+            }
+            continue;
+        }
+        if let Some(text) = scalar_at(entry, path) {
+            out.insert(key.clone(), Value::String(truncate(&text)));
+        }
+    }
+    out
+}
+
+/// `DiscoveryHints` 的固定槽位名：这些信号已有语义位置，再经 `extra` 重复一次，
+/// 下游无从判断该取哪个。
+const EXTRA_RESERVED: [&str; 5] = ["title", "summary", "publishedAt", "author", "rank"];
+
+const EXTRA_MAX_FIELDS: usize = 32;
+const EXTRA_MAX_VALUE_CHARS: usize = 512;
+
+/// 校验 `spec.extra` 的形状。配置错误必须在前置校验阶段暴露，不能在运行时静默跳过。
+fn validate_extra(extra: &Value) -> Result<(), AdapterError> {
+    let Some(object) = extra.as_object() else {
+        return Err(AdapterError::config("extra 必须是对象"));
+    };
+    if object.len() > EXTRA_MAX_FIELDS {
+        return Err(AdapterError::config("extra 字段数量超限"));
+    }
+    for (key, path) in object {
+        let valid_name = !key.is_empty()
+            && key
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if !valid_name {
+            return Err(AdapterError::config(format!("extra 字段名无效: {key}")));
+        }
+        if EXTRA_RESERVED.iter().any(|reserved| reserved == &key.as_str()) {
+            return Err(AdapterError::config(format!(
+                "extra 不得使用固定槽位名: {key}"
+            )));
+        }
+        match path.as_str() {
+            Some(text) if !text.trim().is_empty() => {}
+            _ => {
+                return Err(AdapterError::config(format!(
+                    "extra.{key} 必须是非空 JSON 路径"
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn truncate(text: &str) -> String {
+    text.chars().take(EXTRA_MAX_VALUE_CHARS).collect()
+}
+
+/// `ext:` 要求 `scheme:id`。调用方已经给出合法 scheme 时原样使用；
+/// 裸标识（没有冒号，或 scheme 不是名字）落到 `ext:id:`，避免提交时被拒绝。
+fn external_identity(raw: &str) -> Option<String> {
+    if raw.is_empty() || raw.chars().any(char::is_whitespace) {
+        return None;
+    }
+    if let Some((scheme, id)) = raw.split_once(':') {
+        if external_scheme(scheme) && !id.is_empty() {
+            return Some(format!("ext:{raw}"));
+        }
+    }
+    Some(format!("ext:id:{raw}"))
+}
+
+fn external_scheme(raw: &str) -> bool {
+    let mut chars = raw.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-')
 }
 
 fn scalar_at(entry: &Value, path: &str) -> Option<String> {

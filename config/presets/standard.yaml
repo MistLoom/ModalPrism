@@ -25,6 +25,7 @@ policy:
     cache_ttl: 24h
     on_unreachable: rfc9309
     crawl_delay: "cap:30s"
+    exemptions: [public-api]
   render:
     max_level: L3
     fallback_engine: none
