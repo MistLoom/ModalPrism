@@ -1,0 +1,27 @@
+# 行尾策略：仓库内一律存 LF，检出一律为 LF。
+# 缺少此文件时，Windows 上的 core.autocrlf=true 会让 git 预期工作区为 CRLF，
+# 而 codegen 与编辑器写出的是 LF，于是产生纯行尾的假 dirty。
+* text=auto eol=lf
+
+# 图片与其它二进制：不做行尾转换。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.exe binary
+*.wasm binary
+*.woff2 binary
+
+# 锁文件由工具生成、体量大，且各平台写出的行尾不同：
+# 标记为 binary 让 git 完全不介入，避免 renormalize 改写整份文件。
+Cargo.lock binary
+pnpm-lock.yaml binary
